@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { ArrowRight, BarChart3, CalendarDays, CarFront, CircleDollarSign, Clock3, FileText, Hand, MapPin, Plus, ReceiptText, TrendingUp, Users, Zap } from "lucide-react";
 import { formatPkr } from "@/lib/utils";
+import { TimeGreeting } from "@/components/dashboard/time-greeting";
 
 const stats = [
   { label: "Total Vehicles", value: "28", note: "All vehicles", icon: CarFront, noteIcon: CarFront },
@@ -37,7 +38,7 @@ function VehicleThumb({ position }: { position: string }) {
 export default function Dashboard() {
   return <div className="space-y-5">
     <section className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-      <div><div className="flex items-center gap-2"><h1 className="text-[30px] font-extrabold tracking-[-.035em] text-[#0D1730] sm:text-[34px]">Good evening, Ali</h1><Hand size={29} className="rotate-[-12deg] fill-[#FFC83D] text-[#E6A900]" aria-hidden="true"/></div><p className="mt-1 text-[15px] text-[#4E596C]">Here’s what’s happening with your rental business today.</p></div>
+      <div><div className="flex items-center gap-2"><h1 className="text-[30px] font-extrabold tracking-[-.035em] text-[#0D1730] sm:text-[34px]"><TimeGreeting name="Ali" /></h1><Hand size={29} className="rotate-[-12deg] fill-[#FFC83D] text-[#E6A900]" aria-hidden="true"/></div><p className="mt-1 text-[15px] text-[#4E596C]">Here’s what’s happening with your rental business today.</p></div>
       <Link href="/bookings" className="inline-flex h-10 w-fit items-center gap-2 rounded-[9px] bg-[#0878F9] px-4 text-sm font-semibold text-white shadow-sm hover:bg-[#0066D6]"><Plus size={17}/>New booking</Link>
     </section>
 
