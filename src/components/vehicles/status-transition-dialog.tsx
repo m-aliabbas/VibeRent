@@ -13,6 +13,7 @@ const nextStates: Record<VehicleStatus, VehicleStatus[]> = {
   Booked: ["Available", "Maintenance", "Out of Service"],
   Maintenance: ["Available", "Out of Service"],
   "Out of Service": ["Available", "Maintenance"],
+  Archived: ["Available"],
 };
 const reasons: Record<VehicleStatus, string[]> = {
   Available: [
@@ -24,6 +25,7 @@ const reasons: Record<VehicleStatus, string[]> = {
   Booked: ["Confirmed booking", "Fleet allocation"],
   Maintenance: ["Scheduled service", "Repair required", "Inspection issue"],
   "Out of Service": ["Safety issue", "Document issue", "Operational hold"],
+  Archived: ["Restored to fleet"],
 };
 function localDateTimeValue() {
   const now = new Date();

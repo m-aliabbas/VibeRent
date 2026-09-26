@@ -1,6 +1,10 @@
 import { notFound } from "next/navigation";
-import { OperationsModule } from "@/components/modules/operations-module";
-import { PageHeader } from "@/components/shared/page-header";
+import { CustomersModule } from "@/components/customers/customers-module";
+import { BookingsWorkspace } from "@/components/bookings/bookings-workspace";
+import { OwnersWorkspace } from "@/components/owners/owners-workspace";
+import { ExpensesWorkspace } from "@/components/expenses/expenses-workspace";
+import { ReportsWorkspace } from "@/components/reports/reports-workspace";
+import { SettingsWorkspace } from "@/components/settings/settings-workspace";
 
 const sections: Record<string, { title: string; description: string }> = {
   bookings: {
@@ -44,33 +48,10 @@ export default async function SectionPage({
   const { section } = await params;
   const data = sections[section];
   if (!data) notFound();
-  if (
-    ["bookings", "customers", "expenses", "reports", "owners"].includes(section)
-  )
-    return (
-      <OperationsModule
-        module={
-          section as
-            | "bookings"
-            | "customers"
-            | "expenses"
-            | "reports"
-            | "owners"
-        }
-      />
-    );
-  return (
-    <div className="space-y-8">
-      <PageHeader
-        eyebrow="Workspace"
-        title={data.title}
-        description={data.description}
-      />
-      <div className="grid min-h-[420px] place-items-center rounded-xl border border-dashed border-[#C8D0DC] bg-white p-8 text-center">
-        <p className="text-sm text-[#667085]">
-          Settings will be implemented in the next product module batch.
-        </p>
-      </div>
-    </div>
-  );
+  if (section === "customers") return <CustomersModule />;
+  if (section === "bookings") return <BookingsWorkspace />;
+  if (section === "owners") return <OwnersWorkspace />;
+  if (section === "expenses") return <ExpensesWorkspace />;
+  if (section === "reports") return <ReportsWorkspace />;
+  return <SettingsWorkspace />;
 }

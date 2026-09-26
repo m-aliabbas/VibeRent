@@ -4,7 +4,6 @@ import { useMemo, useState } from "react";
 import {
   BarChart3,
   CalendarDays,
-  CheckCircle2,
   FileText,
   Plus,
   UsersRound,
@@ -15,6 +14,7 @@ import { FilterBar, FilterSelect } from "@/components/shared/filter-bar";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
+import { Toast } from "@/components/shared/toast";
 import { bookings, customers, expenses, owners } from "@/lib/operations-data";
 import { formatPkr } from "@/lib/utils";
 
@@ -113,15 +113,7 @@ export function OperationsModule({ module }: { module: ModuleName }) {
           : ["Active", "Due", "Settled"];
   return (
     <div className="space-y-6">
-      {notice && (
-        <div
-          role="status"
-          className="fixed right-4 top-20 z-40 flex items-center gap-2 rounded-[10px] border border-[#ABEFC6] bg-white px-4 py-3 text-sm font-semibold text-[#067647] shadow-lg"
-        >
-          <CheckCircle2 size={18} />
-          {notice}
-        </div>
-      )}
+      <Toast message={notice} onDismiss={() => setNotice("")} />
       <PageHeader
         eyebrow={meta.eyebrow}
         title={meta.title}
@@ -316,14 +308,7 @@ function Reports({
   const [period, setPeriod] = useState("September 2026");
   return (
     <div className="space-y-6">
-      {notice && (
-        <div
-          role="status"
-          className="fixed right-4 top-20 z-40 rounded-[10px] border border-[#ABEFC6] bg-white px-4 py-3 text-sm font-semibold text-[#067647] shadow-lg"
-        >
-          {notice}
-        </div>
-      )}
+      <Toast message={notice} onDismiss={() => setNotice("")} />
       <PageHeader
         eyebrow="Performance"
         title="Reports"

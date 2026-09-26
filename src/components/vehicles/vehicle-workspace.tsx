@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
+  ArrowRightLeft,
   CalendarPlus,
   Camera,
   CarFront,
@@ -25,11 +26,16 @@ import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { InlineError } from "@/components/shared/inline-error";
 import { LoadingState } from "@/components/shared/loading-state";
+import { Toast } from "@/components/shared/toast";
 import {
   DetailPanel as Panel,
   Timeline,
 } from "@/components/shared/detail-layout";
 import { VehicleDialog } from "@/components/vehicles/vehicle-dialog";
+import {
+  VehicleOperationDialog,
+  type VehicleOperation,
+} from "@/components/vehicles/vehicle-operation-dialog";
 import {
   StatusTransitionDialog,
   type StatusTransitionInput,
@@ -69,6 +75,8 @@ export function VehicleWorkspace({ vehicleId }: { vehicleId: string }) {
     () => vehicleStatusHistory[vehicleId] ?? [],
   );
   const [uploadNotice, setUploadNotice] = useState("");
+  const [notice, setNotice] = useState("");
+  const [operation, setOperation] = useState<VehicleOperation>();
   const [tab, setTab] = useState<VehicleDetailTab>("overview");
 
   const load = async () => {
@@ -127,6 +135,17 @@ export function VehicleWorkspace({ vehicleId }: { vehicleId: string }) {
     ]);
     return true;
   };
+  const completeOperation = async (
+    update: Partial<Vehicle>,
+    message: string,
+  ) => {
+    if (!vehicle) return;
+    const result = await vehicleRepository.save({ ...vehicle, ...update });
+    if (result.ok) {
+      setVehicle(result.data);
+      setNotice(message);
+    }
+  };
 
   if (loading) return <LoadingState label="Loading vehicle workspace" />;
   if (error || !vehicle)
@@ -152,6 +171,7 @@ export function VehicleWorkspace({ vehicleId }: { vehicleId: string }) {
 
   return (
     <div className="space-y-6">
+      <Toast message={notice} onDismiss={() => setNotice("")} />
       <Link
         href="/vehicles"
         className="inline-flex items-center gap-2 text-sm font-semibold text-[#475467] hover:text-[#006FE6]"
@@ -195,6 +215,21 @@ export function VehicleWorkspace({ vehicleId }: { vehicleId: string }) {
           <Button variant="secondary" onClick={() => setChangingStatus(true)}>
             <Repeat2 size={17} />
             Change status
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={() => setOperation("maintenance")}
+          >
+            <Wrench size={17} />
+            Maintenance
+          </Button>
+          <Button variant="secondary" onClick={() => setOperation("transfer")}>
+            <ArrowRightLeft size={17} />
+            Transfer
+          </Button>
+          <Button variant="secondary" onClick={() => setOperation("rate")}>
+            <CircleDollarSign size={17} />
+            Rate card
           </Button>
           <Button onClick={() => setEditing(true)}>
             <Pencil size={17} />
@@ -573,6 +608,15 @@ export function VehicleWorkspace({ vehicleId }: { vehicleId: string }) {
           vehicle={vehicle}
           onOpenChange={setChangingStatus}
           onConfirm={changeStatus}
+        />
+      )}
+      {operation && (
+        <VehicleOperationDialog
+          mode={operation}
+          vehicle={vehicle}
+          open
+          onOpenChange={(next) => !next && setOperation(undefined)}
+          onComplete={completeOperation}
         />
       )}
     </div>

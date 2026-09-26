@@ -1,5 +1,18 @@
 # VibeRent
 
+## SQLite pilot database
+
+The pilot uses SQLite in WAL mode through Drizzle ORM. It supports one deployed application instance with the database on durable local storage; do not place the database on a shared network filesystem or run multiple writers across app instances.
+
+```bash
+npm run db:generate
+npm run db:migrate
+npm run db:seed
+npm run db:check
+```
+
+Set `DATABASE_URL` to an absolute SQLite file path in deployment. The default local file is `.data/viberent.db` and is ignored by Git.
+
 VibeRent is a responsive car-rental operations system for Pakistani agencies managing owned and third-party vehicles. The current release is a frontend prototype using deterministic mock data.
 
 ## Run locally
@@ -31,4 +44,3 @@ Start with [docs/README.md](./docs/README.md). It links the product scope, detai
 - Planned-state routes for Bookings, Customers, Expenses, Reports, Owners, and Settings.
 
 See [docs/DEVELOPMENT_TRACKER.md](./docs/DEVELOPMENT_TRACKER.md) for the current status and known gaps.
-

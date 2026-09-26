@@ -2,7 +2,8 @@ export type VehicleStatus =
   | "Available"
   | "Booked"
   | "Maintenance"
-  | "Out of Service";
+  | "Out of Service"
+  | "Archived";
 export type Ownership = "Own" | "Managed";
 
 export type ManagementAgreement = {

@@ -210,3 +210,11 @@ Use this checklist for feature review and milestone release gates. Mark only che
 - Result: Pass / Pass with known gaps / Fail
 ```
 
+## 12. Frontend completion run — 26 September 2026
+
+- Routes checked by direct HTTP response: Dashboard, Vehicles, Bookings, Customers, Expenses, Reports, Owners, Settings, and representative detail routes.
+- Static accessibility review: visible form labels, textual status badges, global focus-visible treatment, reduced-motion treatment, live-region toast feedback, Radix dialog focus behavior, and icon-only dialog close names.
+- Responsive code review: mobile drawer, stacked page headers/forms, internal dialog scrolling, mobile record cards, and deliberately contained calendar/report overflow.
+- Commands: `npm run typecheck`, `npm run lint`, `npm run build`.
+- Known coverage gap: interactive 390px/1440px browser inspection and console review could not be performed because browser control was unavailable in this session.
+- Result: Pass with the documented visual-interaction coverage gap; pilot security/reliability gate remains out of frontend scope.

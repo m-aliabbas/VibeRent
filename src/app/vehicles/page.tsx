@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { CarFront, CheckCircle2, CirclePlus, Plus, Wrench } from "lucide-react";
+import { CarFront, CirclePlus, Plus, Wrench } from "lucide-react";
 import { PageHeader } from "@/components/shared/page-header";
 import { FilterBar, FilterSelect } from "@/components/shared/filter-bar";
 import { DataTable, type DataColumn } from "@/components/shared/data-table";
@@ -13,6 +13,7 @@ import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { EmptyState } from "@/components/shared/empty-state";
 import { InlineError } from "@/components/shared/inline-error";
 import { LoadingState } from "@/components/shared/loading-state";
+import { Toast } from "@/components/shared/toast";
 import { VehicleDialog } from "@/components/vehicles/vehicle-dialog";
 import { Button } from "@/components/ui/button";
 import { vehicleRepository } from "@/lib/repositories/vehicle-repository";
@@ -73,9 +74,13 @@ export default function VehiclesPage() {
       if (!active) return;
       setSearch(params.get("q") ?? "");
       setStatus(
-        ["Available", "Booked", "Maintenance", "Out of Service"].includes(
-          initialStatus ?? "",
-        )
+        [
+          "Available",
+          "Booked",
+          "Maintenance",
+          "Out of Service",
+          "Archived",
+        ].includes(initialStatus ?? "")
           ? initialStatus!
           : "All",
       );
@@ -217,14 +222,22 @@ export default function VehiclesPage() {
   const remove = async () => {
     if (!removing) return;
     setRemovingPending(true);
-    const result = await vehicleRepository.remove(removing.id);
+    const restoring = removing.status === "Archived";
+    const result = await vehicleRepository.save({
+      ...removing,
+      status: restoring ? "Available" : "Archived",
+    });
     setRemovingPending(false);
     if (!result.ok) {
       setNotice(result.error.message);
       return;
     }
-    setItems((current) => current.filter((item) => item.id !== result.data.id));
-    setNotice(`${removing.make} ${removing.model} removed from the fleet.`);
+    setItems((current) =>
+      current.map((item) => (item.id === removing.id ? result.data : item)),
+    );
+    setNotice(
+      `${removing.make} ${removing.model} ${restoring ? "restored to" : "archived from"} the fleet.`,
+    );
     setRemoving(undefined);
   };
   const columns: DataColumn<Vehicle>[] = [
@@ -293,6 +306,7 @@ export default function VehiclesPage() {
             setFormOpen(true);
           }}
           onDelete={() => setRemoving(v)}
+          archived={v.status === "Archived"}
         />
       ),
     },
@@ -300,15 +314,7 @@ export default function VehiclesPage() {
 
   return (
     <div className="space-y-6">
-      {notice && (
-        <div
-          role="status"
-          className="fixed right-4 top-20 z-40 flex max-w-[calc(100%-32px)] items-center gap-2 rounded-[10px] border border-[#ABEFC6] bg-white px-4 py-3 text-sm font-semibold text-[#067647] shadow-lg"
-        >
-          <CheckCircle2 size={18} />
-          {notice}
-        </div>
-      )}
+      <Toast message={notice} onDismiss={() => setNotice("")} />
       <PageHeader
         eyebrow="Fleet management"
         title="Vehicles"
@@ -428,7 +434,13 @@ export default function VehiclesPage() {
             setStatus(value);
             setPage(1);
           }}
-          options={["Available", "Booked", "Maintenance", "Out of Service"]}
+          options={[
+            "Available",
+            "Booked",
+            "Maintenance",
+            "Out of Service",
+            "Archived",
+          ]}
         />
         <FilterSelect
           label="City"
@@ -486,6 +498,7 @@ export default function VehiclesPage() {
                     setFormOpen(true);
                   }}
                   onDelete={() => setRemoving(v)}
+                  archived={v.status === "Archived"}
                 />
               </div>
               <div className="mt-4 flex items-center justify-between border-t border-[#EAECF0] pt-3">
@@ -516,10 +529,22 @@ export default function VehiclesPage() {
       <ConfirmDialog
         open={Boolean(removing)}
         onOpenChange={(open) => !open && setRemoving(undefined)}
-        title={`Remove ${removing?.plate ?? "vehicle"}?`}
-        description="This removes the vehicle from this prototype fleet. Existing booking history would be preserved in a production system."
+        title={`${removing?.status === "Archived" ? "Restore" : "Archive"} ${removing?.plate ?? "vehicle"}?`}
+        description={
+          removing?.status === "Archived"
+            ? "The vehicle will return to the active fleet as Available."
+            : "The vehicle will leave active fleet views while its operational history remains available."
+        }
         onConfirm={() => void remove()}
         pending={removingPending}
+        confirmLabel={
+          removing?.status === "Archived"
+            ? "Restore vehicle"
+            : "Archive vehicle"
+        }
+        pendingLabel={
+          removing?.status === "Archived" ? "Restoring…" : "Archiving…"
+        }
       />
     </div>
   );

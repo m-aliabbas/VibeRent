@@ -52,14 +52,18 @@ Use this file for durable product and architecture decisions. Do not record casu
 - **Reason:** Financial trust and auditability.
 - **Consequences:** UI and future data model must preserve original and correcting records.
 
+### D-007 — SQLite with Drizzle for the pilot
+
+- **Status:** Accepted
+- **Date:** 26 September 2026
+- **Decision:** Use SQLite in WAL mode with Drizzle ORM and generated SQL migrations. Use a shared schema with a required `agency_id` on tenant-owned records and explicit branch scope fields.
+- **Context:** The user selected SQLite for the real application foundation.
+- **Options considered:** Prisma with SQLite and Drizzle with SQLite.
+- **Reason:** Drizzle keeps the SQLite boundary small, provides typed schema/migrations, and permits explicit `BEGIN IMMEDIATE` transactions for availability-sensitive writes.
+- **Consequences:** The supported production topology is one application instance with the database on durable local storage. Multiple app instances must not share the SQLite file over a network filesystem. Moving to horizontally scaled writes requires migration to a server database.
+- **Follow-up tickets:** Authentication/authorization, secure files, audit coverage, backup/restore, and release review remain required.
+
 ## Open decisions
-
-### D-101 — Database and ORM
-
-- **Status:** Open; blocks pilot backend
-- **Options:** PostgreSQL with Prisma, PostgreSQL with Drizzle, or another explicitly justified stack.
-- **Decision criteria:** Transaction/concurrency support, schema migration quality, type safety, team familiarity, tenant strategy, operational support.
-- **Do not decide during:** Frontend-only prototype work.
 
 ### D-102 — Authentication provider
 
@@ -67,11 +71,11 @@ Use this file for durable product and architecture decisions. Do not record casu
 - **Options:** Auth.js/NextAuth, Clerk, managed identity provider, or agency-owned credentials.
 - **Decision criteria:** Multi-tenant membership, roles, account recovery, MFA roadmap, regional availability, cost, data/privacy needs.
 
-### D-103 — Tenant and branch isolation
+### D-103 — Tenant and branch enforcement details
 
-- **Status:** Open; blocks pilot backend
-- **Questions:** Shared schema with agency key, database row-level security, separate schema/database, branch scope enforcement.
-- **Required artifact:** Threat model and automated cross-tenant authorization tests.
+- **Status:** Partially decided; authentication integration still blocks enforcement
+- **Decision:** Shared SQLite schema with required agency keys and optional/required branch keys as appropriate.
+- **Required artifact:** Request-scoped agency/branch authorization, threat model, and automated cross-tenant tests before real customer data.
 
 ### D-104 — File storage and sensitive documents
 
@@ -141,4 +145,3 @@ Use this file for durable product and architecture decisions. Do not record casu
 - **Consequences:**
 - **Follow-up tickets:**
 ```
-

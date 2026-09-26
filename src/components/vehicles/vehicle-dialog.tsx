@@ -1,7 +1,7 @@
 "use client";
 
 import * as Dialog from "@radix-ui/react-dialog";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { CarFront, LoaderCircle, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FormInput, FormSelect } from "@/components/forms/form-controls";
@@ -45,10 +45,25 @@ export function VehicleDialog({
   const [form, setForm] = useState<Vehicle>(
     () => vehicle ?? { ...blank, id: `v-${Date.now()}` },
   );
+  const [initialSnapshot] = useState(() => JSON.stringify(form));
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const update = (key: keyof Vehicle, value: string | number) =>
     setForm((current) => ({ ...current, [key]: value }));
+  const dirty = JSON.stringify(form) !== initialSnapshot;
+  useEffect(() => {
+    const warn = (event: BeforeUnloadEvent) => {
+      if (!dirty) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
+  const requestClose = () => {
+    if (!dirty || window.confirm("Discard unsaved vehicle changes?"))
+      onOpenChange(false);
+  };
   async function submit(event: FormEvent) {
     event.preventDefault();
     const nextErrors: Record<string, string> = {};
@@ -87,7 +102,11 @@ export function VehicleDialog({
   return (
     <Dialog.Root
       open={open}
-      onOpenChange={(nextOpen) => !saving && onOpenChange(nextOpen)}
+      onOpenChange={(nextOpen) => {
+        if (saving) return;
+        if (!nextOpen) requestClose();
+        else onOpenChange(true);
+      }}
     >
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-[#101828]/45 backdrop-blur-[1px]" />
@@ -376,7 +395,7 @@ export function VehicleDialog({
                 type="button"
                 variant="secondary"
                 disabled={saving}
-                onClick={() => onOpenChange(false)}
+                onClick={requestClose}
               >
                 Cancel
               </Button>

@@ -21,6 +21,7 @@ const tones: Record<string, string> = {
   fuel: "bg-[#EFF8FF] text-[#175CD3] ring-[#B2DDFF]",
   cleaning: "bg-[#F4F3FF] text-[#5925DC] ring-[#D9D6FE]",
   insurance: "bg-[#F2F4F7] text-[#475467] ring-[#D0D5DD]",
+  archived: "bg-[#F2F4F7] text-[#475467] ring-[#D0D5DD]",
 };
 
 export function StatusBadge({ status }: { status: string }) {
