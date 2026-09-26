@@ -17,14 +17,6 @@ No active ticket is recorded. Move the next refined ticket here when implementat
 
 | Ticket | Description | Requirement | Dependencies |
 | --- | --- | --- | --- |
-| T-101 | Create mock repository interfaces for vehicles and shared async states | F-PLT-01, F-VEH-01 | Current vehicle fixtures |
-| T-102 | Build full vehicle detail workspace with tabs and actions | F-VEH-03 | T-101 |
-| T-103 | Add vehicle status transition dialog and history | F-VEH-05, FL-VEH-03 | T-101, T-102 |
-| T-104 | Add photo/document prototype states and expiry warnings | F-VEH-04 | T-102 |
-| T-105 | Add managed ownership owner selector and agreement summary | F-VEH-02, FL-VEH-02 | Owner fixture contract |
-| T-106 | Make vehicle filters and pagination URL-addressable | F-VEH-01 | Current vehicle list |
-| T-107 | Add vehicle loading, error, empty, and filtered-empty demos | F-PLT-01, F-VEH-01 | T-101 |
-| T-108 | Run full Vehicles responsive/accessibility QA | F-PLT-02 | T-102–T-107 |
 
 ### Done
 
@@ -33,14 +25,22 @@ No active ticket is recorded. Move the next refined ticket here when implementat
 | T-001 | Bootstrap Next.js/TypeScript/Tailwind frontend | F-SHL-01 | Build, lint, typecheck passed |
 | T-002 | Implement shell, redesigned dashboard, and initial Vehicles CRUD prototype | F-SHL-01, F-DSH-01–04, F-VEH-01–02 | Browser-tested desktop/mobile |
 | T-003 | Complete product planning and tracking documentation | Product-wide | Documentation index, feature catalog, flows, rules, data model, roadmap, backlog, tracker, QA, decisions, and changelog |
+| T-101 | Create mock repository interfaces for vehicles and shared async states | F-PLT-01, F-VEH-01 | Typed repository/result contract, async Vehicles CRUD, loading/error patterns, duplicate-plate validation, responsive browser QA |
+| T-102 | Build full vehicle detail workspace with tabs and actions | F-VEH-03 | URL-addressable overview, record tabs, edit action, loading/error recovery, desktop/mobile browser QA |
+| T-103 | Add vehicle status transition dialog and history | F-VEH-05, FL-VEH-03 | Valid next states, required reasons, conflict guidance, repository save, and timeline history; responsive browser QA |
+| T-104 | Add photo/document prototype states and expiry warnings | F-VEH-04 | Media preview, document register, verification/expiry states, simulated uploads, and responsive browser QA |
+| T-105 | Add managed ownership owner selector and agreement summary | F-VEH-02, FL-VEH-02 | Owner selection, effective dates, share terms, expense responsibility, payout frequency, and detail snapshot |
+| T-106 | Make vehicle filters and pagination URL-addressable | F-VEH-01 | Search, filters, page, and sort restore from and synchronize to the URL |
+| T-107 | Add vehicle loading, error, empty, and filtered-empty demos | F-PLT-01, F-VEH-01 | Linked prototype previews and retryable error state |
+| T-108 | Run full Vehicles responsive/accessibility QA | F-PLT-02 | Desktop/390px workflow, focus, overflow, and console checks passed |
 
 ## E-100 — Foundation and shared UX
 
 - [x] **T-001** Bootstrap application and quality scripts.
 - [x] **T-002** Responsive shell and initial primary screens.
-- [ ] **T-109** Add shared skeleton/loading pattern.
-- [ ] **T-110** Add shared inline error and retry pattern.
-- [ ] **T-111** Add reusable detail-page/timeline layout.
+- [x] **T-109** Add shared skeleton/loading pattern.
+- [x] **T-110** Add shared inline error and retry pattern.
+- [x] **T-111** Add reusable detail-page/timeline layout.
 - [ ] **T-112** Add global command/search palette prototype.
 - [ ] **T-113** Standardize toast/feedback behavior and screen-reader announcements.
 - [ ] **T-114** Add route-level not-found and error experiences.
@@ -48,22 +48,22 @@ No active ticket is recorded. Move the next refined ticket here when implementat
 ## E-200 — Vehicles
 
 - [ ] **T-201** Repository-backed vehicle list with simulated latency/error.
-- [ ] **T-202** Vehicle detail overview and operational summary.
-- [ ] **T-203** Booking, expense, maintenance, and activity tabs.
+- [x] **T-202** Vehicle detail overview and operational summary.
+- [x] **T-203** Booking, expense, maintenance, and activity tabs.
 - [ ] **T-204** Create/edit route or route-aware dialog with unsaved-change guard.
-- [ ] **T-205** Managed vehicle fields and agreement snapshot.
-- [ ] **T-206** Status transition rules and confirmation.
+- [x] **T-205** Managed vehicle fields and agreement snapshot.
+- [x] **T-206** Status transition rules and confirmation.
 - [ ] **T-207** Archive/restore instead of destructive history removal.
-- [ ] **T-208** Photo gallery and document metadata prototype.
-- [ ] **T-209** Document expiry badges and dashboard exception.
+- [x] **T-208** Photo gallery and document metadata prototype.
+- [x] **T-209** Document expiry badges and dashboard exception.
 - [ ] **T-210** Maintenance case create/complete prototype.
 - [ ] **T-211** City transfer workflow.
 - [ ] **T-212** Rate card summary/editor prototype.
 
 ## E-300 — Customers
 
-- [ ] **T-301** Typed customer fixtures and repository.
-- [ ] **T-302** Customer list/search/status filter and mobile cards.
+- [x] **T-301** Typed customer fixtures.
+- [x] **T-302** Customer list/search/status filter and mobile records.
 - [ ] **T-303** Customer create/edit with normalized phone/CNIC validation.
 - [ ] **T-304** Duplicate candidate experience.
 - [ ] **T-305** Customer detail, balance, and rental history.
@@ -72,7 +72,7 @@ No active ticket is recorded. Move the next refined ticket here when implementat
 
 ## E-400 — Owners and agreements
 
-- [ ] **T-401** Owner list, filters, and summary balances.
+- [x] **T-401** Owner list, filters, and summary balances.
 - [ ] **T-402** Owner create/edit/detail.
 - [ ] **T-403** Management agreement terms editor.
 - [ ] **T-404** Versioned agreement history UI.
@@ -81,7 +81,7 @@ No active ticket is recorded. Move the next refined ticket here when implementat
 ## E-500 — Availability and bookings
 
 - [ ] **T-501** Booking/availability typed repositories and overlap utility.
-- [ ] **T-502** Booking list, status/payment filters, and mobile cards.
+- [x] **T-502** Booking list, status filters, and mobile records.
 - [ ] **T-503** Booking detail with context actions.
 - [ ] **T-504** Fleet day/week/month timeline.
 - [ ] **T-505** Booking wizard: schedule step.
@@ -113,13 +113,13 @@ No active ticket is recorded. Move the next refined ticket here when implementat
 - [ ] **T-703** Deposit receive/apply/refund/forfeit flow.
 - [ ] **T-704** Reversal and write-off workflow.
 - [ ] **T-705** Outstanding balances list.
-- [ ] **T-706** Expense repository, list, and filters.
+- [x] **T-706** Expense fixtures, list, and filters.
 - [ ] **T-707** Expense form with allocations and simulated receipt.
 - [ ] **T-708** Expense submit/approve/reject/reverse lifecycle.
 
 ## E-800 — Reports
 
-- [ ] **T-801** Shared report filters and definitions.
+- [x] **T-801** Shared report period filters and definitions.
 - [ ] **T-802** Vehicle P&L summary and source drill-down.
 - [ ] **T-803** Revenue versus collections report.
 - [ ] **T-804** Utilization report with downtime definition.
