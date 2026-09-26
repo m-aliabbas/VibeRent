@@ -1,0 +1,3 @@
+import { CarFront, SearchX } from "lucide-react";
+
+export function EmptyState({ filtered = false }: { filtered?: boolean }) { const Icon = filtered ? SearchX : CarFront; return <div className="rounded-xl border border-dashed border-[#D0D5DD] bg-white px-5 py-16 text-center"><span className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-[#EFF8FF] text-[#006FE6]"><Icon size={23}/></span><h3 className="mt-4 font-bold">{filtered ? "No matching vehicles" : "No vehicles yet"}</h3><p className="mx-auto mt-1 max-w-sm text-sm leading-6 text-[#667085]">{filtered ? "Try changing your search or clearing a filter." : "Add your first vehicle to begin managing fleet availability."}</p></div>; }

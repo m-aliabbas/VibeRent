@@ -1,0 +1,12 @@
+"use client";
+
+import * as Dialog from "@radix-ui/react-dialog";
+import { CarFront, MapPin, X } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { StatusBadge } from "@/components/shared/status-badge";
+import { formatPkr } from "@/lib/utils";
+import type { Vehicle } from "@/lib/mock-data";
+
+export function VehicleDetails({ vehicle, onClose, onEdit }: { vehicle?: Vehicle; onClose: () => void; onEdit: (vehicle: Vehicle) => void }) {
+  return <Dialog.Root open={Boolean(vehicle)} onOpenChange={(open) => !open && onClose()}><Dialog.Portal><Dialog.Overlay className="fixed inset-0 z-50 bg-[#101828]/45 backdrop-blur-[1px]"/>{vehicle && <Dialog.Content className="fixed inset-x-0 bottom-0 z-50 rounded-t-2xl bg-white p-6 shadow-2xl sm:left-1/2 sm:top-1/2 sm:bottom-auto sm:w-[calc(100%-32px)] sm:max-w-lg sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-2xl"><Dialog.Close className="absolute right-4 top-4 grid h-9 w-9 place-items-center rounded-lg text-[#667085] hover:bg-[#F2F4F7]"><X size={18}/><span className="sr-only">Close</span></Dialog.Close><div className="flex items-center gap-4"><span className="grid h-14 w-14 place-items-center rounded-xl bg-[#EAF4FF] text-[#006FE6]"><CarFront size={27}/></span><div><Dialog.Title className="text-xl font-bold">{vehicle.make} {vehicle.model}</Dialog.Title><Dialog.Description className="mt-1 flex items-center gap-1 text-sm text-[#667085]"><MapPin size={14}/>{vehicle.city} · {vehicle.plate}</Dialog.Description></div></div><div className="mt-6 grid grid-cols-2 gap-x-4 gap-y-5 rounded-xl bg-[#F8FAFC] p-4">{[["Status", <StatusBadge key="s" status={vehicle.status}/>],["Ownership", <StatusBadge key="o" status={vehicle.ownership}/>],["Daily rate", formatPkr(vehicle.dailyRate)],["Category", vehicle.category],["Year", vehicle.year],["Color", vehicle.color || "Not set"],["Transmission", vehicle.transmission],["Fuel", vehicle.fuel]].map(([label,value]) => <div key={String(label)}><p className="text-xs font-medium text-[#667085]">{label}</p><div className="mt-1 text-sm font-semibold">{value}</div></div>)}</div>{vehicle.owner && <p className="mt-4 text-sm text-[#667085]">Managed for <strong className="text-[#344054]">{vehicle.owner}</strong></p>}<div className="mt-6 flex justify-end gap-2"><Button variant="secondary" onClick={onClose}>Close</Button><Button onClick={() => onEdit(vehicle)}>Edit vehicle</Button></div></Dialog.Content>}</Dialog.Portal></Dialog.Root>;
+}

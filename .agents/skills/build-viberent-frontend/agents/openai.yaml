@@ -1,0 +1,4 @@
+interface:
+  display_name: "Build VibeRent Frontend"
+  short_description: "Build consistent VibeRent prototype screens"
+  default_prompt: "Use $build-viberent-frontend to build the next VibeRent frontend screen."
