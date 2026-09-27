@@ -1,5 +1,16 @@
 @import "tailwindcss";
 
+.field {
+  margin-top: 0.25rem;
+  height: 2.5rem;
+  width: 100%;
+  border-radius: 0.5rem;
+  border: 1px solid #d0d5dd;
+  padding-inline: 0.75rem;
+  font-size: 0.875rem;
+  background: white;
+}
+
 :root {
   --primary: #006fe6;
   --primary-dark: #005bbd;

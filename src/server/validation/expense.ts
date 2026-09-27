@@ -10,6 +10,9 @@ export type CreateExpenseInput = {
   occurredOn: string;
 };
 
+export const expenseStatuses = ["draft", "submitted", "approved", "rejected", "reversed"] as const;
+export type ExpenseStatus = (typeof expenseStatuses)[number];
+
 export function parseCreateExpenseInput(value: unknown): CreateExpenseInput {
   const input = value as Partial<CreateExpenseInput> | null;
   if (!input || typeof input !== "object") throw new DomainError("VALIDATION_FAILED", "Invalid expense payload.", 400);

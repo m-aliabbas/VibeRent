@@ -2,7 +2,7 @@
 
 import { getWebRequestContext } from "@/server/auth/session";
 import { asDomainError } from "@/server/domain/errors";
-import { createCustomer, listCustomers } from "@/server/services/customer-service";
+import { createCustomer, listCustomers, updateCustomer } from "@/server/services/customer-service";
 import type { CreateCustomerInput } from "@/server/validation/customer";
 
 type CustomerDto = {
@@ -47,6 +47,17 @@ export async function createCustomerAction(
 ): Promise<{ ok: true; data: CustomerDto } | { ok: false; error: ActionError }> {
   try {
     return { ok: true, data: createCustomer(await getWebRequestContext(), input) };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+export async function updateCustomerAction(
+  id: string,
+  input: CreateCustomerInput & { status?: string },
+): Promise<{ ok: true; data: CustomerDto } | { ok: false; error: ActionError }> {
+  try {
+    return { ok: true, data: updateCustomer(await getWebRequestContext(), id, input) };
   } catch (error) {
     return failure(error);
   }

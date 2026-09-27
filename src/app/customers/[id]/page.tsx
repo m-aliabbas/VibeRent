@@ -1,16 +1,20 @@
 import { notFound } from "next/navigation";
-import { customers } from "@/lib/operations-data";
 import { CustomerProfile } from "@/components/customers/customer-profile";
-export function generateStaticParams() {
-  return customers.map(({ id }) => ({ id }));
-}
+import { getWebRequestContext } from "@/server/auth/session";
+import { DomainError } from "@/server/domain/errors";
+import { getCustomerDetail } from "@/server/services/customer-service";
 export default async function CustomerPage({
   params,
 }: {
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const customer = customers.find((item) => item.id === id);
-  if (!customer) notFound();
+  let customer;
+  try {
+    customer = getCustomerDetail(await getWebRequestContext(), id);
+  } catch (error) {
+    if (error instanceof DomainError && error.code === "NOT_FOUND") notFound();
+    throw error;
+  }
   return <CustomerProfile customer={customer} />;
 }

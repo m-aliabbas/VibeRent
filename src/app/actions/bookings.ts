@@ -2,7 +2,7 @@
 
 import { getWebRequestContext } from "@/server/auth/session";
 import { asDomainError } from "@/server/domain/errors";
-import { confirmBooking, listBookings } from "@/server/services/booking-service";
+import { confirmBooking, createAvailabilityBlock, listAvailabilityBlocks, listBookings } from "@/server/services/booking-service";
 import type { BookingListItem } from "@/server/repositories/contracts";
 import type { ConfirmBookingInput } from "@/server/validation/booking";
 
@@ -18,4 +18,14 @@ export async function confirmBookingAction(input: ConfirmBookingInput): Promise<
 export async function listBookingsAction(): Promise<{ ok: true; data: BookingListItem[] } | { ok: false; error: { message: string } }> {
   try { return { ok: true, data: listBookings(await getWebRequestContext()) }; }
   catch (error) { return { ok: false, error: { message: asDomainError(error).message } }; }
+}
+
+export async function listAvailabilityBlocksAction() {
+  try { return { ok: true as const, data: listAvailabilityBlocks(await getWebRequestContext()) }; }
+  catch (error) { return { ok: false as const, error: { message: asDomainError(error).message } }; }
+}
+
+export async function createAvailabilityBlockAction(input: { vehicleId: string; from: string; to: string; reason: string; kind?: string }) {
+  try { return { ok: true as const, data: createAvailabilityBlock(await getWebRequestContext(), input) }; }
+  catch (error) { const issue = asDomainError(error); return { ok: false as const, error: { code: issue.code, message: issue.message, fieldErrors: issue.fieldErrors ?? {} } }; }
 }

@@ -15,6 +15,8 @@ type BookingRow = {
 
 const displayStatus: Record<string, BookingListItem["status"]> = { draft: "Draft", confirmed: "Confirmed", checked_out: "Checked Out", completed: "Completed", cancelled: "Cancelled", no_show: "No Show" };
 
+export type AvailabilityBlockDto = { id: string; vehicleId: string; from: string; to: string; reason: string; kind: string };
+
 export function listBookings(context: RequestContext): BookingListItem[] {
   requireRole(context, ["agency_owner", "fleet_manager", "rental_agent", "accountant"]);
   const rows = sqlite.prepare(`SELECT bk.*, c.name AS customer, v.make, v.model, v.year, v.plate, br.city, coalesce((SELECT sum(CASE WHEN ft.kind IN ('refund','reversal') THEN -ft.amount ELSE ft.amount END) FROM financial_transactions ft WHERE ft.agency_id=bk.agency_id AND ft.booking_id=bk.id AND ft.status='posted'),0) AS paid FROM bookings bk JOIN customers c ON c.id=bk.customer_id AND c.agency_id=bk.agency_id JOIN vehicles v ON v.id=bk.vehicle_id AND v.agency_id=bk.agency_id JOIN branches br ON br.id=bk.branch_id AND br.agency_id=bk.agency_id WHERE bk.agency_id=? ORDER BY bk.pickup_at DESC`).all(context.agencyId) as BookingRow[];
@@ -29,6 +31,37 @@ export function getBooking(context: RequestContext, id: string) {
   if (!booking) throw new DomainError("NOT_FOUND", "Booking not found.", 404);
   const inspections = sqlite.prepare(`SELECT kind, odometer, fuel_level AS fuelLevel, condition_notes AS conditionNotes, occurred_at AS occurredAt FROM rental_inspections WHERE agency_id=? AND booking_id=? ORDER BY occurred_at`).all(context.agencyId, id);
   return { ...booking, inspections };
+}
+
+export function listAvailabilityBlocks(context: RequestContext): AvailabilityBlockDto[] {
+  requireRole(context, ["agency_owner", "fleet_manager", "rental_agent", "accountant"]);
+  return sqlite.prepare(`SELECT id,vehicle_id AS vehicleId,start_at AS "from",end_at AS "to",reason,kind FROM availability_blocks WHERE agency_id=? AND archived_at IS NULL ORDER BY start_at`)
+    .all(context.agencyId) as AvailabilityBlockDto[];
+}
+
+export function createAvailabilityBlock(context: RequestContext, rawInput: unknown): AvailabilityBlockDto {
+  requireRole(context, ["agency_owner", "fleet_manager", "rental_agent"]);
+  const input = rawInput as Partial<{ vehicleId: string; from: string; to: string; reason: string; kind: string }>;
+  const fromDate = new Date(input.from ?? "");
+  const toDate = new Date(input.to ?? "");
+  const errors: Record<string,string> = {};
+  if (!input.vehicleId) errors.vehicleId = "Choose a vehicle.";
+  if (!Number.isFinite(fromDate.getTime())) errors.from = "Enter a valid start time.";
+  if (!Number.isFinite(toDate.getTime()) || toDate <= fromDate) errors.to = "End time must be after the start time.";
+  if (!input.reason?.trim()) errors.reason = "Enter a reason.";
+  if (Object.keys(errors).length) throw new DomainError("VALIDATION_FAILED", "Review the availability block.", 400, errors);
+  const from = fromDate.toISOString(); const to = toDate.toISOString();
+  return sqlite.transaction(() => {
+    const vehicle = sqlite.prepare("SELECT id FROM vehicles WHERE agency_id=? AND id=? AND archived_at IS NULL LIMIT 1").get(context.agencyId, input.vehicleId);
+    if (!vehicle) throw new DomainError("NOT_FOUND", "Vehicle not found.", 404);
+    const booking = sqlite.prepare(`SELECT id FROM bookings WHERE agency_id=? AND vehicle_id=? AND status IN ('confirmed','checked_out') AND pickup_at<? AND return_at>? LIMIT 1`).get(context.agencyId, input.vehicleId, to, from);
+    const block = sqlite.prepare(`SELECT id FROM availability_blocks WHERE agency_id=? AND vehicle_id=? AND archived_at IS NULL AND start_at<? AND end_at>? LIMIT 1`).get(context.agencyId, input.vehicleId, to, from);
+    if (booking || block) throw new DomainError("BOOKING_CONFLICT", "This vehicle already has a booking or block in that period.", 409);
+    const id = `blk_${randomUUID()}`; const now = new Date().toISOString(); const kind = input.kind?.trim() || "operational";
+    sqlite.prepare(`INSERT INTO availability_blocks (id,agency_id,vehicle_id,start_at,end_at,kind,reason,version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,1,?,?)`).run(id, context.agencyId, input.vehicleId, from, to, kind, input.reason!.trim(), now, now);
+    sqlite.prepare(`INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)`).run(randomUUID(), context.agencyId, context.userId, "availability.blocked", "availability_block", id, JSON.stringify({ vehicleId: input.vehicleId, from, to }), now);
+    return { id, vehicleId: input.vehicleId!, from, to, reason: input.reason!.trim(), kind };
+  }).immediate();
 }
 
 export function checkOutRental(context: RequestContext, bookingId: string, rawInput: unknown) {

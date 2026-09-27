@@ -5,6 +5,10 @@ import { OwnersWorkspace } from "@/components/owners/owners-workspace";
 import { ExpensesWorkspace } from "@/components/expenses/expenses-workspace";
 import { ReportsWorkspace } from "@/components/reports/reports-workspace";
 import { SettingsWorkspace } from "@/components/settings/settings-workspace";
+import { getWebRequestContext } from "@/server/auth/session";
+import { getExpenseWorkspace } from "@/server/services/expense-service";
+import { listOwners } from "@/server/services/owner-service";
+import { getReports } from "@/server/services/report-service";
 
 const sections: Record<string, { title: string; description: string }> = {
   bookings: {
@@ -50,8 +54,8 @@ export default async function SectionPage({
   if (!data) notFound();
   if (section === "customers") return <CustomersModule />;
   if (section === "bookings") return <BookingsWorkspace />;
-  if (section === "owners") return <OwnersWorkspace />;
-  if (section === "expenses") return <ExpensesWorkspace />;
-  if (section === "reports") return <ReportsWorkspace />;
+  if (section === "owners") return <OwnersWorkspace data={listOwners(await getWebRequestContext())} />;
+  if (section === "expenses") return <ExpensesWorkspace data={getExpenseWorkspace(await getWebRequestContext())} />;
+  if (section === "reports") return <ReportsWorkspace data={getReports(await getWebRequestContext())} />;
   return <SettingsWorkspace />;
 }

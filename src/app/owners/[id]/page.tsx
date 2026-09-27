@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { OwnerProfile } from "@/components/owners/owner-profile";
-import { owners } from "@/lib/operations-data";
-export function generateStaticParams(){return owners.map(({id})=>({id}))}
-export default async function OwnerPage({params}:{params:Promise<{id:string}>}){const {id}=await params;const owner=owners.find(item=>item.id===id);if(!owner)notFound();return <OwnerProfile owner={owner}/>}
+import { getWebRequestContext } from "@/server/auth/session";
+import { DomainError } from "@/server/domain/errors";
+import { getOwner } from "@/server/services/owner-service";
+export default async function OwnerPage({params}:{params:Promise<{id:string}>}){const {id}=await params;let owner;try{owner=getOwner(await getWebRequestContext(),id)}catch(error){if(error instanceof DomainError&&error.code==="NOT_FOUND")notFound();throw error}return <OwnerProfile owner={owner}/>}
