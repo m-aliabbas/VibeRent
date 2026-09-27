@@ -24,7 +24,13 @@ export function parseVehicleInput(value: unknown): Vehicle {
   if (!ownerships.includes(input.ownership ?? "")) errors.ownership = "Choose a valid ownership type.";
   if (!transmissions.includes(input.transmission ?? "")) errors.transmission = "Choose a valid transmission.";
   if (!fuels.includes(input.fuel ?? "")) errors.fuel = "Choose a valid fuel type.";
-  if (input.ownership === "Managed" && !input.owner?.trim()) errors.owner = "A managed vehicle requires an owner.";
+  if (input.ownership === "Managed" && !input.ownerId?.trim()) errors.owner = "A managed vehicle requires an owner.";
+  for (const [index, rule] of (input.rateRules ?? []).entries()) {
+    if (!rule.destinationCity?.trim()) errors[`rateRules.${index}.destinationCity`] = "Enter a destination city.";
+    if (!Number.isInteger(rule.dailyRate) || rule.dailyRate < 1000) errors[`rateRules.${index}.dailyRate`] = "Enter a valid daily rate.";
+    if (!Number.isInteger(rule.perKmRate) || rule.perKmRate < 0) errors[`rateRules.${index}.perKmRate`] = "Mileage rate cannot be negative.";
+    if (!Number.isInteger(rule.minimumDays) || rule.minimumDays < 1) errors[`rateRules.${index}.minimumDays`] = "Minimum days must be at least one.";
+  }
   if (Object.keys(errors).length) throw new DomainError("VALIDATION_FAILED", "Review the highlighted fields.", 400, errors);
   return {
     ...input,
@@ -35,4 +41,3 @@ export function parseVehicleInput(value: unknown): Vehicle {
     color: input.color?.trim() || "Not specified",
   } as Vehicle;
 }
-

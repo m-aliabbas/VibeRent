@@ -37,8 +37,8 @@ export function getCustomerDetail(context: RequestContext, id: string): Customer
   const bookings = sqlite.prepare(`
     SELECT bk.id, v.make || ' ' || v.model || ' ' || v.year AS vehicle, v.plate,
       bk.status, bk.pickup_at AS pickupAt, bk.return_at AS returnAt, bk.total_amount AS totalAmount,
-      coalesce((SELECT sum(CASE WHEN ft.kind IN ('refund','reversal') THEN -ft.amount ELSE ft.amount END)
-        FROM financial_transactions ft WHERE ft.agency_id=bk.agency_id AND ft.booking_id=bk.id AND ft.status='posted'),0) AS paid
+      coalesce((SELECT sum(CASE WHEN lower(ft.kind) IN ('refund','reversal') THEN -ft.amount ELSE ft.amount END)
+        FROM financial_transactions ft WHERE ft.agency_id=bk.agency_id AND ft.booking_id=bk.id AND ft.status='posted' AND lower(ft.kind) IN ('payment','deposit_applied','reversal','refund')),0) AS paid
     FROM bookings bk
     JOIN vehicles v ON v.id=bk.vehicle_id AND v.agency_id=bk.agency_id
     WHERE bk.agency_id=? AND bk.customer_id=?

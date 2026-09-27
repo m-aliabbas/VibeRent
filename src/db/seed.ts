@@ -4,6 +4,7 @@ import { hashPassword } from "better-auth/crypto";
 import { db, sqlite } from "@/db/connection";
 import { account, agencies, branches, customers, member, memberBranchAccess, organization, owners, user, users, vehicles } from "@/db/schema";
 
+async function main() {
 migrate(db, { migrationsFolder: "drizzle" });
 const now = new Date().toISOString();
 
@@ -59,3 +60,9 @@ db.insert(vehicles).values([
 
 console.log(JSON.stringify({ ok: true, database: sqlite.name, seedRun: randomUUID() }, null, 2));
 sqlite.close();
+}
+
+void main().catch(error => {
+  console.error(error);
+  process.exitCode = 1;
+});

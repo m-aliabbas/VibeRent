@@ -23,6 +23,14 @@ export function saveVehicle(context: RequestContext, input: unknown) {
   return vehicleRepository.save(context.agencyId, context.userId, parseVehicleInput(input));
 }
 
+export function getVehicleFormOptions(context: RequestContext) {
+  requireRole(context, ["agency_owner", "fleet_manager", "rental_agent"]);
+  const branches = sqlite.prepare("SELECT id,name,city FROM branches WHERE agency_id=? AND active=1 ORDER BY name").all(context.agencyId) as Array<{id:string;name:string;city:string}>;
+  const owners = sqlite.prepare("SELECT id,name,phone FROM owners WHERE agency_id=? AND status='active' ORDER BY name").all(context.agencyId) as Array<{id:string;name:string;phone:string}>;
+  const defaultBranchId = context.branchId ?? branches[0]?.id;
+  return { branches, owners, defaultBranchId, defaultCity: branches.find(branch => branch.id === defaultBranchId)?.city ?? branches[0]?.city ?? "" };
+}
+
 export function listAvailableVehicles(context: RequestContext, pickupAt: string, returnAt: string) {
   requireRole(context, ["agency_owner", "fleet_manager", "rental_agent"]);
   const pickup = Date.parse(pickupAt);

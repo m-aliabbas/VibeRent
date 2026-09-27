@@ -21,6 +21,29 @@ export type TeamData = {
   branches: Array<{ id: string; name: string; city: string }>;
 };
 
+export async function updateMyProfileAction(input:{name:string;phone:string}):Promise<OrganizationActionResult<{name:string;phone:string}>> {
+  try {
+    const context=await getWebRequestContext();
+    const name=input.name.trim();const phone=input.phone.trim();
+    const fieldErrors:Record<string,string>={};
+    if(name.length<2)fieldErrors.name="Enter your full name.";
+    if(phone&&!/^\+?[0-9 ()-]{7,20}$/.test(phone))fieldErrors.phone="Enter a valid phone number.";
+    if(Object.keys(fieldErrors).length)return {ok:false,message:"Check the highlighted fields.",fieldErrors};
+    const now=new Date().toISOString();
+    sqlite.transaction(()=>{
+      sqlite.prepare("UPDATE users SET name=?,phone=?,version=version+1,updated_at=? WHERE agency_id=? AND id=?").run(name,phone||null,now,context.agencyId,context.userId);
+      sqlite.prepare("UPDATE user SET name=?,updated_at=? WHERE id=?").run(name,Date.now(),context.authUserId);
+      writeAudit(context.agencyId,context.userId,"profile.updated","user",context.userId,{phoneUpdated:Boolean(phone)});
+    })();
+    revalidatePath("/","layout");
+    return {ok:true,data:{name,phone},message:"Profile updated."};
+  } catch(error){return actionFailure(error);}
+}
+
+export async function updateRentalTermsAction(terms:string):Promise<OrganizationActionResult<{terms:string}>> {
+  try { const context=await getWebRequestContext();requireRole(context,["agency_owner","fleet_manager"]);const value=terms.trim();if(value.length<40)return {ok:false,message:"Rental terms should contain at least 40 characters.",fieldErrors:{terms:"Add the key renter obligations."}};const now=new Date().toISOString();sqlite.transaction(()=>{sqlite.prepare("UPDATE agencies SET rental_terms=?,version=version+1,updated_at=? WHERE id=?").run(value,now,context.agencyId);writeAudit(context.agencyId,context.userId,"rental_terms.updated","agency",context.agencyId)})();return {ok:true,data:{terms:value},message:"Rental terms updated for future bookings."};} catch(error){return actionFailure(error);}
+}
+
 export async function createAgencyAction(input: { name: string; slug: string; city: string; branchName: string; address: string }): Promise<OrganizationActionResult<{ agencyId: string }>> {
   try {
     const session = await getOptionalWebSession();

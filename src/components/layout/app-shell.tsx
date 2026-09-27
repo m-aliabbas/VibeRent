@@ -1,6 +1,7 @@
 "use client";
 
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
+import * as Dialog from "@radix-ui/react-dialog";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -20,12 +21,16 @@ import {
   Settings,
   Users,
   UserSquare2,
+  UserRound,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CommandPalette } from "@/components/layout/command-palette";
 import { authClient } from "@/lib/auth-client";
 import type { SessionViewer } from "@/server/auth/session";
+import { updateMyProfileAction } from "@/app/actions/organization";
+import { FormInput } from "@/components/forms/form-controls";
+import { Button } from "@/components/ui/button";
 
 const nav = [
   { label: "Dashboard", href: "/", icon: Gauge },
@@ -102,6 +107,7 @@ export function AppShell({ children, viewer }: { children: React.ReactNode; view
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [profileOpen,setProfileOpen]=useState(false);
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
@@ -177,7 +183,7 @@ export function AppShell({ children, viewer }: { children: React.ReactNode; view
             </button>
             <DropdownMenu.Root>
               <DropdownMenu.Trigger asChild><button className="ml-1 hidden items-center gap-2.5 rounded-lg p-1 text-left hover:bg-[#F8FAFC] sm:flex" aria-label="Open user menu"><span className="grid h-10 w-10 place-items-center rounded-full bg-gradient-to-br from-[#1488FF] to-[#0057B8] text-xs font-bold text-white ring-2 ring-white">{initials(viewer.name)}</span><span><span className="block max-w-36 truncate text-sm font-semibold text-[#101828]">{viewer.name}</span><span className="block max-w-36 truncate text-xs text-[#667085]">{roleLabel(viewer.role)}</span></span><ChevronDown size={16} className="text-[#344054]"/></button></DropdownMenu.Trigger>
-              <DropdownMenu.Portal><DropdownMenu.Content align="end" sideOffset={8} className="z-50 min-w-64 rounded-xl border border-[#E4E7EC] bg-white p-1.5 shadow-xl"><div className="border-b px-3 py-2.5"><p className="truncate text-sm font-semibold">{viewer.name}</p><p className="truncate text-xs text-[#667085]">{viewer.email}</p></div><div className="px-3 py-2 text-xs font-semibold uppercase tracking-wide text-[#98A2B3]">Agency</div>{viewer.organizations.map(org=><DropdownMenu.Item key={org.id} disabled={org.id===viewer.activeAgencyId} onSelect={async()=>{await authClient.organization.setActive({organizationId:org.id});router.push("/");router.refresh()}} className="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm outline-none hover:bg-[#F2F4F7] disabled:cursor-default disabled:bg-[#EFF8FF] disabled:text-[#175CD3]"><Building2 size={16}/><span className="flex-1 truncate">{org.name}</span>{org.id===viewer.activeAgencyId&&<span className="text-xs">Active</span>}</DropdownMenu.Item>)}<DropdownMenu.Separator className="my-1 h-px bg-[#EAECF0]"/><DropdownMenu.Item onSelect={async()=>{await authClient.signOut();router.push("/sign-in");router.refresh()}} className="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm text-[#B42318] outline-none hover:bg-[#FEF3F2]"><LogOut size={16}/>Sign out</DropdownMenu.Item></DropdownMenu.Content></DropdownMenu.Portal>
+              <DropdownMenu.Portal><DropdownMenu.Content align="end" sideOffset={8} className="z-50 min-w-64 rounded-xl border border-[#E4E7EC] bg-white p-1.5 shadow-xl"><div className="border-b px-3 py-2.5"><p className="truncate text-sm font-semibold">{viewer.name}</p><p className="truncate text-xs text-[#667085]">{viewer.email}</p></div><DropdownMenu.Item onSelect={()=>setProfileOpen(true)} className="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm outline-none hover:bg-[#F2F4F7]"><UserRound size={16}/>Edit my profile</DropdownMenu.Item><div className="px-3 py-2 text-xs font-semibold uppercase tracking-wide text-[#98A2B3]">Agency</div>{viewer.organizations.map(org=><DropdownMenu.Item key={org.id} disabled={org.id===viewer.activeAgencyId} onSelect={async()=>{await authClient.organization.setActive({organizationId:org.id});router.push("/");router.refresh()}} className="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm outline-none hover:bg-[#F2F4F7] disabled:cursor-default disabled:bg-[#EFF8FF] disabled:text-[#175CD3]"><Building2 size={16}/><span className="flex-1 truncate">{org.name}</span>{org.id===viewer.activeAgencyId&&<span className="text-xs">Active</span>}</DropdownMenu.Item>)}<DropdownMenu.Separator className="my-1 h-px bg-[#EAECF0]"/><DropdownMenu.Item onSelect={async()=>{await authClient.signOut();router.push("/sign-in");router.refresh()}} className="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm text-[#B42318] outline-none hover:bg-[#FEF3F2]"><LogOut size={16}/>Sign out</DropdownMenu.Item></DropdownMenu.Content></DropdownMenu.Portal>
             </DropdownMenu.Root>
           </div>
         </header>
@@ -218,9 +224,12 @@ export function AppShell({ children, viewer }: { children: React.ReactNode; view
         </div>
       )}
       <CommandPalette open={searchOpen} onOpenChange={setSearchOpen} />
+      <ProfileDialog open={profileOpen} onOpenChange={setProfileOpen} viewer={viewer} onSaved={()=>router.refresh()}/>
     </div>
   );
 }
 
 function initials(name:string){return name.split(/\s+/).slice(0,2).map(part=>part[0]).join("").toUpperCase()||"VR";}
 function roleLabel(role?:string){return role?.split("_").map(part=>part[0].toUpperCase()+part.slice(1)).join(" ")??"Staff member";}
+
+function ProfileDialog({open,onOpenChange,viewer,onSaved}:{open:boolean;onOpenChange:(open:boolean)=>void;viewer:SessionViewer;onSaved:()=>void}){const [name,setName]=useState(viewer.name);const [phone,setPhone]=useState("");const [pending,setPending]=useState(false);const [error,setError]=useState("");async function save(){setPending(true);setError("");const result=await updateMyProfileAction({name,phone});setPending(false);if(!result.ok){setError(result.message);return}onOpenChange(false);onSaved()}return <Dialog.Root open={open} onOpenChange={onOpenChange}><Dialog.Portal><Dialog.Overlay className="fixed inset-0 z-50 bg-[#101828]/45"/><Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[calc(100%-32px)] max-w-lg -translate-x-1/2 -translate-y-1/2 rounded-2xl bg-white p-5 shadow-2xl"><div className="flex items-start justify-between"><div><Dialog.Title className="font-bold">My profile</Dialog.Title><Dialog.Description className="mt-1 text-xs text-[#667085]">Update the name and phone shown to your agency team.</Dialog.Description></div><Dialog.Close className="grid h-10 w-10 place-items-center rounded-lg"><X size={18}/></Dialog.Close></div><div className="mt-5 space-y-4"><FormInput label="Full name" value={name} onChange={e=>setName(e.target.value)} required/><FormInput label="Email" value={viewer.email} disabled/><FormInput label="Phone" type="tel" placeholder="+92 300 123 4567" value={phone} onChange={e=>setPhone(e.target.value)}/>{error&&<p role="alert" className="text-sm text-[#B42318]">{error}</p>}<div className="flex justify-end gap-2"><Button variant="secondary" onClick={()=>onOpenChange(false)}>Cancel</Button><Button disabled={pending||name.trim().length<2} onClick={()=>void save()}>{pending?"Saving…":"Save profile"}</Button></div></div></Dialog.Content></Dialog.Portal></Dialog.Root>}

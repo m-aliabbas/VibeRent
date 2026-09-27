@@ -16,6 +16,13 @@ export type ManagementAgreement = {
   payoutFrequency: "Monthly" | "Fortnightly";
 };
 
+export type VehicleRateRule = {
+  destinationCity: string;
+  dailyRate: number;
+  perKmRate: number;
+  minimumDays: number;
+};
+
 export type Vehicle = {
   id: string;
   plate: string;
@@ -30,6 +37,8 @@ export type Vehicle = {
   color: string;
   transmission: "Automatic" | "Manual";
   fuel: "Petrol" | "Hybrid" | "Diesel";
+  ownerId?: string;
   owner?: string;
   agreement?: ManagementAgreement;
+  rateRules?: VehicleRateRule[];
 };

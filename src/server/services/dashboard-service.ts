@@ -21,7 +21,7 @@ export function getDashboard(context: RequestContext): DashboardData {
     SELECT
       (SELECT count(*) FROM vehicles WHERE agency_id=? AND archived_at IS NULL) AS totalVehicles,
       (SELECT count(*) FROM bookings WHERE agency_id=? AND status='checked_out') AS activeRentals,
-      (SELECT coalesce(sum(CASE WHEN kind IN ('refund','reversal') THEN -amount ELSE amount END),0) FROM financial_transactions WHERE agency_id=? AND status='posted' AND posted_at>=? AND posted_at<?) AS todayRevenue,
+      (SELECT coalesce(sum(CASE WHEN lower(kind) IN ('refund','reversal') THEN -amount ELSE amount END),0) FROM financial_transactions WHERE agency_id=? AND status='posted' AND lower(kind) IN ('payment','deposit_applied','reversal','refund') AND posted_at>=? AND posted_at<?) AS todayRevenue,
       (SELECT count(DISTINCT vehicle_id) FROM bookings WHERE agency_id=? AND status='checked_out') AS utilizedVehicles
   `).get(context.agencyId, context.agencyId, context.agencyId, start, end, context.agencyId) as { totalVehicles: number; activeRentals: number; todayRevenue: number; utilizedVehicles: number };
   const scheduleRows = sqlite.prepare(`

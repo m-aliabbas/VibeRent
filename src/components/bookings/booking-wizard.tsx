@@ -34,6 +34,9 @@ type FleetOption = {
   plate: string;
   city: string;
   rate: number;
+  baseRate: number;
+  perKmRate: number;
+  minimumDays: number;
 };
 
 type ConflictInfo = { bookingId: string; reason: string };
@@ -51,6 +54,8 @@ type Draft = {
   discount: number;
   deposit: number;
   notes: string;
+  estimatedKm: number;
+  overrideReason: string;
 };
 
 const initial: Draft = {
@@ -64,6 +69,8 @@ const initial: Draft = {
   discount: 0,
   deposit: 25000,
   notes: "",
+  estimatedKm: 0,
+  overrideReason: "",
 };
 
 const steps = ["Schedule", "Vehicle", "Customer", "Pricing", "Review"];
@@ -148,23 +155,19 @@ export function BookingWizard() {
   }, []);
 
   // Derived fleet options from live vehicle data
-  const fleetOptions: FleetOption[] = vehicles.map((v) => ({
-    id: v.id,
-    label: `${v.make} ${v.model} ${v.year}`,
-    plate: v.plate,
-    city: v.city,
-    rate: v.dailyRate,
-  }));
+  const fleetOptions: FleetOption[] = vehicles.map((v) => {
+    const rule=v.rateRules?.find(item=>item.destinationCity.toLowerCase()===draft.city.toLowerCase());
+    return {id:v.id,label:`${v.make} ${v.model} ${v.year}`,plate:v.plate,city:v.city,baseRate:v.dailyRate,rate:rule?.dailyRate??v.dailyRate,perKmRate:rule?.perKmRate??0,minimumDays:rule?.minimumDays??1};
+  });
 
   // Unique cities from loaded vehicles (+ Lahore as default fallback)
-  const cities = Array.from(new Set(["Lahore", ...fleetOptions.map((f) => f.city)])).sort();
+  const cities = Array.from(new Set(["Lahore","Islamabad","Rawalpindi","Karachi",...vehicles.flatMap(vehicle=>vehicle.rateRules?.map(rule=>rule.destinationCity)??[])])).sort();
 
   const vehicle = fleetOptions.find((item) => item.id === draft.vehicleId);
   const days = Math.max(1, Math.ceil((new Date(draft.to).getTime() - new Date(draft.from).getTime()) / 86_400_000));
-  const total = draft.dailyRate * days + draft.extras - draft.discount;
+  const total = draft.dailyRate * days + (vehicle?.perKmRate??0) * draft.estimatedKm + draft.extras - draft.discount;
 
   const eligibleVehicles = fleetOptions
-    .filter((item) => item.city === draft.city)
     .map((item) => ({
       ...item,
       conflicts: getConflicts(item.id, draft.from, draft.to, bookings),
@@ -174,7 +177,7 @@ export function BookingWizard() {
     Boolean(draft.from && draft.to && new Date(draft.to) > new Date(draft.from)),
     Boolean(vehicle && getConflicts(vehicle.id, draft.from, draft.to, bookings).length === 0),
     Boolean(draft.customerId),
-    draft.dailyRate > 0 && draft.discount <= draft.dailyRate * days + draft.extras,
+    draft.dailyRate > 0 && days >= (vehicle?.minimumDays??1) && draft.discount <= draft.dailyRate * days + draft.extras && (draft.dailyRate === (vehicle?.rate??draft.dailyRate) || Boolean(draft.overrideReason.trim())),
     true,
   ][step];
 
@@ -186,6 +189,7 @@ export function BookingWizard() {
     const result = await confirmBookingAction({
       vehicleId: vehicle.id,
       customerId: draft.customerId,
+      destinationCity: draft.city,
       pickupAt: draft.from,
       returnAt: draft.to,
       extras: draft.extras,
@@ -193,6 +197,9 @@ export function BookingWizard() {
       depositRequired: draft.deposit,
       source: "counter",
       notes: draft.notes,
+      estimatedKm: draft.estimatedKm,
+      dailyRateOverride: vehicle && draft.dailyRate !== vehicle.rate ? draft.dailyRate : undefined,
+      overrideReason: draft.overrideReason || undefined,
     });
     setSubmitting(false);
     if (!result.ok) {
@@ -268,10 +275,10 @@ function ScheduleStep({ draft, setDraft, cities }: { draft: Draft; setDraft: (va
     <div className="grid gap-4 sm:grid-cols-2">
       <div>
         <label className="block">
-          <span className="mb-1.5 block text-sm font-semibold text-[#344054]">Pickup city</span>
+          <span className="mb-1.5 block text-sm font-semibold text-[#344054]">Going to city</span>
           <select
             value={draft.city}
-            onChange={(e) => setDraft({ ...draft, city: e.target.value, vehicleId: "" })}
+            onChange={(e) => setDraft({ ...draft, city: e.target.value, vehicleId: "", dailyRate:0,overrideReason:"" })}
             className="h-11 w-full rounded-[9px] border border-[#D0D5DD] bg-white px-3 text-sm text-[#19191F] outline-none focus:border-[#006FE6] focus:ring-2 focus:ring-[#006FE6]/10"
           >
             {cities.map((c) => <option key={c} value={c}>{c}</option>)}
@@ -299,7 +306,7 @@ function VehicleStep({ draft, setDraft, vehicles, conflictMode, clearConflict }:
   return (
     <div>
       <h2 className="font-bold">Available vehicles</h2>
-      <p className="mt-1 text-xs text-[#667085]">Only vehicles assigned to {draft.city} are shown. Availability is checked again on confirmation.</p>
+      <p className="mt-1 text-xs text-[#667085]">Vehicles at the agency’s operating branches are shown. The rate reflects the selected destination and availability is checked again on confirmation.</p>
       {conflictMode && (
         <div role="alert" className="mt-4 rounded-lg border border-[#FDA29B] bg-[#FEF3F2] p-3 text-sm text-[#B42318]">
           <strong className="flex gap-2"><ShieldAlert size={17} />Availability changed</strong>
@@ -319,7 +326,7 @@ function VehicleStep({ draft, setDraft, vehicles, conflictMode, clearConflict }:
             className={`rounded-xl border p-4 text-left disabled:cursor-not-allowed disabled:opacity-55 ${draft.vehicleId === item.id ? "border-[#006FE6] bg-[#EFF8FF]" : "border-[#E4E7EC]"}`}
           >
             <strong className="text-sm">{item.label}</strong>
-            <p className="mt-1 text-xs text-[#667085]">{item.plate} · {formatPkr(item.rate)}/day</p>
+            <p className="mt-1 text-xs text-[#667085]">{item.plate} · currently in {item.city}</p><p className="mt-1 text-xs font-semibold text-[#344054]">{formatPkr(item.rate)}/day{item.perKmRate>0?` + ${formatPkr(item.perKmRate)}/km`:""}</p>
             <p className={`mt-3 text-xs font-semibold ${item.conflicts.length ? "text-[#B42318]" : "text-[#067647]"}`}>
               {item.conflicts.length ? item.conflicts[0].reason : "Available"}
             </p>
@@ -482,11 +489,13 @@ function CustomerStep({ draft, setDraft, customers, onCustomerCreated }: {
 function PricingStep({ draft, setDraft, days, total }: { draft: Draft; setDraft: (value: Draft) => void; days: number; total: number }) {
   return (
     <div className="grid gap-4 sm:grid-cols-2">
-      <FormInput label="Daily rate" type="number" value={draft.dailyRate} disabled />
+      <FormInput label="Daily rate" type="number" min={1000} value={draft.dailyRate} onChange={(e)=>setDraft({...draft,dailyRate:Number(e.target.value)})} />
+      <FormInput label="Estimated trip distance (km)" type="number" min={0} value={draft.estimatedKm} onChange={(e)=>setDraft({...draft,estimatedKm:Number(e.target.value)})}/>
       <FormInput label="Deposit required" type="number" value={draft.deposit} onChange={(e) => setDraft({ ...draft, deposit: Number(e.target.value) })} />
       <FormInput label="Extras" type="number" value={draft.extras} onChange={(e) => setDraft({ ...draft, extras: Number(e.target.value) })} />
       <FormInput label="Discount" type="number" value={draft.discount} onChange={(e) => setDraft({ ...draft, discount: Number(e.target.value) })} />
       <FormInput label="Notes" value={draft.notes} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} />
+      <FormInput label="Rate change reason (required for an override)" value={draft.overrideReason} onChange={(e)=>setDraft({...draft,overrideReason:e.target.value})} placeholder="e.g. approved corporate rate"/>
       <div className="rounded-lg bg-[#F8FAFC] p-4">
         <p className="text-xs text-[#667085]">{days} rental days · rate verified by server</p>
         <p className="mt-1 text-xl font-bold">{formatPkr(total)}</p>
@@ -507,6 +516,7 @@ function Review({ draft, days, total, vehicle, customers }: {
   const customer = customers.find((c) => c.id === draft.customerId);
   const details: [string, string | undefined][] = [
     ["Schedule", `${new Date(draft.from).toLocaleString("en-PK")} – ${new Date(draft.to).toLocaleString("en-PK")}`],
+    ["Going to", draft.city],
     ["Vehicle", vehicle ? `${vehicle.label} · ${vehicle.plate}` : "—"],
     ["Customer", customer ? `${customer.name} · ${customer.phone}` : "—"],
     ["Price", `${formatPkr(total)} · ${days} days`],

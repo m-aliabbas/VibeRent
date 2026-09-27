@@ -1,14 +1,449 @@
 "use client";
+
 import * as Dialog from "@radix-ui/react-dialog";
 import { useState } from "react";
 import { CreditCard, FileText, RotateCcw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FormInput, FormSelect } from "@/components/forms/form-controls";
-import { financeTransactions, refundableDeposit, type FinanceTransaction, type PaymentMethod, type TransactionKind } from "@/lib/finance-data";
+import {
+  recordBookingDepositAction,
+  recordBookingPaymentAction,
+  reverseBookingTransactionAction,
+} from "@/app/actions/bookings";
+import type { BookingListItem, BookingTransactionDto } from "@/server/repositories/contracts";
+import type { DepositAction, PaymentMethod } from "@/server/validation/booking";
 import { formatPkr } from "@/lib/utils";
 
-export function BookingFinance({bookingId,customer,balance,onChanged}:{bookingId:string;customer:string;balance:number;onChanged:(amount:number,message:string)=>void}){const [mode,setMode]=useState<"payment"|"deposit"|"ledger">();return <><div className="flex flex-wrap gap-2"><Button size="sm" variant="secondary" onClick={()=>setMode("ledger")}><FileText size={15}/>Ledger</Button><Button size="sm" variant="secondary" onClick={()=>setMode("deposit")}><RotateCcw size={15}/>Manage deposit</Button><Button size="sm" onClick={()=>setMode("payment")}><CreditCard size={15}/>Record payment</Button></div>{mode==="payment"&&<PaymentDialog bookingId={bookingId} customer={customer} balance={balance} onClose={()=>setMode(undefined)} onSave={(amount)=>{setMode(undefined);onChanged(amount,"Payment posted and receipt prepared.")}}/>}{mode==="deposit"&&<DepositDialog bookingId={bookingId} customer={customer} onClose={()=>setMode(undefined)} onSaved={(message)=>{setMode(undefined);onChanged(0,message)}}/>}{mode==="ledger"&&<LedgerDialog bookingId={bookingId} onClose={()=>setMode(undefined)} onChanged={(message)=>onChanged(0,message)}/>}</>}
-function Shell({title,description,onClose,children}:{title:string;description:string;onClose:()=>void;children:React.ReactNode}){return <Dialog.Root open onOpenChange={o=>!o&&onClose()}><Dialog.Portal><Dialog.Overlay className="fixed inset-0 z-50 bg-[#101828]/45"/><Dialog.Content className="fixed inset-x-0 bottom-0 z-50 max-h-[92vh] overflow-y-auto rounded-t-2xl bg-white p-5 sm:left-1/2 sm:top-1/2 sm:bottom-auto sm:max-w-xl sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-2xl"><div className="flex justify-between"><div><Dialog.Title className="font-bold">{title}</Dialog.Title><Dialog.Description className="mt-1 text-xs text-[#667085]">{description}</Dialog.Description></div><Dialog.Close aria-label="Close dialog" className="grid h-10 w-10 place-items-center rounded-lg"><X/></Dialog.Close></div>{children}</Dialog.Content></Dialog.Portal></Dialog.Root>}
-function PaymentDialog({bookingId,customer,balance,onClose,onSave}:{bookingId:string;customer:string;balance:number;onClose:()=>void;onSave:(amount:number)=>void}){const [amount,setAmount]=useState(Math.max(0,balance));const [method,setMethod]=useState<PaymentMethod>("Cash");const [reference,setReference]=useState("");const valid=amount>0&&amount<=Math.max(balance,0);function save(){if(!valid)return;financeTransactions.push({id:`TXN-${8850+financeTransactions.length}`,bookingId,customer,kind:"Payment",amount,method,receivedAt:new Date().toISOString(),reference:reference||"COUNTER",account:method==="Cash"?"Lahore cash drawer":"Operations account",note:"Booking collection",status:"Posted"});onSave(amount)}return <Shell title="Record payment" description="Posted payments are immutable; corrections use reversal transactions." onClose={onClose}><div className="mt-5 grid gap-4 sm:grid-cols-2"><FormInput label="Amount" type="number" value={amount} onChange={e=>setAmount(Number(e.target.value))}/><FormSelect label="Method" value={method} onChange={e=>setMethod(e.target.value as PaymentMethod)} options={["Cash","Bank transfer","Card terminal","Wallet"]}/><FormInput label="Reference" value={reference} onChange={e=>setReference(e.target.value)} required/><FormSelect label="Receiving account" options={["Lahore cash drawer","HBL Operations","Meezan Operations"]}/></div>{amount>balance&&<p role="alert" className="mt-3 text-xs text-[#B42318]">Overpayment is blocked; customer-credit policy is not enabled.</p>}<div className="mt-5 flex justify-end gap-2"><Button variant="secondary" onClick={onClose}>Cancel</Button><Button disabled={!valid||!reference.trim()} onClick={save}>Post payment</Button></div></Shell>}
-function DepositDialog({bookingId,customer,onClose,onSaved}:{bookingId:string;customer:string;onClose:()=>void;onSaved:(message:string)=>void}){const held=refundableDeposit(bookingId);const [action,setAction]=useState<TransactionKind>(held?"Deposit refunded":"Deposit received");const [amount,setAmount]=useState(held||10000);const [reason,setReason]=useState("");const isOut=["Deposit applied","Deposit refunded","Deposit forfeited"].includes(action);const valid=amount>0&&(!isOut||amount<=held);function save(){if(!valid)return;financeTransactions.push({id:`TXN-${8860+financeTransactions.length}`,bookingId,customer,kind:action,amount,method:"Bank transfer",receivedAt:new Date().toISOString(),reference:"DEP-PROTOTYPE",account:"Deposit holding",note:reason||action,status:"Posted"});onSaved(`${action} transaction posted. Held balance is now ${formatPkr(refundableDeposit(bookingId))}.`)}return <Shell title="Manage deposit" description={`Currently held: ${formatPkr(held)}. Deposits remain liabilities until explicitly resolved.`} onClose={onClose}><div className="mt-5 space-y-4"><FormSelect label="Action" value={action} onChange={e=>setAction(e.target.value as TransactionKind)} options={["Deposit received","Deposit applied","Deposit refunded","Deposit forfeited"]}/><FormInput label="Amount" type="number" value={amount} onChange={e=>setAmount(Number(e.target.value))}/><FormInput label="Reason / reference" value={reason} onChange={e=>setReason(e.target.value)} required/>{isOut&&amount>held&&<p className="text-xs text-[#B42318]">Amount cannot exceed the held deposit.</p>}<div className="flex justify-end gap-2"><Button variant="secondary" onClick={onClose}>Cancel</Button><Button disabled={!valid||!reason.trim()} onClick={save}>Post transaction</Button></div></div></Shell>}
-function LedgerDialog({bookingId,onClose,onChanged}:{bookingId:string;onClose:()=>void;onChanged:(message:string)=>void}){const [items,setItems]=useState(()=>financeTransactions.filter(t=>t.bookingId===bookingId));const [reason,setReason]=useState("");function compensate(item:FinanceTransaction,kind:"Reversal"|"Write-off"){if(!reason.trim())return;const transaction:FinanceTransaction={...item,id:`TXN-${8870+financeTransactions.length}`,kind,amount:-item.amount,receivedAt:new Date().toISOString(),reference:`${kind.toUpperCase()}-${item.id}`,note:reason,linkedTransactionId:item.id,status:"Posted"};financeTransactions.push(transaction);if(kind==="Reversal")item.status="Reversed";setItems(financeTransactions.filter(t=>t.bookingId===bookingId));onChanged(`${kind} posted as a linked compensating transaction.`)}return <Shell title="Transaction ledger" description="Every correction remains visible and linked to its source." onClose={onClose}><div className="mt-5 space-y-3">{items.map(item=><div key={item.id} className="rounded-lg border p-3"><div className="flex justify-between gap-3"><div><strong className="text-sm">{item.kind}</strong><p className="text-xs text-[#667085]">{item.id} · {item.method} · {item.reference}</p></div><strong className="text-sm">{formatPkr(item.amount)}</strong></div>{item.status==="Posted"&&item.amount>0&&<div className="mt-3 flex flex-wrap gap-2"><Button size="sm" variant="ghost" onClick={()=>compensate(item,"Reversal")}>Reverse</Button><Button size="sm" variant="ghost" onClick={()=>compensate(item,"Write-off")}>Write off</Button></div>}</div>)}<FormInput label="Required correction reason" value={reason} onChange={e=>setReason(e.target.value)}/></div></Shell>}
+export type BookingDetailData = BookingListItem & {
+  transactions?: BookingTransactionDto[];
+  depositHeld?: number;
+  inspections?: unknown[];
+};
+
+interface BookingFinanceProps {
+  bookingId: string;
+  customer: string;
+  balance: number;
+  depositHeld?: number;
+  transactions?: BookingTransactionDto[];
+  onChanged: (updatedBooking: BookingDetailData, message: string) => void;
+}
+
+export function BookingFinance({
+  bookingId,
+  customer,
+  balance,
+  depositHeld = 0,
+  transactions = [],
+  onChanged,
+}: BookingFinanceProps) {
+  const [mode, setMode] = useState<"payment" | "deposit" | "ledger">();
+
+  return (
+    <>
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" variant="secondary" onClick={() => setMode("ledger")}>
+          <FileText size={15} />
+          Ledger
+        </Button>
+        <Button size="sm" variant="secondary" onClick={() => setMode("deposit")}>
+          <RotateCcw size={15} />
+          Manage deposit
+        </Button>
+        <Button size="sm" onClick={() => setMode("payment")}>
+          <CreditCard size={15} />
+          Record payment
+        </Button>
+      </div>
+
+      {mode === "payment" && (
+        <PaymentDialog
+          bookingId={bookingId}
+          customer={customer}
+          balance={balance}
+          onClose={() => setMode(undefined)}
+          onSave={(updated, message) => {
+            setMode(undefined);
+            onChanged(updated, message);
+          }}
+        />
+      )}
+
+      {mode === "deposit" && (
+        <DepositDialog
+          bookingId={bookingId}
+          customer={customer}
+          depositHeld={depositHeld}
+          onClose={() => setMode(undefined)}
+          onSaved={(updated, message) => {
+            setMode(undefined);
+            onChanged(updated, message);
+          }}
+        />
+      )}
+
+      {mode === "ledger" && (
+        <LedgerDialog
+          bookingId={bookingId}
+          transactions={transactions}
+          onClose={() => setMode(undefined)}
+          onChanged={(updated, message) => {
+            onChanged(updated, message);
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+function Shell({
+  title,
+  description,
+  onClose,
+  children,
+}: {
+  title: string;
+  description: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-[#101828]/45" />
+        <Dialog.Content className="fixed inset-x-0 bottom-0 z-50 max-h-[92vh] overflow-y-auto rounded-t-2xl bg-white p-5 sm:left-1/2 sm:top-1/2 sm:bottom-auto sm:max-w-xl sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-2xl">
+          <div className="flex justify-between">
+            <div>
+              <Dialog.Title className="font-bold">{title}</Dialog.Title>
+              <Dialog.Description className="mt-1 text-xs text-[#667085]">
+                {description}
+              </Dialog.Description>
+            </div>
+            <Dialog.Close aria-label="Close dialog" className="grid h-10 w-10 place-items-center rounded-lg">
+              <X />
+            </Dialog.Close>
+          </div>
+          {children}
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
+function PaymentDialog({
+  bookingId,
+  customer,
+  balance,
+  onClose,
+  onSave,
+}: {
+  bookingId: string;
+  customer: string;
+  balance: number;
+  onClose: () => void;
+  onSave: (updated: BookingDetailData, message: string) => void;
+}) {
+  const [amount, setAmount] = useState(Math.max(0, balance));
+  const [method, setMethod] = useState<PaymentMethod>("Cash");
+  const [reference, setReference] = useState("");
+  const [account, setAccount] = useState("Lahore cash drawer");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState("");
+
+  const valid = Number.isInteger(amount) && amount > 0 && amount <= Math.max(balance, 0);
+
+  async function save() {
+    if (!valid || !reference.trim() || pending) return;
+    setPending(true);
+    setError("");
+    const result = await recordBookingPaymentAction(bookingId, {
+      amount,
+      method,
+      reference: reference.trim(),
+      account,
+    });
+    setPending(false);
+    if (result.ok) {
+      onSave(result.data, "Payment posted and receipt prepared.");
+    } else {
+      setError(result.error.message || "Failed to record payment.");
+    }
+  }
+
+  return (
+    <Shell
+      title="Record payment"
+      description={`Record payment for ${customer}. Posted payments are immutable and stored in the database.`}
+      onClose={onClose}
+    >
+      <div className="mt-5 grid gap-4 sm:grid-cols-2">
+        <FormInput
+          label="Amount (PKR)"
+          type="number"
+          value={amount || ""}
+          onChange={(e) => setAmount(Number(e.target.value))}
+        />
+        <FormSelect
+          label="Method"
+          value={method}
+          onChange={(e) => setMethod(e.target.value as PaymentMethod)}
+          options={["Cash", "Bank transfer", "Card terminal", "Wallet"]}
+        />
+        <FormInput
+          label="Reference / Receipt #"
+          value={reference}
+          onChange={(e) => setReference(e.target.value)}
+          placeholder="e.g. IBFT-90418 or Counter"
+          required
+        />
+        <FormSelect
+          label="Receiving account"
+          value={account}
+          onChange={(e) => setAccount(e.target.value)}
+          options={["Lahore cash drawer", "HBL Operations", "Meezan Operations", "Counter"]}
+        />
+      </div>
+
+      {amount > balance && (
+        <p role="alert" className="mt-3 text-xs text-[#B42318]">
+          Overpayment is blocked; customer-credit policy is not enabled.
+        </p>
+      )}
+
+      {error && (
+        <p role="alert" className="mt-3 rounded-lg bg-[#FEF3F2] p-3 text-xs text-[#B42318]">
+          {error}
+        </p>
+      )}
+
+      <div className="mt-5 flex justify-end gap-2">
+        <Button variant="secondary" disabled={pending} onClick={onClose}>
+          Cancel
+        </Button>
+        <Button disabled={!valid || !reference.trim() || pending} onClick={() => void save()}>
+          {pending ? "Posting…" : "Post payment"}
+        </Button>
+      </div>
+    </Shell>
+  );
+}
+
+function DepositDialog({
+  bookingId,
+  customer,
+  depositHeld,
+  onClose,
+  onSaved,
+}: {
+  bookingId: string;
+  customer: string;
+  depositHeld: number;
+  onClose: () => void;
+  onSaved: (updated: BookingDetailData, message: string) => void;
+}) {
+  const [action, setAction] = useState<DepositAction>(depositHeld > 0 ? "Deposit refunded" : "Deposit received");
+  const [amount, setAmount] = useState(depositHeld || 10000);
+  const [reason, setReason] = useState("");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState("");
+
+  const isOut = ["Deposit applied", "Deposit refunded", "Deposit forfeited"].includes(action);
+  const valid = Number.isInteger(amount) && amount > 0 && (!isOut || amount <= depositHeld);
+
+  async function save() {
+    if (!valid || !reason.trim() || pending) return;
+    setPending(true);
+    setError("");
+    const result = await recordBookingDepositAction(bookingId, {
+      action,
+      amount,
+      reference: reason.trim(),
+    });
+    setPending(false);
+    if (result.ok) {
+      onSaved(result.data, `${action} transaction posted.`);
+    } else {
+      setError(result.error.message || "Failed to record deposit.");
+    }
+  }
+
+  return (
+    <Shell
+      title="Manage deposit"
+      description={`Customer: ${customer} · Currently held: ${formatPkr(depositHeld)}. Deposits remain liabilities until explicitly resolved.`}
+      onClose={onClose}
+    >
+      <div className="mt-5 space-y-4">
+        <FormSelect
+          label="Action"
+          value={action}
+          onChange={(e) => setAction(e.target.value as DepositAction)}
+          options={["Deposit received", "Deposit applied", "Deposit refunded", "Deposit forfeited"]}
+        />
+        <FormInput
+          label="Amount (PKR)"
+          type="number"
+          value={amount || ""}
+          onChange={(e) => setAmount(Number(e.target.value))}
+        />
+        <FormInput
+          label="Reason / reference"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          placeholder="e.g. Security deposit token, returned undamaged"
+          required
+        />
+        {isOut && amount > depositHeld && (
+          <p className="text-xs text-[#B42318]">Amount cannot exceed the held deposit.</p>
+        )}
+        {error && (
+          <p role="alert" className="rounded-lg bg-[#FEF3F2] p-3 text-xs text-[#B42318]">
+            {error}
+          </p>
+        )}
+        <div className="flex justify-end gap-2">
+          <Button variant="secondary" disabled={pending} onClick={onClose}>
+            Cancel
+          </Button>
+          <Button disabled={!valid || !reason.trim() || pending} onClick={() => void save()}>
+            {pending ? "Posting…" : "Post transaction"}
+          </Button>
+        </div>
+      </div>
+    </Shell>
+  );
+}
+
+function LedgerDialog({
+  bookingId,
+  transactions,
+  onClose,
+  onChanged,
+}: {
+  bookingId: string;
+  transactions: BookingTransactionDto[];
+  onClose: () => void;
+  onChanged: (updated: BookingDetailData, message: string) => void;
+}) {
+  const [selectedTxn, setSelectedTxn] = useState<string | null>(null);
+  const [reason, setReason] = useState("");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState("");
+
+  async function compensate(transactionId: string) {
+    if (!reason.trim() || pending) return;
+    setPending(true);
+    setError("");
+    const result = await reverseBookingTransactionAction(bookingId, {
+      transactionId,
+      reason: reason.trim(),
+    });
+    setPending(false);
+    if (result.ok) {
+      setSelectedTxn(null);
+      setReason("");
+      onChanged(result.data, "Reversal posted as a linked compensating transaction.");
+    } else {
+      setError(result.error.message || "Failed to reverse transaction.");
+    }
+  }
+
+  return (
+    <Shell
+      title="Transaction ledger"
+      description="Every transaction and correction is recorded and permanently auditable."
+      onClose={onClose}
+    >
+      <div className="mt-5 space-y-3">
+        {transactions.length === 0 ? (
+          <p className="py-6 text-center text-sm text-[#667085]">
+            No financial transactions recorded for this booking yet.
+          </p>
+        ) : (
+          transactions.map((item) => {
+            const isNegative = ["reversal", "refund"].includes(item.kind.toLowerCase());
+            return (
+              <div key={item.id} className="rounded-lg border border-[#E8ECF2] p-3">
+                <div className="flex justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <strong className="text-sm capitalize">{item.kind.replace("_", " ")}</strong>
+                      <span
+                        className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${
+                          item.status === "reversed"
+                            ? "bg-amber-100 text-amber-800"
+                            : "bg-emerald-100 text-emerald-800"
+                        }`}
+                      >
+                        {item.status}
+                      </span>
+                    </div>
+                    <p className="mt-0.5 text-xs text-[#667085]">
+                      {item.id} · {item.method} · {item.reference}
+                    </p>
+                    <p className="text-[11px] text-[#98A2B3]">
+                      {new Intl.DateTimeFormat("en-PK", {
+                        dateStyle: "medium",
+                        timeStyle: "short",
+                      }).format(new Date(item.postedAt))}
+                    </p>
+                  </div>
+                  <strong className={`text-sm ${isNegative ? "text-[#B42318]" : "text-[#067647]"}`}>
+                    {isNegative ? "-" : "+"}
+                    {formatPkr(item.amount)}
+                  </strong>
+                </div>
+
+                {item.status === "posted" && !isNegative && (
+                  <div className="mt-3 border-t border-[#F2F4F7] pt-2">
+                    {selectedTxn === item.id ? (
+                      <div className="space-y-2">
+                        <FormInput
+                          label="Correction reason"
+                          value={reason}
+                          onChange={(e) => setReason(e.target.value)}
+                          placeholder="State why this transaction is being reversed..."
+                        />
+                        <div className="flex justify-end gap-2">
+                          <Button size="sm" variant="secondary" onClick={() => setSelectedTxn(null)}>
+                            Cancel
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="danger"
+                            disabled={!reason.trim() || pending}
+                            onClick={() => void compensate(item.id)}
+                          >
+                            {pending ? "Reversing…" : "Confirm Reversal"}
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => {
+                          setSelectedTxn(item.id);
+                          setReason("");
+                          setError("");
+                        }}
+                      >
+                        Reverse
+                      </Button>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })
+        )}
+
+        {error && (
+          <p role="alert" className="rounded-lg bg-[#FEF3F2] p-3 text-xs text-[#B42318]">
+            {error}
+          </p>
+        )}
+      </div>
+    </Shell>
+  );
+}

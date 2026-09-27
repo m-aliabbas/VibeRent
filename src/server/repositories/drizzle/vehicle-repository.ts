@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { sqlite } from "@/db/connection";
 import { DomainError } from "@/server/domain/errors";
 import type { VehicleRepository } from "@/server/repositories/contracts";
-import type { ManagementAgreement, Vehicle } from "@/types/vehicle";
+import type { ManagementAgreement, Vehicle, VehicleRateRule } from "@/types/vehicle";
 
 type VehicleRow = {
   id: string;
@@ -75,19 +75,25 @@ function mapVehicle(row: VehicleRow): Vehicle {
     color: row.color,
     transmission: title(row.transmission) as Vehicle["transmission"],
     fuel: title(row.fuel) as Vehicle["fuel"],
+    ownerId: row.owner_id ?? undefined,
     owner: row.owner_name ?? undefined,
     agreement: mapAgreement(row),
   };
 }
 
+function listRateRules(agencyId: string, vehicleId: string): VehicleRateRule[] {
+  return sqlite.prepare(`SELECT destination_city AS destinationCity, daily_rate AS dailyRate, per_km_rate AS perKmRate, minimum_days AS minimumDays FROM vehicle_rate_rules WHERE agency_id=? AND vehicle_id=? AND active=1 ORDER BY destination_city`)
+    .all(agencyId, vehicleId) as VehicleRateRule[];
+}
+
 export class SqliteVehicleRepository implements VehicleRepository {
   list(agencyId: string) {
-    return (sqlite.prepare(`${selectSql} WHERE v.agency_id = ? ORDER BY v.created_at DESC`).all(agencyId) as VehicleRow[]).map(mapVehicle);
+    return (sqlite.prepare(`${selectSql} WHERE v.agency_id = ? ORDER BY v.created_at DESC`).all(agencyId) as VehicleRow[]).map(row => ({ ...mapVehicle(row), rateRules: listRateRules(agencyId, row.id) }));
   }
 
   getById(agencyId: string, id: string) {
     const row = sqlite.prepare(`${selectSql} WHERE v.agency_id = ? AND v.id = ? LIMIT 1`).get(agencyId, id) as VehicleRow | undefined;
-    return row ? mapVehicle(row) : undefined;
+    return row ? { ...mapVehicle(row), rateRules: listRateRules(agencyId, row.id) } : undefined;
   }
 
   save(agencyId: string, actorId: string, input: Vehicle) {
@@ -103,7 +109,7 @@ export class SqliteVehicleRepository implements VehicleRepository {
       let agreementId: string | null = null;
       const now = new Date().toISOString();
       if (input.ownership === "Managed") {
-        const owner = sqlite.prepare("SELECT id FROM owners WHERE agency_id = ? AND name = ? AND status = 'active' LIMIT 1").get(agencyId, input.owner) as { id: string } | undefined;
+        const owner = sqlite.prepare("SELECT id FROM owners WHERE agency_id = ? AND id = ? AND status = 'active' LIMIT 1").get(agencyId, input.ownerId) as { id: string } | undefined;
         if (!owner) throw new DomainError("VALIDATION_FAILED", "The selected owner is not active.", 400, { owner: "Select an active owner." });
         ownerId = owner.id;
         const agreement = input.agreement;
@@ -125,6 +131,11 @@ export class SqliteVehicleRepository implements VehicleRepository {
         sqlite.prepare(`UPDATE vehicles SET branch_id=?, owner_id=?, agreement_id=?, plate=?, make=?, model=?, year=?, category=?, color=?, transmission=?, fuel=?, status=?, ownership=?, daily_rate=?, archived_at=?, updated_at=?, version=version+1 WHERE agency_id=? AND id=?`).run(...values, agencyId, id);
       } else {
         sqlite.prepare(`INSERT INTO vehicles (id, agency_id, branch_id, owner_id, agreement_id, plate, make, model, year, category, color, transmission, fuel, status, ownership, daily_rate, version, archived_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`).run(id, agencyId, ...values.slice(0, -1), now, now);
+      }
+      sqlite.prepare("DELETE FROM vehicle_rate_rules WHERE agency_id=? AND vehicle_id=?").run(agencyId, id);
+      const insertRule = sqlite.prepare(`INSERT INTO vehicle_rate_rules (id,agency_id,vehicle_id,destination_city,daily_rate,per_km_rate,minimum_days,active,version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,1,1,?,?)`);
+      for (const rule of input.rateRules ?? []) {
+        insertRule.run(`vrr_${randomUUID()}`, agencyId, id, rule.destinationCity.trim(), rule.dailyRate, rule.perKmRate, rule.minimumDays, now, now);
       }
       sqlite.prepare(`INSERT INTO audit_events (id, agency_id, actor_id, action, entity_type, entity_id, metadata, occurred_at) VALUES (?, ?, ?, ?, 'vehicle', ?, ?, ?)`).run(randomUUID(), agencyId, actorId, existing ? "vehicle.updated" : "vehicle.created", id, JSON.stringify({ plate: input.plate, status: input.status }), now);
       return this.getById(agencyId, id)!;

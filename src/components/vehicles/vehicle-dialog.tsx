@@ -1,8 +1,10 @@
 "use client";
 
 import * as Dialog from "@radix-ui/react-dialog";
+import Link from "next/link";
 import { useEffect, useState, type FormEvent } from "react";
-import { CarFront, LoaderCircle, X } from "lucide-react";
+import { CarFront, LoaderCircle, Plus, Trash2, X } from "lucide-react";
+import { getVehicleFormOptionsAction } from "@/app/actions/vehicles";
 import { Button } from "@/components/ui/button";
 import { FormInput, FormSelect } from "@/components/forms/form-controls";
 import type { RepositoryResult } from "@/lib/repositories/repository";
@@ -24,13 +26,6 @@ const blank: Vehicle = {
   fuel: "Petrol",
 };
 
-const ownerOptions = [
-  "Farhan Qureshi",
-  "Hassan Motors",
-  "Sana Malik",
-  "Usman Raza",
-];
-
 export function VehicleDialog({
   open,
   onOpenChange,
@@ -48,9 +43,19 @@ export function VehicleDialog({
   const [initialSnapshot] = useState(() => JSON.stringify(form));
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+  const [options, setOptions] = useState<{branches:Array<{id:string;name:string;city:string}>;owners:Array<{id:string;name:string;phone:string}>;defaultCity:string}>({branches:[],owners:[],defaultCity:""});
   const update = (key: keyof Vehicle, value: string | number) =>
     setForm((current) => ({ ...current, [key]: value }));
   const dirty = JSON.stringify(form) !== initialSnapshot;
+  useEffect(() => {
+    let active = true;
+    void getVehicleFormOptionsAction().then(result => {
+      if (!active || !result.ok) return;
+      setOptions(result.data);
+      if (!vehicle && result.data.defaultCity) setForm(current => ({ ...current, city: result.data.defaultCity }));
+    });
+    return () => { active = false; };
+  }, [vehicle]);
   useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => {
       if (!dirty) return;
@@ -72,7 +77,7 @@ export function VehicleDialog({
     if (!form.model.trim()) nextErrors.model = "Model is required.";
     if (form.dailyRate < 1000)
       nextErrors.dailyRate = "Enter a valid daily rate.";
-    if (form.ownership === "Managed" && !form.owner?.trim())
+    if (form.ownership === "Managed" && !form.ownerId?.trim())
       nextErrors.owner = "Select or enter the vehicle owner.";
     if (
       form.ownership === "Managed" &&
@@ -206,7 +211,7 @@ export function VehicleDialog({
                 label="Current city"
                 value={form.city}
                 onChange={(e) => update("city", e.target.value)}
-                options={["Lahore", "Islamabad", "Rawalpindi", "Karachi"]}
+                options={options.branches.map(branch => branch.city)}
               />
               <FormSelect
                 label="Ownership"
@@ -215,27 +220,14 @@ export function VehicleDialog({
                 options={["Own", "Managed"]}
               />
               {form.ownership === "Managed" ? (
-                <FormSelect
-                  label="Vehicle owner"
-                  value={form.owner ?? ""}
-                  onChange={(e) =>
-                    setForm((current) => ({
-                      ...current,
-                      owner: e.target.value,
-                      agreement: current.agreement ?? {
-                        ownerId: `OWN-${ownerOptions.indexOf(e.target.value) + 1}`,
-                        effectiveFrom: "2026-09-01",
-                        effectiveTo: "2027-08-31",
-                        shareMethod: "Percentage",
-                        ownerShare: 70,
-                        expenseResponsibility: "Shared",
-                        payoutFrequency: "Monthly",
-                      },
-                    }))
-                  }
-                  options={["Select owner", ...ownerOptions]}
-                  required
-                />
+                <div>
+                  <label className="block text-sm font-semibold text-[#344054]">Vehicle owner <span className="text-[#D92D20]">*</span></label>
+                  <select className="field mt-1.5" value={form.ownerId ?? ""} onChange={(e) => { const owner=options.owners.find(item=>item.id===e.target.value); setForm(current=>({...current,ownerId:owner?.id,owner:owner?.name,agreement:{...(current.agreement??{effectiveFrom:new Date().toISOString().slice(0,10),effectiveTo:"",shareMethod:"Percentage",ownerShare:70,expenseResponsibility:"Shared",payoutFrequency:"Monthly"}),ownerId:owner?.id??""}})); }} required>
+                    <option value="">Select an owner</option>
+                    {options.owners.map(owner=><option key={owner.id} value={owner.id}>{owner.name} · {owner.phone}</option>)}
+                  </select>
+                  {options.owners.length === 0 ? <Link href="/owners?new=1" className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-[#006FE6]"><Plus size={14}/>No owners yet — add a new owner</Link> : <Link href="/owners?new=1" className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-[#006FE6]"><Plus size={14}/>Add new owner</Link>}
+                </div>
               ) : (
                 <div className="hidden sm:block" />
               )}
@@ -381,6 +373,10 @@ export function VehicleDialog({
                 onChange={(e) => update("fuel", e.target.value)}
                 options={["Petrol", "Hybrid", "Diesel"]}
               />
+              <div className="rounded-xl border border-[#B2DDFF] bg-[#F5FAFF] p-4 sm:col-span-2">
+                <div className="flex items-center justify-between gap-3"><div><h3 className="text-sm font-bold text-[#175CD3]">Destination rates</h3><p className="mt-1 text-xs text-[#475467]">Optional city-specific daily and mileage rates. The standard daily rate is used when no rule matches.</p></div><Button type="button" size="sm" variant="secondary" onClick={()=>setForm(current=>({...current,rateRules:[...(current.rateRules??[]),{destinationCity:"",dailyRate:current.dailyRate,perKmRate:0,minimumDays:1}]}))}><Plus size={15}/>Add rate</Button></div>
+                {(form.rateRules??[]).length>0&&<div className="mt-4 space-y-3">{(form.rateRules??[]).map((rule,index)=><div key={index} className="grid gap-3 rounded-lg bg-white p-3 sm:grid-cols-[1fr_1fr_1fr_1fr_auto] sm:items-end"><FormInput label="Going to city" value={rule.destinationCity} onChange={e=>setForm(current=>({...current,rateRules:current.rateRules?.map((item,i)=>i===index?{...item,destinationCity:e.target.value}:item)}))}/><FormInput label="Daily rate" type="number" min={1000} value={rule.dailyRate} onChange={e=>setForm(current=>({...current,rateRules:current.rateRules?.map((item,i)=>i===index?{...item,dailyRate:Number(e.target.value)}:item)}))}/><FormInput label="Per km" type="number" min={0} value={rule.perKmRate} onChange={e=>setForm(current=>({...current,rateRules:current.rateRules?.map((item,i)=>i===index?{...item,perKmRate:Number(e.target.value)}:item)}))}/><FormInput label="Minimum days" type="number" min={1} value={rule.minimumDays} onChange={e=>setForm(current=>({...current,rateRules:current.rateRules?.map((item,i)=>i===index?{...item,minimumDays:Number(e.target.value)}:item)}))}/><Button type="button" size="sm" variant="ghost" aria-label={`Remove ${rule.destinationCity||"rate"}`} onClick={()=>setForm(current=>({...current,rateRules:current.rateRules?.filter((_,i)=>i!==index)}))}><Trash2 size={16}/></Button></div>)}</div>}
+              </div>
               {errors.form && (
                 <p
                   role="alert"
