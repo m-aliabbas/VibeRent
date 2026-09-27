@@ -1,0 +1,3 @@
+import { AuthFrame } from "@/components/auth/auth-frame";
+import { SignInForm } from "@/components/auth/auth-forms";
+export default async function SignInPage({searchParams}:{searchParams:Promise<{callbackUrl?:string;reset?:string}>}){const query=await searchParams;return <AuthFrame eyebrow="Welcome back" title="Sign in to your agency" description="Use your verified work email to continue to VibeRent.">{query.reset&&<div className="mb-4 rounded-lg border border-[#ABEFC6] bg-[#ECFDF3] p-3 text-sm text-[#067647]">Password updated. You can sign in now.</div>}<SignInForm callbackUrl={query.callbackUrl}/></AuthFrame>}

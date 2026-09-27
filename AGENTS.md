@@ -6,13 +6,14 @@ VibeRent is a responsive car-rental operations dashboard for local agencies. It 
 
 Read these source notes before changing product behavior or visual direction:
 
+- `Backend.md` for backend boundaries, SQLite rules, API design, and the future mobile path.
 - `Design2.md` for the agreed layout and design language.
 - `UI.md` for screen-specific requirements.
 - `Phases.md` for the larger product roadmap and domain scope.
 - `ArchFocus.md` for the reuse-first component architecture.
 - `Design.md` only for early naming and branding context; later documents take precedence.
 
-If the notes conflict, use this priority: the user's latest request, `AGENTS.md`, `ArchFocus.md`, `Design2.md`, `UI.md`, `Phases.md`, then `Design.md`.
+If the notes conflict, use this priority: the user's latest request, `AGENTS.md`, `Backend.md` for backend decisions, `ArchFocus.md`, `Design2.md`, `UI.md`, `Phases.md`, then `Design.md`.
 
 ## Current scope
 
@@ -22,11 +23,28 @@ If the notes conflict, use this priority: the user's latest request, `AGENTS.md`
 - Treat desktop and mobile as first-class. Agent workflows must remain practical on a phone.
 - Do not invent integrations, API contracts, or persistence layers prematurely.
 
+Backend planning is now documented in `Backend.md`. Backend implementation still requires an explicit user request; the plan does not expand the current implementation scope by itself.
+
 ## Default frontend stack
 
 When bootstrapping the app, use Next.js App Router, TypeScript, Tailwind CSS, and shadcn/ui unless the user specifies otherwise. Use Lucide icons and a chart library only where data visualization adds real value. Keep business data and UI state typed.
 
-The product notes disagree about Prisma versus Drizzle. Do not choose either during frontend-only work. Ask or document a decision when persistence enters scope.
+The current persistence decision is **SQLite with Drizzle ORM**. Do not migrate to PostgreSQL, Prisma, Supabase, or a separate backend service unless the user explicitly changes that decision. Keep database-specific code behind repositories so a future database migration does not affect UI or domain workflows.
+
+## Backend and API rules
+
+- Treat the Next.js application as a modular monolith: UI, Route Handlers, domain services, repositories, and database access live in one deployable application for now.
+- Put business rules in framework-independent domain/application services. Server Actions and Route Handlers must call the same services rather than reimplementing rules.
+- Use Server Actions for web-only mutations. Use versioned Route Handlers under `/api/v1` for capabilities needed by the future mobile app, integrations, or webhooks.
+- Never access Drizzle or `better-sqlite3` from Client Components. Keep database modules server-only.
+- Validate every mutation at the server boundary. Authentication does not replace authorization; check agency membership, role, branch scope, and record ownership in the service layer.
+- Scope every tenant-owned query by `agencyId`. Never trust an `agencyId`, role, price, total, or status supplied by a client without deriving or verifying it server-side.
+- Keep API contracts DTO-based and independent of Drizzle row types. Use stable IDs, ISO 8601 timestamps, PKR minor units, explicit pagination, and structured error codes.
+- Multi-record workflows such as booking confirmation, check-out, check-in, payment posting, and owner payout must be transactional and append audit events.
+- SQLite is the current prototype and early single-instance database. Use WAL mode, foreign keys, migrations, busy timeouts, a persistent disk, and tested backups. Do not deploy the database on an ephemeral or read-only filesystem.
+- Do not run multiple application instances against one local SQLite file. Reassess PostgreSQL when concurrency, horizontal scaling, hosted mobile traffic, or operational requirements exceed the thresholds in `Backend.md`.
+- Store uploaded file metadata in SQLite, but keep actual photos, receipts, CNIC/license images, and signed contracts in private object storage once uploads become live.
+- Never expose raw SQLite errors, SQL, secrets, internal paths, CNIC values, or private storage keys in API responses or logs.
 
 ## Design direction
 
@@ -66,6 +84,7 @@ After implementation, run the available lint, typecheck, and build commands. Exe
 ## Project skills
 
 - Use `$build-viberent-frontend` for creating or extending prototype screens and shared frontend components.
+- Use `$build-viberent-backend` for schemas, migrations, repositories, services, Server Actions, API routes, authentication boundaries, transactions, audit events, and backend tests.
 - Use `$review-viberent-ui` for UI review, responsive QA, accessibility checks, and consistency audits.
 
 

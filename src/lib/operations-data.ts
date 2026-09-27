@@ -84,7 +84,7 @@ export const bookings: Booking[] = [
 ];
 export const customers: Customer[] = [
   {
-    id: "CUS-218",
+    id: "cus-areeba",
     name: "Areeba Khan",
     phone: "+92 300 842 1190",
     cnic: "35202-•••••••-4",
@@ -93,7 +93,7 @@ export const customers: Customer[] = [
     status: "Active",
   },
   {
-    id: "CUS-194",
+    id: "cus-hamza",
     name: "Hamza Siddiqui",
     phone: "+92 321 590 2741",
     cnic: "61101-•••••••-8",

@@ -1,0 +1,3 @@
+import { AuthFrame } from "@/components/auth/auth-frame";
+import { ResetPasswordForm } from "@/components/auth/auth-forms";
+export default async function ResetPasswordPage({searchParams}:{searchParams:Promise<{token?:string}>}){const {token=""}=await searchParams;return <AuthFrame eyebrow="Account recovery" title="Choose a new password" description="Use a strong password you have not used for this account before.">{token?<ResetPasswordForm token={token}/>:<div className="rounded-lg border border-[#FECDCA] bg-[#FEF3F2] p-3 text-sm text-[#B42318]">This reset link is missing its security token.</div>}</AuthFrame>}

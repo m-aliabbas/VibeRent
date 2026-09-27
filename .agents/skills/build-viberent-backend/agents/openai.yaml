@@ -1,0 +1,4 @@
+interface:
+  display_name: "Build VibeRent Backend"
+  short_description: "Build VibeRent SQLite backend and mobile API"
+  default_prompt: "Use $build-viberent-backend to implement the next VibeRent backend workflow."

@@ -1,0 +1,17 @@
+import { getApiRequestContext } from "@/server/auth/session";
+import { apiFailure, apiSuccess, parseJsonRequest } from "@/server/api/response";
+import { listVehicles, saveVehicle } from "@/server/services/vehicle-service";
+
+export const runtime = "nodejs";
+
+export async function GET(request: Request) {
+  let requestId: string | undefined;
+  try { const context = await getApiRequestContext(request); requestId = context.requestId; return apiSuccess(listVehicles(context), requestId); }
+  catch (error) { return apiFailure(error, requestId); }
+}
+
+export async function POST(request: Request) {
+  let requestId: string | undefined;
+  try { const context = await getApiRequestContext(request); requestId = context.requestId; const vehicle = saveVehicle(context, await parseJsonRequest(request)); return apiSuccess(vehicle, requestId, { status: 201 }); }
+  catch (error) { return apiFailure(error, requestId); }
+}

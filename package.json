@@ -11,13 +11,15 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:seed": "tsx src/db/seed.ts",
-    "db:check": "tsx src/db/check-booking-transaction.ts",
+    "db:check": "NODE_OPTIONS=--conditions=react-server tsx src/db/check-booking-transaction.ts",
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
+    "@better-auth/drizzle-adapter": "^1.7.6",
     "@radix-ui/react-dialog": "^1.1.15",
     "@radix-ui/react-dropdown-menu": "^2.1.16",
     "@radix-ui/react-slot": "^1.2.4",
+    "better-auth": "^1.7.6",
     "better-sqlite3": "^13.0.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -26,6 +28,7 @@
     "next": "16.3.6",
     "react": "19.3.0",
     "react-dom": "19.3.0",
+    "resend": "^6.30.0",
     "server-only": "^0.0.1",
     "tailwind-merge": "^3.3.1"
   },

@@ -1,17 +1,20 @@
 "use client";
 
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
   BarChart3,
   Bell,
+  Building2,
   CalendarDays,
   CarFront,
   ChevronDown,
   CircleDollarSign,
   CircleHelp,
   Gauge,
+  LogOut,
   Menu,
   Search,
   Settings,
@@ -21,6 +24,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CommandPalette } from "@/components/layout/command-palette";
+import { authClient } from "@/lib/auth-client";
+import type { SessionViewer } from "@/server/auth/session";
 
 const nav = [
   { label: "Dashboard", href: "/", icon: Gauge },
@@ -93,7 +98,8 @@ function NavLinks({ close }: { close?: () => void }) {
   );
 }
 
-export function AppShell({ children }: { children: React.ReactNode }) {
+export function AppShell({ children, viewer }: { children: React.ReactNode; viewer: SessionViewer }) {
+  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   useEffect(() => {
@@ -169,23 +175,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <Bell size={20} />
               <span className="absolute right-2 top-2 h-2 w-2 rounded-full border-2 border-white bg-[#F04438]" />
             </button>
-            <button
-              className="ml-1 hidden items-center gap-2.5 sm:flex"
-              aria-label="Open user menu"
-            >
-              <span className="grid h-10 w-10 place-items-center rounded-full bg-gradient-to-br from-[#CFD7E5] to-[#7A879B] text-xs font-bold text-white ring-2 ring-white">
-                MA
-              </span>
-              <span className="text-left">
-                <span className="block text-sm font-semibold text-[#101828]">
-                  Ali
-                </span>
-                <span className="block text-xs text-[#667085]">
-                  Fleet Manager
-                </span>
-              </span>
-              <ChevronDown size={16} className="text-[#344054]" />
-            </button>
+            <DropdownMenu.Root>
+              <DropdownMenu.Trigger asChild><button className="ml-1 hidden items-center gap-2.5 rounded-lg p-1 text-left hover:bg-[#F8FAFC] sm:flex" aria-label="Open user menu"><span className="grid h-10 w-10 place-items-center rounded-full bg-gradient-to-br from-[#1488FF] to-[#0057B8] text-xs font-bold text-white ring-2 ring-white">{initials(viewer.name)}</span><span><span className="block max-w-36 truncate text-sm font-semibold text-[#101828]">{viewer.name}</span><span className="block max-w-36 truncate text-xs text-[#667085]">{roleLabel(viewer.role)}</span></span><ChevronDown size={16} className="text-[#344054]"/></button></DropdownMenu.Trigger>
+              <DropdownMenu.Portal><DropdownMenu.Content align="end" sideOffset={8} className="z-50 min-w-64 rounded-xl border border-[#E4E7EC] bg-white p-1.5 shadow-xl"><div className="border-b px-3 py-2.5"><p className="truncate text-sm font-semibold">{viewer.name}</p><p className="truncate text-xs text-[#667085]">{viewer.email}</p></div><div className="px-3 py-2 text-xs font-semibold uppercase tracking-wide text-[#98A2B3]">Agency</div>{viewer.organizations.map(org=><DropdownMenu.Item key={org.id} disabled={org.id===viewer.activeAgencyId} onSelect={async()=>{await authClient.organization.setActive({organizationId:org.id});router.push("/");router.refresh()}} className="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm outline-none hover:bg-[#F2F4F7] disabled:cursor-default disabled:bg-[#EFF8FF] disabled:text-[#175CD3]"><Building2 size={16}/><span className="flex-1 truncate">{org.name}</span>{org.id===viewer.activeAgencyId&&<span className="text-xs">Active</span>}</DropdownMenu.Item>)}<DropdownMenu.Separator className="my-1 h-px bg-[#EAECF0]"/><DropdownMenu.Item onSelect={async()=>{await authClient.signOut();router.push("/sign-in");router.refresh()}} className="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm text-[#B42318] outline-none hover:bg-[#FEF3F2]"><LogOut size={16}/>Sign out</DropdownMenu.Item></DropdownMenu.Content></DropdownMenu.Portal>
+            </DropdownMenu.Root>
           </div>
         </header>
         <main className="mx-auto max-w-[1480px] px-4 py-6 sm:px-6 lg:px-7 lg:py-6">
@@ -215,11 +208,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <NavLinks close={() => setOpen(false)} />
             </div>
             <div className="border-t border-[#EAECF0] px-2 pt-4 text-sm font-semibold">
-              Muhammad Ali
+              {viewer.name}
               <div className="text-xs font-normal text-[#667085]">
-                Agency owner
+                {roleLabel(viewer.role)} · {viewer.activeAgencyName}
               </div>
             </div>
+            <button onClick={async()=>{await authClient.signOut();router.push("/sign-in");router.refresh()}} className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-lg border text-sm font-semibold text-[#B42318]"><LogOut size={17}/>Sign out</button>
           </aside>
         </div>
       )}
@@ -227,3 +221,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     </div>
   );
 }
+
+function initials(name:string){return name.split(/\s+/).slice(0,2).map(part=>part[0]).join("").toUpperCase()||"VR";}
+function roleLabel(role?:string){return role?.split("_").map(part=>part[0].toUpperCase()+part.slice(1)).join(" ")??"Staff member";}

@@ -33,11 +33,11 @@ export type AvailabilityBlock = {
 };
 
 export const fleetOptions = [
-  { id: "veh-1", label: "Toyota Corolla 2022", plate: "ICT-704", city: "Islamabad", rate: 9500 },
-  { id: "veh-2", label: "Honda City 2023", plate: "LEB-218", city: "Lahore", rate: 11000 },
-  { id: "veh-3", label: "KIA Sportage 2022", plate: "LHR-529", city: "Lahore", rate: 18000 },
-  { id: "veh-4", label: "Suzuki Alto 2024", plate: "RIK-113", city: "Rawalpindi", rate: 7100 },
-  { id: "veh-5", label: "Toyota Yaris 2023", plate: "BKC-882", city: "Karachi", rate: 9250 },
+  { id: "veh-corolla", label: "Toyota Corolla 2022", plate: "ICT-704", city: "Islamabad", rate: 9500 },
+  { id: "veh-city", label: "Honda City 2023", plate: "LEB-218", city: "Lahore", rate: 11000 },
+  { id: "veh-sportage", label: "KIA Sportage 2022", plate: "LHR-529", city: "Lahore", rate: 18000 },
+  { id: "veh-alto", label: "Suzuki Alto 2024", plate: "RIK-113", city: "Rawalpindi", rate: 7100 },
+  { id: "veh-yaris", label: "Toyota Yaris 2023", plate: "BKC-882", city: "Karachi", rate: 9250 },
 ];
 
 export const bookingRecords: BookingRecord[] = [

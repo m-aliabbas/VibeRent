@@ -2,7 +2,7 @@
 
 import * as Dialog from "@radix-ui/react-dialog";
 import Link from "next/link";
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { CalendarDays, ChevronLeft, ChevronRight, Plus, ShieldAlert, X } from "lucide-react";
 import { PageHeader } from "@/components/shared/page-header";
 import { FilterBar, FilterSelect } from "@/components/shared/filter-bar";
@@ -11,8 +11,9 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { Toast } from "@/components/shared/toast";
 import { FormInput, FormSelect } from "@/components/forms/form-controls";
 import { Button } from "@/components/ui/button";
-import { bookingRecords, fleetOptions, getVehicleConflicts, manualBlocks, type AvailabilityBlock } from "@/lib/booking-data";
+import { bookingRecords, fleetOptions, getVehicleConflicts, manualBlocks, type AvailabilityBlock, type BookingRecord } from "@/lib/booking-data";
 import { formatPkr } from "@/lib/utils";
+import { listBookingsAction } from "@/app/actions/bookings";
 
 export function BookingsWorkspace() {
   const [view, setView] = useState<"list" | "calendar" | "balances">("list");
@@ -20,7 +21,9 @@ export function BookingsWorkspace() {
   const [status, setStatus] = useState("All");
   const [notice, setNotice] = useState("");
   const [blockOpen, setBlockOpen] = useState(false);
-  const rows = useMemo(() => bookingRecords.filter((item) => (status === "All" || item.status === status) && JSON.stringify(item).toLowerCase().includes(search.toLowerCase())), [search, status]);
+  const [items, setItems] = useState<BookingRecord[]>(bookingRecords);
+  useEffect(() => { void listBookingsAction().then((result) => { if (result.ok) setItems(result.data); else setNotice(result.error.message); }); }, []);
+  const rows = useMemo(() => items.filter((item) => (status === "All" || item.status === status) && JSON.stringify(item).toLowerCase().includes(search.toLowerCase())), [items, search, status]);
   return <div className="space-y-6">
     <Toast message={notice} onDismiss={() => setNotice("")} />
     <PageHeader eyebrow="Rental operations" title="Bookings" description="Manage availability, reservations, handovers, returns, and booking balances." actions={<div className="flex flex-wrap gap-2"><Button variant="secondary" onClick={() => setBlockOpen(true)}>Block availability</Button><Button asChild><Link href="/bookings/new"><Plus size={17}/>New booking</Link></Button></div>} />
