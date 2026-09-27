@@ -4,7 +4,15 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import * as schema from "@/db/schema";
 
-const databasePath = process.env.DATABASE_URL ?? path.join(process.cwd(), ".data", "viberent.db");
+function resolveDatabasePath(): string {
+  const url = process.env.DATABASE_URL?.trim();
+  if (!url || url.includes("/absolute/path/to")) {
+    return path.join(process.cwd(), ".data", "viberent.db");
+  }
+  return path.isAbsolute(url) ? url : path.join(process.cwd(), url);
+}
+
+const databasePath = resolveDatabasePath();
 fs.mkdirSync(path.dirname(databasePath), { recursive: true });
 
 export const sqlite = new Database(databasePath);

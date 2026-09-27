@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
+import { hashPassword } from "better-auth/crypto";
 import { auth } from "@/server/auth/auth";
 import { getOptionalWebSession, getWebRequestContext } from "@/server/auth/session";
 import { requireRole } from "@/server/auth/authorize";
@@ -23,7 +24,7 @@ export type TeamData = {
 export async function createAgencyAction(input: { name: string; slug: string; city: string; branchName: string; address: string }): Promise<OrganizationActionResult<{ agencyId: string }>> {
   try {
     const session = await getOptionalWebSession();
-    if (!session?.user.emailVerified) throw new DomainError("UNAUTHENTICATED", "Verify your email before creating an agency.", 401);
+    if (!session?.user) throw new DomainError("UNAUTHENTICATED", "Sign in before creating an agency.", 401);
     const name = input.name.trim();
     const slug = normalizeSlug(input.slug);
     const city = input.city.trim();
@@ -181,6 +182,321 @@ export async function updateMemberAction(input: { membershipId: string; role: St
     })();
     revalidatePath("/settings");
     return { ok: true, message: "Team member updated." };
+  } catch (error) {
+    return actionFailure(error);
+  }
+}
+
+export async function addTeamMemberDirectAction(input: {
+  name: string;
+  email: string;
+  password?: string;
+  role: StaffRole;
+  branchIds: string[];
+}): Promise<OrganizationActionResult<{ userId: string }>> {
+  try {
+    const context = await getWebRequestContext();
+    requireRole(context, ["agency_owner"]);
+
+    const name = input.name.trim();
+    const email = input.email.trim().toLowerCase();
+    const password = input.password?.trim() ?? "";
+
+    const fieldErrors: Record<string, string> = {};
+    if (name.length < 2) fieldErrors.name = "Enter the user's full name.";
+    if (!/^\S+@\S+\.\S+$/.test(email)) fieldErrors.email = "Enter a valid email address.";
+    if (!staffRoles.includes(input.role)) fieldErrors.role = "Choose a valid staff role.";
+
+    const existingStaff = sqlite
+      .prepare("SELECT id, active FROM users WHERE agency_id=? AND lower(email)=lower(?) LIMIT 1")
+      .get(context.agencyId, email) as { id: string; active: number } | undefined;
+
+    if (existingStaff) {
+      if (existingStaff.active) {
+        return { ok: false, message: "A team member with this email already belongs to this agency.", fieldErrors: { email: "Email already exists in this agency." } };
+      } else {
+        return { ok: false, message: "A team member with this email exists but is inactive. You can reactivate them from the list below." };
+      }
+    }
+
+    validateBranchIds(context.agencyId, input.branchIds);
+
+    const existingAuthUser = sqlite
+      .prepare("SELECT id, name, email FROM user WHERE lower(email)=lower(?) LIMIT 1")
+      .get(email) as { id: string; name: string; email: string } | undefined;
+
+    if (!existingAuthUser && password.length < 10) {
+      fieldErrors.password = "Password must be at least 10 characters.";
+    }
+
+    if (Object.keys(fieldErrors).length) {
+      return { ok: false, message: "Check the highlighted fields.", fieldErrors };
+    }
+
+    const now = new Date().toISOString();
+    const nowDate = new Date();
+    const staffId = `usr_${randomUUID()}`;
+    const membershipId = `mem_${randomUUID()}`;
+    const primaryBranchId = input.branchIds.length === 1 ? input.branchIds[0] : null;
+
+    if (existingAuthUser) {
+      const existingMember = sqlite
+        .prepare("SELECT id FROM member WHERE organization_id=? AND user_id=? LIMIT 1")
+        .get(context.agencyId, existingAuthUser.id) as { id: string } | undefined;
+
+      const resolvedMembershipId = existingMember?.id ?? membershipId;
+
+      sqlite.transaction(() => {
+        if (!existingMember) {
+          sqlite.prepare("INSERT INTO member (id, organization_id, user_id, role, created_at) VALUES (?, ?, ?, ?, ?)")
+            .run(resolvedMembershipId, context.agencyId, existingAuthUser.id, input.role, nowDate.getTime());
+        }
+
+        sqlite.prepare(
+          "INSERT INTO users (id, auth_user_id, membership_id, agency_id, branch_id, email, name, role, active, version, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?)"
+        ).run(
+          staffId,
+          existingAuthUser.id,
+          resolvedMembershipId,
+          context.agencyId,
+          primaryBranchId,
+          email,
+          name || existingAuthUser.name,
+          input.role,
+          now,
+          now
+        );
+
+        sqlite.prepare("DELETE FROM member_branch_access WHERE membership_id=?").run(resolvedMembershipId);
+        const insertBranch = sqlite.prepare("INSERT OR IGNORE INTO member_branch_access (membership_id, branch_id) VALUES (?, ?)");
+        for (const branchId of input.branchIds) {
+          insertBranch.run(resolvedMembershipId, branchId);
+        }
+
+        writeAudit(context.agencyId, context.userId, "staff.created", "user", staffId, {
+          role: input.role,
+          email,
+          name,
+          method: "direct",
+        });
+      })();
+
+      revalidatePath("/settings");
+      return {
+        ok: true,
+        data: { userId: staffId },
+        message: `Added existing account (${email}) to your team as ${input.role.replaceAll("_", " ")}.`,
+      };
+    }
+
+    const authUserId = `auth_${randomUUID()}`;
+    const hashedPassword = await hashPassword(password);
+
+    sqlite.transaction(() => {
+      sqlite.prepare("INSERT INTO user (id, name, email, email_verified, image, created_at, updated_at) VALUES (?, ?, ?, 1, NULL, ?, ?)")
+        .run(authUserId, name, email, nowDate.getTime(), nowDate.getTime());
+
+      sqlite.prepare("INSERT INTO account (id, account_id, provider_id, user_id, password, created_at, updated_at) VALUES (?, ?, 'credential', ?, ?, ?, ?)")
+        .run(`acc_${randomUUID()}`, authUserId, authUserId, hashedPassword, nowDate.getTime(), nowDate.getTime());
+
+      sqlite.prepare("INSERT INTO member (id, organization_id, user_id, role, created_at) VALUES (?, ?, ?, ?, ?)")
+        .run(membershipId, context.agencyId, authUserId, input.role, nowDate.getTime());
+
+      sqlite.prepare(
+        "INSERT INTO users (id, auth_user_id, membership_id, agency_id, branch_id, email, name, role, active, version, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?)"
+      ).run(
+        staffId,
+        authUserId,
+        membershipId,
+        context.agencyId,
+        primaryBranchId,
+        email,
+        name,
+        input.role,
+        now,
+        now
+      );
+
+      const insertBranch = sqlite.prepare("INSERT OR IGNORE INTO member_branch_access (membership_id, branch_id) VALUES (?, ?)");
+      for (const branchId of input.branchIds) {
+        insertBranch.run(membershipId, branchId);
+      }
+
+      writeAudit(context.agencyId, context.userId, "staff.created", "user", staffId, {
+        role: input.role,
+        email,
+        name,
+        method: "direct",
+      });
+    })();
+
+    revalidatePath("/settings");
+    return {
+      ok: true,
+      data: { userId: staffId },
+      message: `User ${name} (${email}) created successfully as ${input.role.replaceAll("_", " ")}.`,
+    };
+  } catch (error) {
+    return actionFailure(error);
+  }
+}
+
+export async function resetMemberPasswordDirectAction(input: {
+  memberUserId: string;
+  newPassword: string;
+}): Promise<OrganizationActionResult> {
+  try {
+    const context = await getWebRequestContext();
+    requireRole(context, ["agency_owner"]);
+
+    const newPassword = input.newPassword.trim();
+    if (newPassword.length < 10) {
+      return { ok: false, message: "Password must be at least 10 characters." };
+    }
+
+    const staff = sqlite.prepare("SELECT id, auth_user_id AS authUserId, email, name FROM users WHERE agency_id=? AND id=? LIMIT 1")
+      .get(context.agencyId, input.memberUserId) as { id: string; authUserId: string; email: string; name: string } | undefined;
+
+    if (!staff || !staff.authUserId) {
+      throw new DomainError("NOT_FOUND", "Team member account not found.", 404);
+    }
+
+    const hashedPassword = await hashPassword(newPassword);
+    const now = Date.now();
+
+    sqlite.transaction(() => {
+      const existingAccount = sqlite.prepare("SELECT id FROM account WHERE user_id=? AND provider_id='credential' LIMIT 1")
+        .get(staff.authUserId) as { id: string } | undefined;
+
+      if (existingAccount) {
+        sqlite.prepare("UPDATE account SET password=?, updated_at=? WHERE id=?")
+          .run(hashedPassword, now, existingAccount.id);
+      } else {
+        sqlite.prepare("INSERT INTO account (id, account_id, provider_id, user_id, password, created_at, updated_at) VALUES (?, ?, 'credential', ?, ?, ?, ?)")
+          .run(`acc_${randomUUID()}`, staff.authUserId, staff.authUserId, hashedPassword, now, now);
+      }
+
+      sqlite.prepare("DELETE FROM session WHERE user_id=?").run(staff.authUserId);
+
+      writeAudit(context.agencyId, context.userId, "staff.password_reset", "user", staff.id, {
+        email: staff.email,
+      });
+    })();
+
+    return { ok: true, message: `Password for ${staff.name} has been updated.` };
+  } catch (error) {
+    return actionFailure(error);
+  }
+}
+
+export type BranchItem = {
+  id: string;
+  name: string;
+  city: string;
+  address: string;
+  active: boolean;
+};
+
+export async function listBranchesAction(): Promise<OrganizationActionResult<BranchItem[]>> {
+  try {
+    const context = await getWebRequestContext();
+    const rows = sqlite.prepare(`
+      SELECT id, name, city, address, active
+      FROM branches
+      WHERE agency_id=?
+      ORDER BY active DESC, name ASC
+    `).all(context.agencyId) as Array<{ id: string; name: string; city: string; address: string; active: number }>;
+
+    return {
+      ok: true,
+      data: rows.map(r => ({
+        id: r.id,
+        name: r.name,
+        city: r.city,
+        address: r.address,
+        active: Boolean(r.active),
+      })),
+    };
+  } catch (error) {
+    return actionFailure(error);
+  }
+}
+
+export async function createBranchAction(input: {
+  name: string;
+  city: string;
+  address: string;
+}): Promise<OrganizationActionResult<{ branchId: string }>> {
+  try {
+    const context = await getWebRequestContext();
+    requireRole(context, ["agency_owner"]);
+
+    const name = input.name.trim();
+    const city = input.city.trim();
+    const address = input.address.trim();
+
+    const fieldErrors: Record<string, string> = {};
+    if (name.length < 2) fieldErrors.name = "Enter the branch name.";
+    if (city.length < 2) fieldErrors.city = "Enter the city name.";
+    if (address.length < 3) fieldErrors.address = "Enter the branch address.";
+
+    if (Object.keys(fieldErrors).length) {
+      return { ok: false, message: "Check the highlighted fields.", fieldErrors };
+    }
+
+    const branchId = `br_${randomUUID()}`;
+    const now = new Date().toISOString();
+
+    sqlite.transaction(() => {
+      sqlite.prepare(`
+        INSERT INTO branches (id, agency_id, name, city, address, active, version, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, 1, 1, ?, ?)
+      `).run(branchId, context.agencyId, name, city, address, now, now);
+
+      writeAudit(context.agencyId, context.userId, "branch.created", "branch", branchId, {
+        name,
+        city,
+      });
+    })();
+
+    revalidatePath("/settings");
+    return {
+      ok: true,
+      data: { branchId },
+      message: `Branch "${name}" in ${city} added successfully.`,
+    };
+  } catch (error) {
+    return actionFailure(error);
+  }
+}
+
+export async function toggleBranchActiveAction(input: {
+  branchId: string;
+  active: boolean;
+}): Promise<OrganizationActionResult> {
+  try {
+    const context = await getWebRequestContext();
+    requireRole(context, ["agency_owner"]);
+
+    const branch = sqlite.prepare("SELECT id, name, city FROM branches WHERE id=? AND agency_id=? LIMIT 1")
+      .get(input.branchId, context.agencyId) as { id: string; name: string; city: string } | undefined;
+
+    if (!branch) throw new DomainError("NOT_FOUND", "Branch not found.", 404);
+
+    const now = new Date().toISOString();
+    sqlite.prepare("UPDATE branches SET active=?, updated_at=?, version=version+1 WHERE id=?")
+      .run(input.active ? 1 : 0, now, input.branchId);
+
+    writeAudit(context.agencyId, context.userId, input.active ? "branch.activated" : "branch.deactivated", "branch", branch.id, {
+      name: branch.name,
+      city: branch.city,
+    });
+
+    revalidatePath("/settings");
+    return {
+      ok: true,
+      message: `${branch.name} ${input.active ? "activated" : "deactivated"}.`,
+    };
   } catch (error) {
     return actionFailure(error);
   }

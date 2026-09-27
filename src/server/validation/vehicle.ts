@@ -2,7 +2,6 @@ import type { Vehicle } from "@/types/vehicle";
 import { DomainError } from "@/server/domain/errors";
 
 const categories = ["Economy", "Sedan", "SUV"];
-const cities = ["Lahore", "Islamabad", "Rawalpindi", "Karachi"];
 const statuses = ["Available", "Booked", "Maintenance", "Out of Service", "Archived"];
 const ownerships = ["Own", "Managed"];
 const transmissions = ["Automatic", "Manual"];
@@ -20,7 +19,7 @@ export function parseVehicleInput(value: unknown): Vehicle {
   if (!Number.isInteger(input.year) || input.year! < 2000 || input.year! > 2035) errors.year = "Enter a valid model year.";
   if (!Number.isInteger(input.dailyRate) || input.dailyRate! < 1000) errors.dailyRate = "Daily rate must be at least PKR 1,000.";
   if (!categories.includes(input.category ?? "")) errors.category = "Choose a valid category.";
-  if (!cities.includes(input.city ?? "")) errors.city = "Choose a supported city.";
+  if (!input.city?.trim()) errors.city = "City is required.";
   if (!statuses.includes(input.status ?? "")) errors.status = "Choose a valid status.";
   if (!ownerships.includes(input.ownership ?? "")) errors.ownership = "Choose a valid ownership type.";
   if (!transmissions.includes(input.transmission ?? "")) errors.transmission = "Choose a valid transmission.";

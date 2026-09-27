@@ -22,9 +22,15 @@ export const auth = betterAuth({
   database: drizzleAdapter(db, {
     provider: "sqlite",
     schema,
-    transaction: true,
   }),
   databaseHooks: {
+    user: {
+      create: {
+        before: async user => {
+          return { data: { ...user, emailVerified: true } };
+        },
+      },
+    },
     session: {
       create: {
         before: async session => {
@@ -37,7 +43,7 @@ export const auth = betterAuth({
   },
   emailAndPassword: {
     enabled: true,
-    requireEmailVerification: true,
+    requireEmailVerification: false,
     minPasswordLength: 10,
     maxPasswordLength: 128,
     revokeSessionsOnPasswordReset: true,
@@ -53,8 +59,8 @@ export const auth = betterAuth({
     },
   },
   emailVerification: {
-    sendOnSignUp: true,
-    sendOnSignIn: true,
+    sendOnSignUp: false,
+    sendOnSignIn: false,
     autoSignInAfterVerification: true,
     sendVerificationEmail: async ({ user, url }) => {
       await sendAuthEmail({
@@ -80,7 +86,7 @@ export const auth = betterAuth({
       organizationLimit: 10,
       membershipLimit: 100,
       invitationExpiresIn: 60 * 60 * 48,
-      requireEmailVerificationOnInvitation: true,
+      requireEmailVerificationOnInvitation: false,
       cancelPendingInvitationsOnReInvite: true,
       disableOrganizationDeletion: true,
       async sendInvitationEmail(data) {

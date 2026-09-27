@@ -23,7 +23,7 @@ export type Vehicle = {
   model: string;
   year: number;
   category: "Economy" | "Sedan" | "SUV";
-  city: "Lahore" | "Islamabad" | "Rawalpindi" | "Karachi";
+  city: string;
   ownership: Ownership;
   status: VehicleStatus;
   dailyRate: number;
