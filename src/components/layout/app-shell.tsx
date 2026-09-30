@@ -6,21 +6,16 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
-  BarChart3,
   Bell,
   Building2,
-  CalendarDays,
-  CarFront,
   ChevronDown,
-  CircleDollarSign,
   CircleHelp,
-  Gauge,
+  ClipboardCheck,
+  FileText,
   LogOut,
   Menu,
   Search,
   Settings,
-  Users,
-  UserSquare2,
   UserRound,
   X,
 } from "lucide-react";
@@ -33,13 +28,8 @@ import { FormInput } from "@/components/forms/form-controls";
 import { Button } from "@/components/ui/button";
 
 const nav = [
-  { label: "Dashboard", href: "/", icon: Gauge },
-  { label: "Vehicles", href: "/vehicles", icon: CarFront },
-  { label: "Bookings", href: "/bookings", icon: CalendarDays },
-  { label: "Customers", href: "/customers", icon: Users },
-  { label: "Expenses", href: "/expenses", icon: CircleDollarSign },
-  { label: "Reports", href: "/reports", icon: BarChart3 },
-  { label: "Owners", href: "/owners", icon: UserSquare2 },
+  { label: "Operations", href: "/", icon: ClipboardCheck },
+  { label: "Reports", href: "/reports", icon: FileText },
   { label: "Settings", href: "/settings", icon: Settings },
 ];
 
@@ -162,7 +152,7 @@ export function AppShell({ children, viewer }: { children: React.ReactNode; view
           >
             <Search size={18} className="text-[#26334D]" />
             <span className="flex-1 text-sm text-[#667085]">
-              Search vehicles, bookings, customers...
+              Search any record...
             </span>
             <kbd className="text-xs font-medium text-[#667085]">⌘ K</kbd>
           </button>
