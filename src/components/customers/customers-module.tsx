@@ -29,6 +29,7 @@ export function CustomersModule() {
   const [loadError, setLoadError] = useState("");
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("All");
+  const [license, setLicense] = useState("All");
   const [editing, setEditing] = useState<CustomerRecord>();
   const [open, setOpen] = useState(false);
   const [notice, setNotice] = useState("");
@@ -54,8 +55,11 @@ export function CustomersModule() {
 
   const rows = useMemo(() => items.filter(item => {
     const term = search.trim().toLowerCase();
-    return (status === "All" || displayStatus(item.status) === status) && (!term || `${item.name} ${item.phone} ${item.cnic} ${item.email ?? ""}`.toLowerCase().includes(term));
-  }), [items, search, status]);
+    const expiry=item.licenseExpiresAt?Date.parse(`${item.licenseExpiresAt}T23:59:59`):NaN;
+    const licenseMatch=license==="All"||(license==="No license"&&!item.licenseNumber)||(license==="Expired"&&Number.isFinite(expiry)&&expiry<now)||(license==="Expiring soon"&&Number.isFinite(expiry)&&expiry>=now&&expiry<now+30*86_400_000);
+    const statusMatch=status === "All" || (status==="Needs review"?["review","blacklisted"].includes(item.status):status==="Updated recently"?now-Date.parse(item.updatedAt)<30*86_400_000:displayStatus(item.status) === status);
+    return statusMatch && licenseMatch && (!term || `${item.name} ${item.phone} ${item.cnic} ${item.email ?? ""}`.toLowerCase().includes(term));
+  }), [items, search, status, license, now]);
   const metrics = [
     ["Customers", String(items.length)],
     ["Preferred", String(items.filter(item => item.status === "preferred").length)],
@@ -66,9 +70,9 @@ export function CustomersModule() {
   return <div className="space-y-6">
     <Toast message={notice} onDismiss={() => setNotice("")} />
     <PageHeader eyebrow="Customer records" title="Customers" description="Manage renter identity, contact details, rental history, and operational warnings." actions={<Button onClick={() => { setEditing(undefined); setOpen(true); }}><Plus size={17}/>Add customer</Button>} />
-    <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">{metrics.map(([label,value]) => <div key={label} className="rounded-xl border border-[#E8ECF2] bg-white p-4"><p className="text-xs text-[#667085]">{label}</p><p className="mt-2 text-xl font-bold">{value}</p></div>)}</section>
-    <FilterBar search={search} onSearch={setSearch} placeholder="Search name, phone or CNIC…" hasFilters={Boolean(search || status !== "All")} onClear={() => { setSearch(""); setStatus("All"); }}><FilterSelect label="Status" value={status} onChange={setStatus} options={["Active", "Preferred", "Review", "Blacklisted"]}/></FilterBar>
-    {loading ? <LoadingState rows={4}/> : loadError ? <InlineError message={loadError} onRetry={() => void load()}/> : rows.length === 0 ? <EmptyState filtered={Boolean(search || status !== "All")}/> : <div className="overflow-hidden rounded-xl border border-[#E4E7EC] bg-white"><div className="divide-y divide-[#EAECF0]">{rows.map(item => <article key={item.id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center"><span className="grid h-10 w-10 place-items-center rounded-lg bg-[#EFF8FF] text-[#006FE6]"><UserRound size={18}/></span><div className="min-w-0 flex-1"><Link href={`/customers/${item.id}`} className="text-sm font-bold hover:text-[#006FE6]">{item.name}</Link><p className="mt-1 truncate text-xs text-[#667085]">{item.phone} · {item.cnic}{item.email ? ` · ${item.email}` : ""}</p></div><div className="flex items-center gap-2"><StatusBadge status={displayStatus(item.status)}/><Button size="sm" variant="ghost" onClick={() => { setEditing(item); setOpen(true); }}><Pencil size={15}/>Edit</Button><Button asChild size="sm" variant="secondary"><Link href={`/customers/${item.id}`}>View</Link></Button></div></article>)}</div></div>}
+    <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">{metrics.map(([label,value]) => <button type="button" key={label} onClick={()=>{setLicense("All");setStatus(label==="Customers"?"All":label)}} className="rounded-xl border border-[#E8ECF2] bg-white p-4 text-left transition hover:border-[#84CAFF]"><p className="text-xs text-[#667085]">{label}</p><p className="mt-2 text-xl font-bold">{value}</p></button>)}</section>
+    <FilterBar search={search} onSearch={setSearch} placeholder="Search name, phone or CNIC…" hasFilters={Boolean(search || status !== "All" || license!=="All")} onClear={() => { setSearch(""); setStatus("All"); setLicense("All"); }}><FilterSelect label="Status" value={status} onChange={setStatus} options={["Active", "Preferred", "Needs review", "Updated recently", "Review", "Blacklisted"]}/><FilterSelect label="License" value={license} onChange={setLicense} options={["Expiring soon","Expired","No license"]}/></FilterBar>
+    {loading ? <LoadingState rows={4}/> : loadError ? <InlineError message={loadError} onRetry={() => void load()}/> : rows.length === 0 ? <EmptyState filtered={Boolean(search || status !== "All" || license!=="All")}/> : <div className="overflow-hidden rounded-xl border border-[#E4E7EC] bg-white"><div className="divide-y divide-[#EAECF0]">{rows.map(item => <article key={item.id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center"><span className="grid h-10 w-10 place-items-center rounded-lg bg-[#EFF8FF] text-[#006FE6]"><UserRound size={18}/></span><div className="min-w-0 flex-1"><Link href={`/customers/${item.id}`} className="text-sm font-bold hover:text-[#006FE6]">{item.name}</Link><p className="mt-1 text-xs text-[#667085]">{item.phone} · <span className="font-mono">{item.cnic}</span>{item.email ? ` · ${item.email}` : ""}</p></div><div className="flex items-center gap-2"><StatusBadge status={displayStatus(item.status)}/><Button size="sm" variant="ghost" onClick={() => { setEditing(item); setOpen(true); }}><Pencil size={15}/>Edit</Button><Button asChild size="sm" variant="secondary"><Link href={`/customers/${item.id}`}>View</Link></Button></div></article>)}</div></div>}
     {open && <CustomerDialog
       record={editing}
       onOpenChange={(next) => { setOpen(next); if (!next) setEditing(undefined); }}

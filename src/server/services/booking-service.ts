@@ -4,14 +4,14 @@ import { sqlite } from "@/db/connection";
 import { requireRole } from "@/server/auth/authorize";
 import type { RequestContext } from "@/server/context/request-context";
 import { DomainError } from "@/server/domain/errors";
-import type { BookingListItem, BookingTransactionDto } from "@/server/repositories/contracts";
+import type { BookingInspectionDto, BookingListItem, BookingTransactionDto } from "@/server/repositories/contracts";
 import {
   parseConfirmBookingInput,
   parseRecordDepositInput,
   parseRecordPaymentInput,
   parseReverseTransactionInput,
 } from "@/server/validation/booking";
-import { parseRentalInspectionInput } from "@/server/validation/rental-operation";
+import { parseCheckInRentalInput, parseRentalInspectionInput, type CheckInRentalInput } from "@/server/validation/rental-operation";
 
 type BookingRow = {
   id: string; customer_id: string; customer: string; vehicle_id: string; make: string; model: string; year: number; plate: string; city: string;
@@ -83,7 +83,7 @@ export function listBookings(context: RequestContext): BookingListItem[] {
 export function getBooking(context: RequestContext, id: string) {
   const booking = listBookings(context).find((item) => item.id === id);
   if (!booking) throw new DomainError("NOT_FOUND", "Booking not found.", 404);
-  const inspections = sqlite.prepare(`SELECT kind, odometer, fuel_level AS fuelLevel, condition_notes AS conditionNotes, occurred_at AS occurredAt FROM rental_inspections WHERE agency_id=? AND booking_id=? ORDER BY occurred_at`).all(context.agencyId, id);
+  const inspections = sqlite.prepare(`SELECT kind, odometer, fuel_level AS fuelLevel, condition_notes AS conditionNotes, occurred_at AS occurredAt FROM rental_inspections WHERE agency_id=? AND booking_id=? ORDER BY occurred_at`).all(context.agencyId, id) as BookingInspectionDto[];
   const transactions = sqlite.prepare(`
     SELECT ft.id, ft.booking_id AS bookingId, ft.customer_id AS customerId, ft.kind, ft.amount, ft.method, ft.reference, ft.linked_transaction_id AS linkedTransactionId,
       CASE WHEN EXISTS(SELECT 1 FROM financial_transactions rev WHERE rev.agency_id=ft.agency_id AND rev.linked_transaction_id=ft.id) THEN 'reversed' ELSE ft.status END AS status,
@@ -136,12 +136,13 @@ export function checkInRental(context: RequestContext, bookingId: string, rawInp
 
 function transitionRental(context: RequestContext, bookingId: string, kind: "checkout" | "checkin", rawInput: unknown) {
   requireRole(context, ["agency_owner", "fleet_manager", "rental_agent"]);
-  const input = parseRentalInspectionInput(rawInput);
+  const input = kind === "checkin" ? parseCheckInRentalInput(rawInput) : parseRentalInspectionInput(rawInput);
   return sqlite.transaction(() => {
-    const booking = sqlite.prepare(`SELECT id, vehicle_id AS vehicleId, status, version FROM bookings WHERE agency_id=? AND id=? LIMIT 1`).get(context.agencyId, bookingId) as { id: string; vehicleId: string; status: string; version: number } | undefined;
+    const booking = sqlite.prepare(`SELECT bk.id, bk.vehicle_id AS vehicleId, bk.customer_id AS customerId, bk.status, bk.version, bk.total_amount AS totalAmount,
+      coalesce((SELECT sum(CASE WHEN lower(ft.kind) IN ('refund','reversal') THEN -ft.amount ELSE ft.amount END) FROM financial_transactions ft WHERE ft.agency_id=bk.agency_id AND ft.booking_id=bk.id AND ft.status='posted' AND lower(ft.kind) IN ('payment','deposit_applied','reversal','refund')),0) AS paid
+      FROM bookings bk WHERE bk.agency_id=? AND bk.id=? LIMIT 1`).get(context.agencyId, bookingId) as { id: string; vehicleId: string; customerId: string; status: string; version: number; totalAmount: number; paid: number } | undefined;
     if (!booking) throw new DomainError("NOT_FOUND", "Booking not found.", 404);
     const expectedStatus = kind === "checkout" ? "confirmed" : "checked_out";
-    const nextStatus = kind === "checkout" ? "checked_out" : "completed";
     if (booking.status !== expectedStatus) throw new DomainError("INVALID_STATUS_TRANSITION", `A ${booking.status} booking cannot be ${kind === "checkout" ? "checked out" : "checked in"}.`, 409);
     if (input.version !== undefined && input.version !== booking.version) throw new DomainError("VERSION_CONFLICT", "The booking changed since it was loaded.", 409);
     if (kind === "checkin") {
@@ -157,9 +158,23 @@ function transitionRental(context: RequestContext, bookingId: string, kind: "che
     } else {
       sqlite.prepare(`UPDATE bookings SET status='completed', completed_at=?, version=version+1, updated_at=? WHERE agency_id=? AND id=?`).run(now, now, context.agencyId, bookingId);
       sqlite.prepare(`UPDATE vehicles SET status='available', version=version+1, updated_at=? WHERE agency_id=? AND id=?`).run(now, context.agencyId, booking.vehicleId);
+      const payment = (input as CheckInRentalInput).payment;
+      if (payment) {
+        const balance = booking.totalAmount - booking.paid;
+        if (payment.amount > balance) throw new DomainError("VALIDATION_FAILED", "Check-in payment cannot exceed the outstanding balance.", 400, { amount: `Amount exceeds the outstanding balance of PKR ${balance.toLocaleString()}.` });
+        const idempotencyKey = payment.idempotencyKey || `checkin_pay_${bookingId}_${booking.version}`;
+        const existing = sqlite.prepare("SELECT id FROM financial_transactions WHERE agency_id=? AND idempotency_key=?").get(context.agencyId, idempotencyKey);
+        if (!existing) {
+          const transactionId = `TXN-${randomUUID().slice(0, 8).toUpperCase()}`;
+          sqlite.prepare(`INSERT INTO financial_transactions (id,agency_id,booking_id,customer_id,kind,amount,method,reference,idempotency_key,status,actor_id,posted_at,created_at,updated_at) VALUES (?,?,?,?, 'payment',?,?,?,?, 'posted',?,?,?,?)`)
+            .run(transactionId, context.agencyId, bookingId, booking.customerId, payment.amount, payment.method, payment.reference, idempotencyKey, context.userId, now, now, now);
+          sqlite.prepare(`INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)`)
+            .run(randomUUID(), context.agencyId, context.userId, "booking.payment_posted", "booking", bookingId, JSON.stringify({ transactionId, amount: payment.amount, method: payment.method, reference: payment.reference, source: "checkin" }), now);
+        }
+      }
     }
     sqlite.prepare(`INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)`).run(randomUUID(), context.agencyId, context.userId, `booking.${kind === "checkout" ? "checked_out" : "checked_in"}`, "booking", bookingId, JSON.stringify({ odometer: input.odometer, fuelLevel: input.fuelLevel }), now);
-    return { id: bookingId, status: nextStatus, version: booking.version + 1, occurredAt: now };
+    return getBooking(context, bookingId);
   }).immediate();
 }
 

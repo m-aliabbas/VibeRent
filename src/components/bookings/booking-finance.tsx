@@ -187,7 +187,7 @@ function PaymentDialog({
           label="Method"
           value={method}
           onChange={(e) => setMethod(e.target.value as PaymentMethod)}
-          options={["Cash", "Bank transfer", "Card terminal", "Wallet"]}
+          options={["Cash", "Bank transfer", "Card terminal", "JazzCash", "Easypaisa", "Other wallet"]}
         />
         <FormInput
           label="Reference / Receipt #"

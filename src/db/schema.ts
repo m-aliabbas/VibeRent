@@ -78,6 +78,9 @@ export const agencies = sqliteTable("agencies", {
 export const branches = sqliteTable("branches", {
   id: text("id").primaryKey(), agencyId: text("agency_id").notNull().references(() => agencies.id), name: text("name").notNull(), city: text("city").notNull(), address: text("address").notNull(), active: integer("active", { mode:"boolean" }).notNull().default(true), version:integer("version").notNull().default(1), ...timestamps,
 }, t => [index("branches_agency_idx").on(t.agencyId)]);
+export const agencyCities = sqliteTable("agency_cities", {
+  id:text("id").primaryKey(), agencyId:text("agency_id").notNull().references(()=>agencies.id), name:text("name").notNull(), active:integer("active",{mode:"boolean"}).notNull().default(true), ...timestamps,
+}, t => [uniqueIndex("agency_cities_name_uq").on(t.agencyId,t.name), index("agency_cities_agency_idx").on(t.agencyId,t.active)]);
 export const invitationBranchAccess = sqliteTable("invitation_branch_access", {
   invitationId: text("invitation_id").notNull().references(() => invitation.id, { onDelete: "cascade" }),
   branchId: text("branch_id").notNull().references(() => branches.id, { onDelete: "cascade" }),
@@ -117,8 +120,11 @@ export const financialTransactions = sqliteTable("financial_transactions", {
 export const expenses = sqliteTable("expenses", {
   id:text("id").primaryKey(), agencyId:text("agency_id").notNull().references(()=>agencies.id), vehicleId:text("vehicle_id").references(()=>vehicles.id), bookingId:text("booking_id").references(()=>bookings.id), ownerId:text("owner_id").references(()=>owners.id), amount:integer("amount").notNull(), category:text("category").notNull(), description:text("description").notNull(), status:text("status").notNull(), occurredOn:text("occurred_on").notNull(), version:integer("version").notNull().default(1), ...timestamps,
 }, t => [index("expenses_agency_date_idx").on(t.agencyId,t.occurredOn)]);
+export const expenseCategories = sqliteTable("expense_categories", {
+  id:text("id").primaryKey(), agencyId:text("agency_id").notNull().references(()=>agencies.id), name:text("name").notNull(), active:integer("active",{mode:"boolean"}).notNull().default(true), ...timestamps,
+}, t => [uniqueIndex("expense_categories_name_uq").on(t.agencyId,t.name), index("expense_categories_agency_idx").on(t.agencyId,t.active)]);
 export const privateFiles = sqliteTable("private_files", {
-  id:text("id").primaryKey(), agencyId:text("agency_id").notNull().references(()=>agencies.id), entityType:text("entity_type").notNull(), entityId:text("entity_id").notNull(), storageKey:text("storage_key").notNull(), mimeType:text("mime_type").notNull(), size:integer("size").notNull(), classification:text("classification").notNull(), status:text("status").notNull().default("pending"), ...timestamps,
+  id:text("id").primaryKey(), agencyId:text("agency_id").notNull().references(()=>agencies.id), entityType:text("entity_type").notNull(), entityId:text("entity_id").notNull(), storageKey:text("storage_key").notNull(), originalName:text("original_name").notNull().default("attachment"), mimeType:text("mime_type").notNull(), size:integer("size").notNull(), classification:text("classification").notNull(), status:text("status").notNull().default("pending"), ...timestamps,
 }, t => [uniqueIndex("private_files_storage_key_uq").on(t.storageKey), index("private_files_entity_idx").on(t.agencyId,t.entityType,t.entityId)]);
 export const auditEvents = sqliteTable("audit_events", {
   id:text("id").primaryKey(), agencyId:text("agency_id").notNull().references(()=>agencies.id), actorId:text("actor_id").references(()=>users.id), action:text("action").notNull(), entityType:text("entity_type").notNull(), entityId:text("entity_id").notNull(), metadata:text("metadata",{mode:"json"}).$type<Record<string,unknown>>(), occurredAt:text("occurred_at").notNull(),

@@ -8,6 +8,7 @@ export type DashboardData = {
   activeRentals: number;
   todayRevenue: number;
   utilization: number;
+  activeRentalRows: Array<{ id:string; customer:string; vehicle:string; plate:string; returnAt:string; destinationCity:string }>;
   schedule: Array<{ id: string; time: string; type: "Pickup" | "Return"; customer: string; vehicle: string; plate: string; location: string }>;
   activity: Array<{ id: string; title: string; detail: string; occurredAt: string; kind: "booking" | "vehicle" | "customer" | "finance" | "other" }>;
 };
@@ -41,6 +42,11 @@ export function getDashboard(context: RequestContext): DashboardData {
     if (row.returnAt >= start && row.returnAt < end) events.push({ id: `${row.id}-return`, time: row.returnAt, type: "Return", customer: row.customer, vehicle: row.vehicle, plate: row.plate, location: row.location });
     return events;
   }).sort((a, b) => a.time.localeCompare(b.time));
+  const activeRentalRows = sqlite.prepare(`
+    SELECT bk.id,c.name AS customer,v.make || ' ' || v.model || ' ' || v.year AS vehicle,v.plate,bk.return_at AS returnAt,bk.destination_city AS destinationCity
+    FROM bookings bk JOIN customers c ON c.id=bk.customer_id AND c.agency_id=bk.agency_id JOIN vehicles v ON v.id=bk.vehicle_id AND v.agency_id=bk.agency_id
+    WHERE bk.agency_id=? AND bk.status='checked_out' ORDER BY bk.return_at ASC
+  `).all(context.agencyId) as DashboardData["activeRentalRows"];
   const activityRows = sqlite.prepare(`SELECT id,action,entity_type AS entityType,entity_id AS entityId,metadata,occurred_at AS occurredAt FROM audit_events WHERE agency_id=? ORDER BY occurred_at DESC,id DESC LIMIT 6`)
     .all(context.agencyId) as Array<{ id: string; action: string; entityType: string; entityId: string; metadata: string | Record<string, unknown> | null; occurredAt: string }>;
   const activity = activityRows.map(row => {
@@ -50,5 +56,5 @@ export function getDashboard(context: RequestContext): DashboardData {
     const kind: DashboardData["activity"][number]["kind"] = row.entityType === "booking" ? "booking" : row.entityType === "vehicle" ? "vehicle" : row.entityType === "customer" ? "customer" : row.entityType.includes("payment") || row.entityType.includes("transaction") ? "finance" : "other";
     return { id: row.id, title, detail, occurredAt: row.occurredAt, kind };
   });
-  return { ...counts, utilization: counts.totalVehicles ? Math.round(counts.utilizedVehicles / counts.totalVehicles * 100) : 0, schedule, activity };
+  return { ...counts, utilization: counts.totalVehicles ? Math.round(counts.utilizedVehicles / counts.totalVehicles * 100) : 0, schedule, activeRentalRows, activity };
 }

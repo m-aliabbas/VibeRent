@@ -39,7 +39,7 @@ export function parseConfirmBookingInput(value: unknown): ConfirmBookingInput {
   };
 }
 
-export const paymentMethods = ["Cash", "Bank transfer", "Card terminal", "Wallet"] as const;
+export const paymentMethods = ["Cash", "Bank transfer", "Card terminal", "JazzCash", "Easypaisa", "Other wallet"] as const;
 export type PaymentMethod = (typeof paymentMethods)[number];
 
 export type RecordPaymentInput = {
@@ -59,7 +59,7 @@ export function parseRecordPaymentInput(value: unknown): RecordPaymentInput {
     errors.amount = "Enter a positive whole PKR amount.";
   }
   if (!input.method?.trim() || !paymentMethods.includes(input.method as PaymentMethod)) {
-    errors.method = "Select a valid payment method (Cash, Bank transfer, Card terminal, Wallet).";
+    errors.method = "Select a valid payment method.";
   }
   if (!input.reference?.trim()) {
     errors.reference = "Enter a payment reference or counter receipt number.";

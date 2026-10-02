@@ -22,13 +22,11 @@ import {
   financialTransactions,
   managementAgreements,
   member,
-  memberBranchAccess,
   organization,
   ownerPayouts,
   owners,
   rentalInspections,
   user,
-  users,
   vehicles,
   branches,
 } from "@/db/schema";
@@ -407,7 +405,7 @@ async function main() {
   db.insert(branches).values([
     { id: `br_${aliId}_isb`, agencyId: aliId, name: "Islamabad F-10", city: "Islamabad", address: "F-10 Markaz, Islamabad", active: true, createdAt: nowStr(), updatedAt: nowStr() },
     { id: `br_${aliId}_rwp`, agencyId: aliId, name: "Rawalpindi Saddar", city: "Rawalpindi", address: "Haider Road, Saddar, Rawalpindi", active: true, createdAt: nowStr(), updatedAt: nowStr() },
-  ] as any[]).onConflictDoNothing().run();
+  ]).onConflictDoNothing().run();
 
   // ===========================================================================
   // AGENCY 1: agy-viberent

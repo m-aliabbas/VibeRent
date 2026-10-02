@@ -56,7 +56,7 @@ export function FilterSelect({
   label: string;
   value: string;
   onChange: (value: string) => void;
-  options: string[];
+  options: Array<string | { label:string; value:string }>;
 }) {
   return (
     <label className="sr-only">
@@ -68,9 +68,7 @@ export function FilterSelect({
         className="h-10 min-w-0 rounded-[9px] border border-[#D0D5DD] bg-white px-3 text-sm font-medium text-[#344054] outline-none focus:border-[#006FE6] sm:min-w-[130px]"
       >
         <option value="All">All {label.toLowerCase()}</option>
-        {options.map((option) => (
-          <option key={option}>{option}</option>
-        ))}
+        {options.map((option) => { const item=typeof option==="string"?{label:option,value:option}:option;return <option key={item.value} value={item.value}>{item.label}</option> })}
       </select>
     </label>
   );

@@ -35,6 +35,15 @@ export type BookingListItem = {
   rateOverrideReason: string;
   termsSnapshot: string;
   version: number;
+  inspections?: BookingInspectionDto[];
+};
+
+export type BookingInspectionDto = {
+  kind: "checkout" | "checkin";
+  odometer: number;
+  fuelLevel: string;
+  conditionNotes: string;
+  occurredAt: string;
 };
 
 export type BookingTransactionDto = {

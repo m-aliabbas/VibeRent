@@ -8,6 +8,7 @@ import { confirmBookingAction } from "@/app/actions/bookings";
 import { listCustomersAction, createCustomerAction } from "@/app/actions/customers";
 import { listVehiclesAction } from "@/app/actions/vehicles";
 import { listBookingsAction } from "@/app/actions/bookings";
+import { createAgencyCityAction, listAgencyCitiesAction } from "@/app/actions/catalogs";
 import { FormInput } from "@/components/forms/form-controls";
 import { Button } from "@/components/ui/button";
 import { formatPkr } from "@/lib/utils";
@@ -58,20 +59,29 @@ type Draft = {
   overrideReason: string;
 };
 
-const initial: Draft = {
+function defaultDraft(): Draft {
+  const now = new Date();
+  const pickup = new Date(now);
+  pickup.setSeconds(0, 0);
+  pickup.setMinutes(Math.ceil(pickup.getMinutes() / 15) * 15);
+  const returned = new Date(pickup);
+  returned.setHours(23, 59, 0, 0);
+  const local = (date: Date) => new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+  return {
   city: "Lahore",
-  from: "2026-10-04T09:00",
-  to: "2026-10-07T18:00",
+  from: local(pickup),
+  to: local(returned),
   vehicleId: "",
   customerId: "",
   dailyRate: 0,
   extras: 0,
   discount: 0,
-  deposit: 25000,
+  deposit: 0,
   notes: "",
   estimatedKm: 0,
   overrideReason: "",
-};
+  };
+}
 
 const steps = ["Schedule", "Vehicle", "Customer", "Pricing", "Review"];
 
@@ -100,7 +110,7 @@ function getConflicts(
 
 export function BookingWizard() {
   const [step, setStep] = useState(0);
-  const [draft, setDraft] = useState<Draft>(initial);
+  const [draft, setDraft] = useState<Draft>(defaultDraft);
   const [confirmed, setConfirmed] = useState("");
   const [conflictMode, setConflictMode] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -110,6 +120,7 @@ export function BookingWizard() {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [bookings, setBookings] = useState<BookingListItem[]>([]);
   const [customers, setCustomers] = useState<CustomerDto[]>([]);
+  const [savedCities, setSavedCities] = useState<string[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
   const [dataError, setDataError] = useState("");
 
@@ -134,10 +145,11 @@ export function BookingWizard() {
     async function load() {
       setDataLoading(true);
       setDataError("");
-      const [vResult, bResult, cResult] = await Promise.all([
+      const [vResult, bResult, cResult, cityResult] = await Promise.all([
         listVehiclesAction(),
         listBookingsAction(),
         listCustomersAction(),
+        listAgencyCitiesAction(),
       ]);
       if (cancelled) return;
       const errors: string[] = [];
@@ -147,6 +159,8 @@ export function BookingWizard() {
       else errors.push(`Bookings: ${bResult.error.message}`);
       if (cResult.ok) setCustomers(cResult.data);
       else errors.push(`Customers: ${cResult.error.message}`);
+      if (cityResult.ok) setSavedCities(cityResult.data.map(item=>item.name));
+      else errors.push(`Cities: ${cityResult.error.message}`);
       if (errors.length) setDataError(errors.join(" · "));
       setDataLoading(false);
     }
@@ -161,7 +175,7 @@ export function BookingWizard() {
   });
 
   // Unique cities from loaded vehicles (+ Lahore as default fallback)
-  const cities = Array.from(new Set(["Lahore","Islamabad","Rawalpindi","Karachi",...vehicles.flatMap(vehicle=>vehicle.rateRules?.map(rule=>rule.destinationCity)??[])])).sort();
+  const cities = Array.from(new Set([...savedCities,...vehicles.flatMap(vehicle=>vehicle.rateRules?.map(rule=>rule.destinationCity)??[])])).sort();
 
   const vehicle = fleetOptions.find((item) => item.id === draft.vehicleId);
   const days = Math.max(1, Math.ceil((new Date(draft.to).getTime() - new Date(draft.from).getTime()) / 86_400_000));
@@ -253,7 +267,7 @@ export function BookingWizard() {
         {steps.map((label, index) => <li key={label} className={`rounded-lg px-2 py-2 text-center text-[11px] font-semibold sm:text-xs ${index === step ? "bg-[#006FE6] text-white" : index < step ? "bg-[#EAF4FF] text-[#0058B8]" : "bg-[#F2F4F7] text-[#667085]"}`}>{index + 1}. {label}</li>)}
       </ol>
       <section className="rounded-xl border border-[#E4E7EC] bg-white p-5">
-        {step === 0 && <ScheduleStep draft={draft} setDraft={setDraft} cities={cities} />}
+        {step === 0 && <ScheduleStep draft={draft} setDraft={setDraft} cities={cities} onCityCreated={city=>setSavedCities(current=>[...new Set([...current,city])].sort())} />}
         {step === 1 && <VehicleStep draft={draft} setDraft={setDraft} vehicles={eligibleVehicles} conflictMode={conflictMode} clearConflict={() => setConflictMode(false)} />}
         {step === 2 && <CustomerStep draft={draft} setDraft={setDraft} customers={customers} onCustomerCreated={(c) => setCustomers((prev) => [...prev, c])} />}
         {step === 3 && <PricingStep draft={draft} setDraft={setDraft} days={days} total={total} />}
@@ -270,20 +284,29 @@ export function BookingWizard() {
 
 // ─── Schedule step ───────────────────────────────────────────────────────────
 
-function ScheduleStep({ draft, setDraft, cities }: { draft: Draft; setDraft: (value: Draft) => void; cities: string[] }) {
+function ScheduleStep({ draft, setDraft, cities, onCityCreated }: { draft: Draft; setDraft: (value: Draft) => void; cities: string[]; onCityCreated: (city:string)=>void }) {
+  const [cityInput,setCityInput]=useState(draft.city);
+  const [pending,setPending]=useState(false);
+  const [error,setError]=useState("");
+  const exact=cities.find(city=>city.toLowerCase()===cityInput.trim().toLowerCase());
+  function chooseCity(value:string){setCityInput(value);setDraft({...draft,city:value,vehicleId:"",dailyRate:0,overrideReason:""})}
+  async function addCity(){if(!cityInput.trim()||pending)return;setPending(true);setError("");const result=await createAgencyCityAction(cityInput);setPending(false);if(!result.ok){setError(result.error.message);return}onCityCreated(result.data.name);chooseCity(result.data.name)}
   return (
     <div className="grid gap-4 sm:grid-cols-2">
       <div>
         <label className="block">
           <span className="mb-1.5 block text-sm font-semibold text-[#344054]">Going to city</span>
-          <select
-            value={draft.city}
-            onChange={(e) => setDraft({ ...draft, city: e.target.value, vehicleId: "", dailyRate:0,overrideReason:"" })}
+          <input
+            list="booking-city-options"
+            value={cityInput}
+            onChange={(e) => chooseCity(e.target.value)}
+            placeholder="Search or enter a city"
             className="h-11 w-full rounded-[9px] border border-[#D0D5DD] bg-white px-3 text-sm text-[#19191F] outline-none focus:border-[#006FE6] focus:ring-2 focus:ring-[#006FE6]/10"
-          >
-            {cities.map((c) => <option key={c} value={c}>{c}</option>)}
-          </select>
+          />
+          <datalist id="booking-city-options">{cities.map(city=><option key={city} value={city}/>)}</datalist>
         </label>
+        {!exact&&cityInput.trim().length>=2&&<button type="button" disabled={pending} onClick={()=>void addCity()} className="mt-2 text-xs font-semibold text-[#006FE6] hover:underline">{pending?"Adding…":`Add “${cityInput.trim()}” to city list`}</button>}
+        {error&&<p className="mt-1 text-xs text-[#B42318]">{error}</p>}
       </div>
       <div />
       <FormInput label="Pickup" type="datetime-local" value={draft.from} onChange={(e) => setDraft({ ...draft, from: e.target.value })} />
@@ -347,27 +370,15 @@ function CustomerStep({ draft, setDraft, customers, onCustomerCreated }: {
   customers: CustomerDto[];
   onCustomerCreated: (c: CustomerDto) => void;
 }) {
-  const [phoneSearch, setPhoneSearch] = useState("");
+  const [customerSearch, setCustomerSearch] = useState("");
   const [showNewForm, setShowNewForm] = useState(false);
   const [newForm, setNewForm] = useState<CreateCustomerInput>({ name: "", phone: "", cnic: "", email: "", licenseNumber: "", licenseExpiresAt: "" });
   const [formErrors, setFormErrors] = useState<NewCustomerFormErrors>({});
   const [formSubmitting, setFormSubmitting] = useState(false);
   const [formSubmitError, setFormSubmitError] = useState("");
 
-  // Phone-search auto-select
-  const searchDigits = phoneSearch.replace(/\D/g, "");
-  const phoneMatch = searchDigits.length >= 4
-    ? customers.find((c) => c.phone.replace(/\D/g, "").includes(searchDigits))
-    : undefined;
-
-  useEffect(() => {
-    if (phoneMatch && phoneMatch.id !== draft.customerId) {
-      setDraft({ ...draft, customerId: phoneMatch.id });
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phoneMatch?.id]);
-
   const selected = customers.find((c) => c.id === draft.customerId);
+  const matches=customerSearch.trim()?customers.filter(customer=>`${customer.name} ${customer.phone}`.toLowerCase().includes(customerSearch.trim().toLowerCase())).slice(0,8):customers.slice(0,8);
 
   async function handleCreateCustomer(e: FormEvent) {
     e.preventDefault();
@@ -405,41 +416,16 @@ function CustomerStep({ draft, setDraft, customers, onCustomerCreated }: {
   return (
     <div>
       <h2 className="font-bold">Customer</h2>
-      <p className="mt-1 text-xs text-[#667085]">Search by phone, choose from the list, or add a new customer.</p>
+      <p className="mt-1 text-xs text-[#667085]">Use one search for name or phone, or add a new customer without leaving the booking.</p>
 
       <div className="mt-4 space-y-4">
-        {/* Phone search */}
         <FormInput
-          label="Search by phone number"
-          type="tel"
-          placeholder="e.g. 0300 1234567"
-          value={phoneSearch}
-          onChange={(e) => setPhoneSearch(e.target.value)}
+          label="Existing customer"
+          placeholder="Search name or phone number"
+          value={customerSearch}
+          onChange={(e) => setCustomerSearch(e.target.value)}
         />
-        {phoneSearch.length >= 4 && (
-          phoneMatch ? (
-            <p className="text-xs text-[#067647]">
-              Found: <strong>{phoneMatch.name}</strong> — {phoneMatch.status}
-            </p>
-          ) : (
-            <p className="text-xs text-[#667085]">No customer found for that number.</p>
-          )
-        )}
-
-        {/* Dropdown browse */}
-        <label className="block">
-          <span className="mb-1.5 block text-sm font-semibold text-[#344054]">Existing customer</span>
-          <select
-            value={draft.customerId}
-            onChange={(e) => { setDraft({ ...draft, customerId: e.target.value }); setPhoneSearch(""); }}
-            className="h-11 w-full rounded-[9px] border border-[#D0D5DD] bg-white px-3 text-sm text-[#19191F] outline-none focus:border-[#006FE6] focus:ring-2 focus:ring-[#006FE6]/10"
-          >
-            <option value="">— Select a customer —</option>
-            {customers.map((c) => (
-              <option key={c.id} value={c.id}>{c.name} · {c.phone}</option>
-            ))}
-          </select>
-        </label>
+        <div className="max-h-52 overflow-y-auto rounded-xl border border-[#E4E7EC] bg-white p-1" role="listbox" aria-label="Customer matches">{matches.map(customer=><button key={customer.id} type="button" role="option" aria-selected={draft.customerId===customer.id} onClick={()=>{setDraft({...draft,customerId:customer.id});setCustomerSearch(`${customer.name} · ${customer.phone}`)}} className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm ${draft.customerId===customer.id?"bg-[#EFF8FF] text-[#0058B8]":"hover:bg-[#F8FAFC]"}`}><span><strong>{customer.name}</strong><span className="ml-2 text-xs text-[#667085]">{customer.phone}</span></span><span className="text-xs capitalize">{customer.status}</span></button>)}{!matches.length&&<p className="p-3 text-sm text-[#667085]">No existing customer matches that name or phone.</p>}</div>
 
         {/* Selected customer info */}
         {selected && (
@@ -491,7 +477,7 @@ function PricingStep({ draft, setDraft, days, total }: { draft: Draft; setDraft:
     <div className="grid gap-4 sm:grid-cols-2">
       <FormInput label="Daily rate" type="number" min={1000} value={draft.dailyRate} onChange={(e)=>setDraft({...draft,dailyRate:Number(e.target.value)})} />
       <FormInput label="Estimated trip distance (km)" type="number" min={0} value={draft.estimatedKm} onChange={(e)=>setDraft({...draft,estimatedKm:Number(e.target.value)})}/>
-      <FormInput label="Deposit required" type="number" value={draft.deposit} onChange={(e) => setDraft({ ...draft, deposit: Number(e.target.value) })} />
+      <FormInput label="Deposit (optional)" type="number" min={0} value={draft.deposit||""} placeholder="No deposit required" onChange={(e) => setDraft({ ...draft, deposit: Number(e.target.value) })} />
       <FormInput label="Extras" type="number" value={draft.extras} onChange={(e) => setDraft({ ...draft, extras: Number(e.target.value) })} />
       <FormInput label="Discount" type="number" value={draft.discount} onChange={(e) => setDraft({ ...draft, discount: Number(e.target.value) })} />
       <FormInput label="Notes" value={draft.notes} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} />
@@ -520,7 +506,7 @@ function Review({ draft, days, total, vehicle, customers }: {
     ["Vehicle", vehicle ? `${vehicle.label} · ${vehicle.plate}` : "—"],
     ["Customer", customer ? `${customer.name} · ${customer.phone}` : "—"],
     ["Price", `${formatPkr(total)} · ${days} days`],
-    ["Deposit", formatPkr(draft.deposit)],
+    ["Deposit", draft.deposit?formatPkr(draft.deposit):"Not required"],
     ["Final availability", "Checked transactionally on confirmation"],
   ];
   return (

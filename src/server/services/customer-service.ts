@@ -17,12 +17,12 @@ export type CustomerDetailDto = CustomerDto & {
 };
 
 function getCustomerRow(context: RequestContext, id: string) {
-  return sqlite.prepare(`SELECT id, name, phone_normalized AS phone, substr(cnic_normalized,1,5) || '-•••••••-' || substr(cnic_normalized,-1) AS cnic, email, license_number AS licenseNumber, license_expires_at AS licenseExpiresAt, status, version, updated_at AS updatedAt FROM customers WHERE agency_id=? AND id=? AND archived_at IS NULL LIMIT 1`).get(context.agencyId, id) as CustomerDto | undefined;
+  return sqlite.prepare(`SELECT id, name, phone_normalized AS phone, substr(cnic_normalized,1,5) || '-' || substr(cnic_normalized,6,7) || '-' || substr(cnic_normalized,-1) AS cnic, email, license_number AS licenseNumber, license_expires_at AS licenseExpiresAt, status, version, updated_at AS updatedAt FROM customers WHERE agency_id=? AND id=? AND archived_at IS NULL LIMIT 1`).get(context.agencyId, id) as CustomerDto | undefined;
 }
 
 export function listCustomers(context: RequestContext) {
   requireRole(context, ["agency_owner", "fleet_manager", "rental_agent", "accountant"]);
-  return sqlite.prepare(`SELECT id, name, phone_normalized AS phone, substr(cnic_normalized,1,5) || '-•••••••-' || substr(cnic_normalized,-1) AS cnic, email, license_number AS licenseNumber, license_expires_at AS licenseExpiresAt, status, version, updated_at AS updatedAt FROM customers WHERE agency_id=? AND archived_at IS NULL ORDER BY name`).all(context.agencyId) as CustomerDto[];
+  return sqlite.prepare(`SELECT id, name, phone_normalized AS phone, substr(cnic_normalized,1,5) || '-' || substr(cnic_normalized,6,7) || '-' || substr(cnic_normalized,-1) AS cnic, email, license_number AS licenseNumber, license_expires_at AS licenseExpiresAt, status, version, updated_at AS updatedAt FROM customers WHERE agency_id=? AND archived_at IS NULL ORDER BY name`).all(context.agencyId) as CustomerDto[];
 }
 
 export function getCustomer(context: RequestContext, id: string) {

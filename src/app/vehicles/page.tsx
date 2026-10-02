@@ -34,6 +34,8 @@ export default function VehiclesPage() {
   const [status, setStatus] = useState("All");
   const [city, setCity] = useState("All");
   const [ownership, setOwnership] = useState("All");
+  const [minRate, setMinRate] = useState("");
+  const [maxRate, setMaxRate] = useState("");
   const [page, setPage] = useState(1);
   const [sort, setSort] = useState<SortState>({
     key: "vehicle",
@@ -80,6 +82,7 @@ export default function VehiclesPage() {
           "Maintenance",
           "Out of Service",
           "Archived",
+          "Needs attention",
         ].includes(initialStatus ?? "")
           ? initialStatus!
           : "All",
@@ -96,6 +99,8 @@ export default function VehiclesPage() {
           ? initialOwnership!
           : "All",
       );
+      setMinRate(params.get("minRate") ?? "");
+      setMaxRate(params.get("maxRate") ?? "");
       setPage(Math.max(1, Number(params.get("page")) || 1));
       if (initialSort)
         setSort({
@@ -147,6 +152,8 @@ export default function VehiclesPage() {
     if (status !== "All") params.set("status", status);
     if (city !== "All") params.set("city", city);
     if (ownership !== "All") params.set("ownership", ownership);
+    if (minRate) params.set("minRate", minRate);
+    if (maxRate) params.set("maxRate", maxRate);
     if (page > 1) params.set("page", String(page));
     if (sort.key !== "vehicle" || sort.direction !== "asc") {
       params.set("sort", sort.key);
@@ -158,7 +165,7 @@ export default function VehiclesPage() {
       "",
       `/vehicles${params.size ? `?${params}` : ""}`,
     );
-  }, [search, status, city, ownership, page, sort, demo, urlReady]);
+  }, [search, status, city, ownership, minRate, maxRate, page, sort, demo, urlReady]);
 
   const filtered = useMemo(
     () =>
@@ -172,9 +179,11 @@ export default function VehiclesPage() {
               .includes(term);
           return (
             matchesTerm &&
-            (status === "All" || vehicle.status === status) &&
+            (status === "All" || (status === "Needs attention" ? ["Maintenance","Out of Service"].includes(vehicle.status) : vehicle.status === status)) &&
             (city === "All" || vehicle.city === city) &&
-            (ownership === "All" || vehicle.ownership === ownership)
+            (ownership === "All" || vehicle.ownership === ownership) &&
+            (!minRate || vehicle.dailyRate >= Number(minRate)) &&
+            (!maxRate || vehicle.dailyRate <= Number(maxRate))
           );
         })
         .sort((a, b) => {
@@ -190,11 +199,11 @@ export default function VehiclesPage() {
             }) * (sort.direction === "asc" ? 1 : -1)
           );
         }),
-    [items, search, status, city, ownership, sort],
+    [items, search, status, city, ownership, minRate, maxRate, sort],
   );
   const visible = filtered.slice((page - 1) * pageSize, page * pageSize);
   const hasFilters = Boolean(
-    search || status !== "All" || city !== "All" || ownership !== "All",
+    search || status !== "All" || city !== "All" || ownership !== "All" || minRate || maxRate,
   );
   const changeSort = (key: string) =>
     setSort((current) => ({
@@ -257,9 +266,9 @@ export default function VehiclesPage() {
             <CarFront size={19} />
           </span>
           <div>
-            <p className="font-semibold">
+            <Link href={`/vehicles/${v.id}`} className="font-semibold hover:text-[#006FE6] hover:underline">
               {v.make} {v.model}
-            </p>
+            </Link>
             <p className="mt-0.5 text-xs text-[#667085]">
               {v.year} · {v.category}
             </p>
@@ -396,9 +405,12 @@ export default function VehiclesPage() {
             tone: "text-[#B54708] bg-[#FFFAEB]",
           },
         ].map(({ label, value, icon: Icon, tone }) => (
-          <div
+          <button
+            type="button"
             key={label}
-            className="flex items-center gap-3 rounded-xl border border-[#E8ECF2] bg-white p-4"
+            aria-pressed={label === "Total fleet" ? status === "All" : label === "On booking" ? status === "Booked" : label === "Needs attention" ? status === "Needs attention" : status === label}
+            onClick={() => { setStatus(label === "Total fleet" ? "All" : label === "On booking" ? "Booked" : label); setPage(1); }}
+            className={`flex items-center gap-3 rounded-xl border bg-white p-4 text-left transition hover:border-[#84CAFF] ${(label === "Total fleet" ? status === "All" : label === "On booking" ? status === "Booked" : label === "Needs attention" ? status === "Needs attention" : status === label) ? "border-[#006FE6] ring-2 ring-[#006FE6]/10" : "border-[#E8ECF2]"}`}
           >
             <span
               className={`grid h-9 w-9 shrink-0 place-items-center rounded-[9px] ${tone}`}
@@ -409,7 +421,7 @@ export default function VehiclesPage() {
               <p className="text-xl font-bold">{loading ? "—" : value}</p>
               <p className="text-xs text-[#667085]">{label}</p>
             </div>
-          </div>
+          </button>
         ))}
       </section>
       <FilterBar
@@ -424,6 +436,8 @@ export default function VehiclesPage() {
           setStatus("All");
           setCity("All");
           setOwnership("All");
+          setMinRate("");
+          setMaxRate("");
           setPage(1);
         }}
       >
@@ -440,6 +454,7 @@ export default function VehiclesPage() {
             "Maintenance",
             "Out of Service",
             "Archived",
+            "Needs attention",
           ]}
         />
         <FilterSelect
@@ -461,6 +476,11 @@ export default function VehiclesPage() {
           options={["Own", "Managed"]}
         />
       </FilterBar>
+      <div className="grid gap-3 rounded-xl border border-[#E4E7EC] bg-white p-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+        <label className="text-xs font-semibold text-[#475467]">Minimum daily price<input aria-label="Minimum daily price" type="number" min={0} value={minRate} onChange={event=>{setMinRate(event.target.value);setPage(1)}} placeholder="No minimum" className="field mt-1.5"/></label>
+        <label className="text-xs font-semibold text-[#475467]">Maximum daily price<input aria-label="Maximum daily price" type="number" min={0} value={maxRate} onChange={event=>{setMaxRate(event.target.value);setPage(1)}} placeholder="No maximum" className="field mt-1.5"/></label>
+        <p className="pb-2 text-xs text-[#667085]">{filtered.length} vehicle{filtered.length===1?"":"s"} match</p>
+      </div>
       {loading ? (
         <LoadingState />
       ) : loadError ? (
@@ -475,6 +495,7 @@ export default function VehiclesPage() {
           page={page}
           pageSize={pageSize}
           total={filtered.length}
+          onRowClick={(vehicle)=>router.push(`/vehicles/${vehicle.id}`)}
           onPageChange={setPage}
           empty={<EmptyState filtered={hasFilters} />}
           mobileCard={(v) => (
@@ -484,9 +505,9 @@ export default function VehiclesPage() {
                   <CarFront size={19} />
                 </span>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate font-semibold">
+                  <Link href={`/vehicles/${v.id}`} className="block truncate font-semibold hover:text-[#006FE6]">
                     {v.make} {v.model}
-                  </p>
+                  </Link>
                   <p className="mt-0.5 text-xs text-[#667085]">
                     {v.plate} · {v.year} · {v.city}
                   </p>

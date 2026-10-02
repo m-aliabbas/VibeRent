@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { useEffect, useState } from "react";
 import {
-  AlertTriangle,
   ArrowLeft,
   ArrowRightLeft,
   CalendarPlus,
@@ -74,7 +74,6 @@ export function VehicleWorkspace({ vehicleId }: { vehicleId: string }) {
   const [statusEvents, setStatusEvents] = useState<VehicleStatusEvent[]>(
     () => vehicleStatusHistory[vehicleId] ?? [],
   );
-  const [uploadNotice, setUploadNotice] = useState("");
   const [notice, setNotice] = useState("");
   const [operation, setOperation] = useState<VehicleOperation>();
   const [tab, setTab] = useState<VehicleDetailTab>("overview");
@@ -381,122 +380,7 @@ export function VehicleWorkspace({ vehicleId }: { vehicleId: string }) {
         </div>
       )}
 
-      {tab === "documents" && (
-        <div className="grid gap-5 xl:grid-cols-[.8fr_1.2fr]">
-          <Panel
-            title="Vehicle media"
-            action={
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={() =>
-                  setUploadNotice("Photo added to the simulated upload queue.")
-                }
-              >
-                <Camera size={16} />
-                Add photo
-              </Button>
-            }
-          >
-            <div className="overflow-hidden rounded-[10px] border border-[#EAECF0] bg-[#101828]">
-              <div
-                role="img"
-                aria-label={`${vehicle.make} ${vehicle.model} cover photo`}
-                className="aspect-[16/10] bg-[url('/images/vehicle-sprite.png')] bg-cover"
-                style={{
-                  backgroundPosition: vehicle.id === "v2" ? "100% 0%" : "0% 0%",
-                  backgroundSize: "200% 200%",
-                }}
-              />
-            </div>
-            <div className="mt-3 flex items-center justify-between">
-              <div>
-                <p className="text-sm font-semibold">Cover photo</p>
-                <p className="text-xs text-[#667085]">
-                  Front three-quarter view · verified
-                </p>
-              </div>
-              <span className="text-xs font-medium text-[#667085]">
-                1 photo
-              </span>
-            </div>
-          </Panel>
-          <Panel
-            title="Document register"
-            action={
-              <Button
-                size="sm"
-                onClick={() =>
-                  setUploadNotice(
-                    "Document added to the simulated upload queue.",
-                  )
-                }
-              >
-                <Plus size={16} />
-                Add document
-              </Button>
-            }
-          >
-            {uploadNotice && (
-              <div
-                role="status"
-                className="mb-4 flex items-start gap-2 rounded-[10px] border border-[#B2DDFF] bg-[#EFF8FF] p-3 text-sm text-[#175CD3]"
-              >
-                <FileText size={17} className="mt-0.5 shrink-0" />
-                {uploadNotice}
-              </div>
-            )}
-            <div className="space-y-3">
-              {operations.documents.map((doc) => (
-                <article
-                  key={doc.name}
-                  className="rounded-[10px] border border-[#EAECF0] p-4"
-                >
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="flex gap-3">
-                      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-[#EFF8FF] text-[#006FE6]">
-                        <FileText size={18} />
-                      </span>
-                      <div>
-                        <h3 className="text-sm font-bold">{doc.name}</h3>
-                        <p className="mt-1 text-xs text-[#667085]">
-                          {doc.number}
-                        </p>
-                      </div>
-                    </div>
-                    <StatusBadge status={doc.status} />
-                  </div>
-                  <dl className="mt-4 grid grid-cols-2 gap-3 border-t border-[#EAECF0] pt-3 text-xs">
-                    <div>
-                      <dt className="text-[#667085]">Expiry</dt>
-                      <dd className="mt-1 font-semibold text-[#344054]">
-                        {doc.expires}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="text-[#667085]">Last verified</dt>
-                      <dd className="mt-1 font-semibold text-[#344054]">
-                        {doc.verified}
-                      </dd>
-                    </div>
-                  </dl>
-                  {doc.status !== "Valid" && (
-                    <p className="mt-3 flex items-start gap-2 rounded-lg bg-[#FFFAEB] p-2.5 text-xs text-[#93370D]">
-                      <AlertTriangle size={15} className="shrink-0" />
-                      {doc.detail}. Review before assigning a booking beyond the
-                      expiry date.
-                    </p>
-                  )}
-                </article>
-              ))}
-            </div>
-            <p className="mt-4 text-xs leading-5 text-[#667085]">
-              Prototype uploads are simulated and reset when the page refreshes.
-              Production storage and access controls remain deferred.
-            </p>
-          </Panel>
-        </div>
-      )}
+      {tab === "documents" && <VehicleAttachments vehicle={vehicle}/>} 
 
       {tab === "bookings" && (
         <Panel title="Booking history">
@@ -621,4 +505,36 @@ export function VehicleWorkspace({ vehicleId }: { vehicleId: string }) {
       )}
     </div>
   );
+}
+
+type StoredVehicleFile = { id:string; originalName:string; mimeType:string; size:number; classification:"vehicle_photo"|"vehicle_document"; createdAt:string; downloadUrl:string };
+
+function VehicleAttachments({vehicle}:{vehicle:Vehicle}) {
+  const [files,setFiles]=useState<StoredVehicleFile[]>([]);
+  const [loading,setLoading]=useState(true);
+  const [uploading,setUploading]=useState(false);
+  const [message,setMessage]=useState("");
+
+  useEffect(()=>{let active=true;void fetch(`/api/v1/files?vehicleId=${encodeURIComponent(vehicle.id)}`,{cache:"no-store"}).then(async response=>{const payload=await response.json() as {data?:StoredVehicleFile[];error?:{message:string}};if(!active)return;if(response.ok)setFiles(payload.data??[]);else setMessage(payload.error?.message??"Unable to load attachments.");setLoading(false)}).catch(()=>{if(active){setMessage("Unable to load attachments.");setLoading(false)}});return()=>{active=false}},[vehicle.id]);
+
+  async function upload(file:File|undefined,classification:StoredVehicleFile["classification"]) {
+    if(!file||uploading)return;
+    setUploading(true);setMessage("");
+    const form=new FormData();form.set("vehicleId",vehicle.id);form.set("classification",classification);form.set("file",file);
+    try {const response=await fetch("/api/v1/files",{method:"POST",body:form});const payload=await response.json() as {data?:StoredVehicleFile;error?:{message:string}};if(!response.ok||!payload.data)setMessage(payload.error?.message??"Upload failed.");else{setFiles(current=>[payload.data!,...current]);setMessage(`${payload.data.originalName} uploaded securely.`)}} catch {setMessage("Upload failed. Check the connection and try again.")} finally {setUploading(false)}
+  }
+
+  const photos=files.filter(file=>file.classification==="vehicle_photo");
+  const documents=files.filter(file=>file.classification==="vehicle_document");
+  return <div className="grid gap-5 xl:grid-cols-[.9fr_1.1fr]">
+    <Panel title="Vehicle media" action={<label className={`inline-flex h-9 cursor-pointer items-center gap-2 rounded-[9px] border border-[#D0D5DD] bg-white px-3 text-sm font-semibold ${uploading?"pointer-events-none opacity-50":"hover:bg-[#F8FAFC]"}`}><Camera size={16}/>Add photo<input type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" disabled={uploading} onChange={event=>void upload(event.target.files?.[0],"vehicle_photo")}/></label>}>
+      {photos.length?<div className="grid grid-cols-2 gap-3">{photos.map((file,index)=><a key={file.id} href={file.downloadUrl} target="_blank" rel="noreferrer" className={`group relative overflow-hidden rounded-[10px] border bg-[#101828] ${index===0?"col-span-2 aspect-[16/9]":"aspect-[4/3]"}`}><Image src={file.downloadUrl} alt={`${vehicle.make} ${vehicle.model} — ${file.originalName}`} fill unoptimized className="object-cover transition group-hover:scale-[1.02]"/><span className="absolute inset-x-0 bottom-0 bg-black/60 px-3 py-2 text-xs text-white">{file.originalName}</span></a>)}</div>:<div className="grid aspect-[16/10] place-items-center rounded-[10px] border border-dashed border-[#D0D5DD] bg-[#F8FAFC] text-center text-sm text-[#667085]"><span><Camera className="mx-auto mb-2"/>No vehicle photos uploaded yet.</span></div>}
+      <p className="mt-3 text-xs text-[#667085]">JPG, PNG, or WebP · up to 8 MB each · {photos.length} uploaded</p>
+    </Panel>
+    <Panel title="Document register" action={<label className={`inline-flex h-9 cursor-pointer items-center gap-2 rounded-[9px] bg-[#006FE6] px-3 text-sm font-semibold text-white ${uploading?"pointer-events-none opacity-50":"hover:bg-[#005FC4]"}`}><Plus size={16}/>Add document<input type="file" accept="application/pdf,image/jpeg,image/png,image/webp" className="sr-only" disabled={uploading} onChange={event=>void upload(event.target.files?.[0],"vehicle_document")}/></label>}>
+      {message&&<p role="status" className={`mb-4 rounded-lg p-3 text-sm ${message.includes("uploaded securely")?"bg-[#ECFDF3] text-[#067647]":"bg-[#FEF3F2] text-[#B42318]"}`}>{message}</p>}
+      {loading?<LoadingState rows={3}/>:documents.length?<div className="space-y-3">{documents.map(file=><a key={file.id} href={file.downloadUrl} className="flex items-center gap-3 rounded-[10px] border border-[#EAECF0] p-4 hover:border-[#84CAFF] hover:bg-[#FAFCFF]"><span className="grid h-10 w-10 place-items-center rounded-lg bg-[#EFF8FF] text-[#006FE6]"><FileText size={19}/></span><span className="min-w-0 flex-1"><strong className="block truncate text-sm">{file.originalName}</strong><span className="mt-1 block text-xs text-[#667085]">{file.mimeType} · {(file.size/1024).toFixed(0)} KB · {new Intl.DateTimeFormat("en-PK",{dateStyle:"medium"}).format(new Date(file.createdAt))}</span></span><StatusBadge status="Ready"/></a>)}</div>:<div className="rounded-[10px] border border-dashed p-8 text-center text-sm text-[#667085]"><FileText className="mx-auto mb-2"/>No documents uploaded yet.</div>}
+      <p className="mt-4 text-xs leading-5 text-[#667085]">Attachments are stored outside SQLite, remain private to the signed-in agency, and download through an authorized route.</p>
+    </Panel>
+  </div>;
 }

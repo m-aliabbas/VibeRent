@@ -4,6 +4,8 @@ import { getWebRequestContext } from "@/server/auth/session";
 import { asDomainError } from "@/server/domain/errors";
 import {
   amendBooking,
+  checkInRental,
+  checkOutRental,
   confirmBooking,
   createAvailabilityBlock,
   listAvailabilityBlocks,
@@ -14,6 +16,7 @@ import {
 } from "@/server/services/booking-service";
 import type { BookingListItem } from "@/server/repositories/contracts";
 import type { ConfirmBookingInput, RecordDepositInput, RecordPaymentInput, ReverseTransactionInput } from "@/server/validation/booking";
+import type { CheckInRentalInput, RentalInspectionInput } from "@/server/validation/rental-operation";
 
 export type ConfirmBookingActionResult =
   | { ok: true; data: ReturnType<typeof confirmBooking> }
@@ -42,6 +45,16 @@ export async function createAvailabilityBlockAction(input: { vehicleId: string; 
 export async function amendBookingAction(bookingId:string,input:{vehicleId:string;pickupAt:string;returnAt:string;destinationCity:string;version:number}) {
   try { return {ok:true as const,data:amendBooking(await getWebRequestContext(),bookingId,input)}; }
   catch(error){const issue=asDomainError(error);return {ok:false as const,error:{code:issue.code,message:issue.message,fieldErrors:issue.fieldErrors??{}}};}
+}
+
+export async function checkOutRentalAction(bookingId: string, input: RentalInspectionInput) {
+  try { return { ok: true as const, data: checkOutRental(await getWebRequestContext(), bookingId, input) }; }
+  catch (error) { const issue=asDomainError(error);return {ok:false as const,error:{code:issue.code,message:issue.message,fieldErrors:issue.fieldErrors??{}}}; }
+}
+
+export async function checkInRentalAction(bookingId: string, input: CheckInRentalInput) {
+  try { return { ok: true as const, data: checkInRental(await getWebRequestContext(), bookingId, input) }; }
+  catch (error) { const issue=asDomainError(error);return {ok:false as const,error:{code:issue.code,message:issue.message,fieldErrors:issue.fieldErrors??{}}}; }
 }
 
 export async function recordBookingPaymentAction(bookingId: string, input: RecordPaymentInput) {
