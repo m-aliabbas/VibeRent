@@ -129,7 +129,7 @@ fn main() {
                         .env("DATABASE_URL", data.join("viberent.db").to_string_lossy().to_string())
                         .env("PRIVATE_FILE_STORAGE_ROOT", private_files.to_string_lossy().to_string())
                         .env("BACKUP_ROOT", backups.to_string_lossy().to_string())
-                        .env("LICENSE_CACHE_PATH", data.join("license-token.json").to_string_lossy().to_string())
+                        .env("LICENSE_CACHE_PATH", data.join("license-cache.enc").to_string_lossy().to_string())
                         .env("GOOGLE_DRIVE_SESSION_PATH", data.join("google-drive-session.enc").to_string_lossy().to_string())
                         .env("VIBERENT_MIGRATIONS_DIR", standalone.join("drizzle").to_string_lossy().to_string())
                         .env("BETTER_AUTH_URL", format!("http://127.0.0.1:{port}"))

@@ -32,7 +32,7 @@ export function getLicenseStatusPath() {
 export function getLicenseCachePath() {
   return resolveFromProcess(
     process.env.LICENSE_CACHE_PATH,
-    path.join(getDataDirectory(), "license-token.json"),
+    path.join(getDataDirectory(), "license-cache.enc"),
   );
 }
 

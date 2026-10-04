@@ -40,21 +40,6 @@ jobs:
           rustc --version
           cargo --version
 
-      - name: Restore protected desktop environment
-        shell: pwsh
-        env:
-          DESKTOP_ENV_FILE_BASE64: ${{ secrets.DESKTOP_ENV_FILE_BASE64 }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:DESKTOP_ENV_FILE_BASE64)) {
-            throw "Repository secret DESKTOP_ENV_FILE_BASE64 is required. See WINDOWS_RELEASE.md."
-          }
-          $binDir = Join-Path $env:GITHUB_WORKSPACE "src-tauri\bin"
-          New-Item -ItemType Directory -Force -Path $binDir | Out-Null
-          [IO.File]::WriteAllBytes(
-            (Join-Path $binDir ".env"),
-            [Convert]::FromBase64String($env:DESKTOP_ENV_FILE_BASE64)
-          )
-
       - name: Install locked dependencies
         run: npm ci
 

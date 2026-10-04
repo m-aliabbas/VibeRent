@@ -8,50 +8,46 @@ The Tauri shell starts one local server on port `4321`. It binds only to `127.0.
 
 - `data/viberent.db` — SQLite database
 - `data/private-files/` — vehicle photos and documents
-- `data/license-token.json` — signed offline license token
+- `data/license-cache.enc` — per-installation encrypted offline license cache
 - `data/google-drive-session.enc` — locally encrypted Google OAuth session
 - `backups/` — manual, automatic, and pre-restore archives
 - `startup.log` — desktop startup diagnostics
 
 Installing an update does not replace these files. Do not move the SQLite database to OneDrive, Google Drive sync, or a network share. Use the application backup workflow instead.
 
-## Firebase license service
+## Encrypted Firebase license credentials
 
-The installer does not contain a Firebase Admin service-account key. The Firebase HTTPS function checks `viberent_licenses/{deviceFingerprint}` and returns a short-lived RS256-signed license. The desktop application verifies the signature with a bundled public key and can use that signed token offline until its expiry, for at most 30 days.
+The desktop runtime reads the Firebase Admin service account from `k1.json.enc`. The file uses Fernet encryption and is decrypted only inside the local Node.js server. The shared compatibility key follows the VibePOS packaging model and can be overridden with `FIREBASE_CREDENTIALS_KEY` when rotating credentials.
 
-1. Create or select the Firebase project and enable Firestore and Cloud Functions.
-2. Generate a dedicated signing pair:
-
-   ```bash
-   openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out license-private.pem
-   openssl rsa -pubout -in license-private.pem -out license-public.pem
-   ```
-
-3. Never commit either generated key. Store the private key as the Cloud Functions secret:
+1. Create or select the Firebase project, enable Firestore, and download a least-privilege service-account JSON file.
+2. Encrypt it without committing the plaintext:
 
    ```bash
-   cd firebase
-   firebase functions:secrets:set LICENSE_SIGNING_PRIVATE_KEY
-   cp .firebaserc.example .firebaserc
-   cd functions && npm ci && npm run build && cd ..
-   firebase deploy --only functions:viberentLicense,firestore:rules
+   npm run credentials:encrypt -- \
+     --input /secure/path/firebase-service-account.json \
+     --output k1.json.enc
    ```
 
-4. Base64-encode `license-public.pem` and place it in the desktop environment as `LICENSE_PUBLIC_KEY_BASE64`.
-5. Set `LICENSE_ENDPOINT_URL` to the deployed `viberentLicense` URL.
-6. Start VibeRent on the customer PC. The first check creates a pending document in `viberent_licenses`.
-7. In Firestore, set `approved: true`, `disabled: false`, `expireDate` to a Firestore timestamp, and optionally `customerName`.
-8. Select **Check license again** on the desktop license screen.
+3. Start VibeRent on the customer PC. The first online check creates a pending document in `viberent_licenses`.
+4. In Firestore, set `approved: true`, `disabled: false`, `expireDate` to a Firestore timestamp, and optionally `customerName`.
+5. Select **Check license again** on the desktop license screen.
 
-Revoking a device prevents the next online renewal. A previously issued offline token remains valid until its signed expiry. Desktop licensing is a commercial control, not unbreakable DRM; determined users with control of the machine can patch any local executable.
+Successful checks are cached for offline use for no more than 30 days and never beyond the remote expiry. The cache and Google session use a separate random key created on each customer PC. Bundling an encrypted credential beside the decrypting application protects the file at rest but is not a hard security boundary; use a dedicated restricted service account and rotate it when an installer is retired.
 
 ## Google Drive backup
 
 1. Enable Google Drive API in the Google Cloud project.
 2. Configure the OAuth consent screen.
-3. Create an OAuth client of type **Desktop app**.
-4. Put its client ID and client secret in `desktop/.env` or the protected GitHub Actions environment.
-5. Keep the redirect URI as `http://127.0.0.1:4321/api/v1/backups/google-drive/callback`.
+3. Create an OAuth client of type **Desktop app** and download its client JSON.
+4. Encrypt the JSON with the same Fernet key used for the Firebase credential:
+
+   ```bash
+   npm run credentials:encrypt -- \
+     --input /secure/path/google-oauth-client.json \
+     --output g1.json.enc
+   ```
+
+5. Keep the runtime redirect URI as `http://127.0.0.1:4321/api/v1/backups/google-drive/callback`.
 
 VibeRent requests only `https://www.googleapis.com/auth/drive.file`. The refresh token is encrypted with a random key created on the customer PC. A backup contains a SQLite online snapshot, a manifest and checksum, and private attachments. Automatic backups run daily and retain seven days locally by default; connected installations also upload them to the `VibeRent Backups` Drive folder.
 
@@ -59,7 +55,7 @@ Restore is deliberately restart-only. VibeRent validates the archive, checks its
 
 ## Local build
 
-Create the protected build configuration:
+Optionally create a local desktop configuration. If it is absent, the packager writes safe non-secret desktop defaults and the application generates its Better Auth secret on first launch:
 
 ```bash
 cp desktop/.env.example desktop/.env
@@ -77,16 +73,7 @@ NSIS installers must be built on Windows. `cargo check --release --manifest-path
 
 Create a public release-only repository named `m-aliabbas/viberent-releases`. Keep it empty except for `README.md`; the workflow refuses to publish if it contains other files.
 
-Configure these source-repository secrets:
-
-- `DESKTOP_ENV_FILE_BASE64` — Base64 of the production `desktop/.env` file.
-- `RELEASE_REPO_TOKEN` — fine-grained token with **Contents: Read and write** for only `m-aliabbas/viberent-releases`.
-
-For PowerShell:
-
-```powershell
-[Convert]::ToBase64String([IO.File]::ReadAllBytes("desktop\.env")) | Set-Clipboard
-```
+Configure `RELEASE_REPO_TOKEN`, a fine-grained token with **Contents: Read and write** for only `m-aliabbas/viberent-releases`. The release no longer requires `DESKTOP_ENV_FILE_BASE64`; the two encrypted credential resources are packaged directly.
 
 A manual **Windows Release** run creates a private 90-day Actions artifact. It does not publish publicly. A `v*` tag publishes only the installer, `SHA256SUMS.txt`, and `latest.json` to the release-only repository.
 

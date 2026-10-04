@@ -1,4 +1,4 @@
-import { copyFile, cp, mkdir, rm, stat } from "node:fs/promises";
+import { copyFile, cp, mkdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 
@@ -23,6 +23,12 @@ for (const [source, destination] of [
   await cp(source, destination, { recursive: true });
 }
 
+for (const filename of ["k1.json.enc", "g1.json.enc"]) {
+  const source = path.join(root, filename);
+  await requirePath(source, `Missing encrypted desktop credential: ${filename}`);
+  await copyFile(source, path.join(standalone, filename));
+}
+
 const triple = process.platform === "win32"
   ? "x86_64-pc-windows-msvc"
   : process.platform === "darwin"
@@ -36,10 +42,20 @@ await copyFile(process.execPath, sidecar);
 const packagedEnv = path.join(binDirectory, ".env");
 const localEnv = path.join(root, "desktop", ".env");
 try {
-  await stat(packagedEnv);
-} catch {
   await requirePath(localEnv, "Create desktop/.env from desktop/.env.example before a local Tauri build.");
   await copyFile(localEnv, packagedEnv);
+} catch {
+  await writeFile(packagedEnv, [
+    "VIBERENT_DESKTOP=1",
+    "VIBERENT_LAN_ENABLED=false",
+    "LICENSE_ENFORCEMENT=true",
+    "LICENSE_APPLICATION_ID=viberent",
+    "FIREBASE_LICENSE_COLLECTION=viberent_licenses",
+    "AUTH_REQUIRE_EMAIL_VERIFICATION=false",
+    "BACKUP_HOUR=12",
+    "BACKUP_RETENTION_DAYS=7",
+    "",
+  ].join("\n"));
 }
 
 console.log(`Desktop resources prepared for ${triple}.`);

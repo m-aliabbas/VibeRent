@@ -6,8 +6,10 @@ import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { applyPendingRestore } from "@/server/desktop/backup-service";
 import { startBackupScheduler } from "@/server/desktop/backup-scheduler";
 import { refreshDesktopLicense, startLicenseRefreshScheduler } from "@/server/desktop/license-service";
+import { ensureDesktopAuthSecret } from "@/server/desktop/local-crypto";
 
 export async function prepareDesktopRuntime() {
+  await ensureDesktopAuthSecret();
   const restored = await applyPendingRestore();
   if (restored) console.info(JSON.stringify({ event: "desktop.restore.applied", source: restored.sourceFilename }));
 

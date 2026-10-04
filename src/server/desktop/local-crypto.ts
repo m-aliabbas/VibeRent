@@ -27,6 +27,25 @@ async function getLocalKey() {
   return readFile(keyPath);
 }
 
+export async function ensureDesktopAuthSecret() {
+  if (process.env.BETTER_AUTH_SECRET?.trim()) return;
+  const secretPath = path.join(getDataDirectory(), ".secrets", "better-auth.key");
+  try {
+    const existing = (await readFile(secretPath, "utf8")).trim();
+    if (existing.length >= 32) {
+      process.env.BETTER_AUTH_SECRET = existing;
+      return;
+    }
+  } catch {}
+
+  await mkdir(path.dirname(secretPath), { recursive: true });
+  const generated = randomBytes(48).toString("base64url");
+  await writeFile(secretPath, generated, { flag: "wx", mode: 0o600 }).catch(async error => {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  });
+  process.env.BETTER_AUTH_SECRET = (await readFile(secretPath, "utf8")).trim();
+}
+
 export async function writeEncryptedJson(filePath: string, value: unknown) {
   const key = await getLocalKey();
   const iv = randomBytes(12);

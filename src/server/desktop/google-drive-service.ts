@@ -6,6 +6,10 @@ import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { google } from "googleapis";
 import type { Credentials } from "google-auth-library";
+import {
+  EncryptedCredentialError,
+  loadGoogleDriveClient,
+} from "@/server/desktop/encrypted-credentials";
 import { readEncryptedJson, writeEncryptedJson } from "@/server/desktop/local-crypto";
 import { getGoogleDriveSessionPath } from "@/server/desktop/runtime-paths";
 import { DomainError } from "@/server/domain/errors";
@@ -27,25 +31,21 @@ export class GoogleDriveBackupError extends DomainError {
   }
 }
 
-function configured() {
-  return Boolean(
-    process.env.GOOGLE_DRIVE_CLIENT_ID?.trim()
-    && process.env.GOOGLE_DRIVE_CLIENT_SECRET?.trim(),
-  );
-}
-
 function redirectUri() {
   return process.env.GOOGLE_DRIVE_REDIRECT_URI?.trim()
     || `${process.env.BETTER_AUTH_URL || "http://127.0.0.1:4321"}/api/v1/backups/google-drive/callback`;
 }
 
-function oauthClient() {
-  const clientId = process.env.GOOGLE_DRIVE_CLIENT_ID?.trim();
-  const clientSecret = process.env.GOOGLE_DRIVE_CLIENT_SECRET?.trim();
-  if (!clientId || !clientSecret) {
-    throw new GoogleDriveBackupError("Google Drive is not configured in this build.");
+async function oauthClient() {
+  try {
+    const client = await loadGoogleDriveClient();
+    return new google.auth.OAuth2(client.client_id, client.client_secret, redirectUri());
+  } catch (error) {
+    if (error instanceof EncryptedCredentialError) {
+      throw new GoogleDriveBackupError(error.message);
+    }
+    throw error;
   }
-  return new google.auth.OAuth2(clientId, clientSecret, redirectUri());
 }
 
 function oauthStatePath() {
@@ -53,11 +53,15 @@ function oauthStatePath() {
 }
 
 export async function getGoogleDriveStatus() {
-  const session = configured()
-    ? await readEncryptedJson<DriveSession>(getGoogleDriveSessionPath())
-    : null;
+  let configured = true;
+  try {
+    await loadGoogleDriveClient();
+  } catch {
+    configured = false;
+  }
+  const session = configured ? await readEncryptedJson<DriveSession>(getGoogleDriveSessionPath()) : null;
   return {
-    configured: configured(),
+    configured,
     connected: Boolean(session?.credentials?.refresh_token),
     account: session?.account ?? null,
     folderName: FOLDER_NAME,
@@ -65,7 +69,7 @@ export async function getGoogleDriveStatus() {
 }
 
 export async function createGoogleDriveAuthorization() {
-  const client = oauthClient();
+  const client = await oauthClient();
   const value = crypto.randomUUID();
   await writeEncryptedJson(oauthStatePath(), {
     value,
@@ -87,7 +91,7 @@ export async function completeGoogleDriveAuthorization(code: string, state: stri
     throw new GoogleDriveBackupError("The Google Drive sign-in request expired or is invalid.");
   }
 
-  const client = oauthClient();
+  const client = await oauthClient();
   const { tokens } = await client.getToken(code);
   if (!tokens.refresh_token) {
     throw new GoogleDriveBackupError("Google did not return long-term backup access. Disconnect and try again.");
@@ -118,7 +122,7 @@ async function authenticatedDrive() {
   if (!session?.credentials?.refresh_token) {
     throw new GoogleDriveBackupError("Connect a Google account before using cloud backups.");
   }
-  const client = oauthClient();
+  const client = await oauthClient();
   client.setCredentials(session.credentials);
   client.on("tokens", tokens => {
     void writeEncryptedJson(sessionPath, {
