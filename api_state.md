@@ -26,12 +26,21 @@ This file tracks the focused mobile/field-operations contract defined in `Backen
 | Expenses | `GET /api/v1/expenses` | Tenant-scoped expense list |
 | Expenses | `POST /api/v1/expenses` | Submit an expense with scoped reference checks and audit event |
 | Activity | `GET /api/v1/activity?before=...&limit=...` | Cursor-based audit/activity feed |
+| Desktop operations | `GET /api/v1/backups/status` | Owner-only license, scheduler, local backup, and Google Drive status |
+| Backups | `POST /api/v1/backups/create` | SQLite-safe database and private-file archive with optional Drive upload |
+| Backups | `GET /api/v1/backups/download/:filename` | Owner-only local backup download |
+| Backups | `POST /api/v1/backups/restore` | Validate and stage a local archive for restart-only restore |
+| Google Drive | `POST /api/v1/backups/google-drive/connect` | Begin limited-scope desktop OAuth |
+| Google Drive | `GET /api/v1/backups/google-drive/callback` | Complete OAuth using a short-lived state value |
+| Google Drive | `GET /api/v1/backups/google-drive/files` | List VibeRent-created backup archives |
+| Google Drive | `POST /api/v1/backups/google-drive/upload` | Create and upload a fresh archive |
+| Google Drive | `POST /api/v1/backups/google-drive/restore/:id` | Download, validate, and stage a Drive archive for restart-only restore |
 
 ## Pending by an explicit product or infrastructure decision
 
 | Resource | Planned capability | Why pending |
 | --- | --- | --- |
-| Uploads | Authorize upload, finalize metadata, and issue signed downloads | `Backend.md` intentionally leaves the private object-storage provider open. The API must not pretend local disk is private production storage. |
+| Cloud uploads | Authorize upload, finalize metadata, and issue signed downloads | The local desktop pilot keeps private files in the OS application-data directory and includes them in recovery archives. A hosted/mobile deployment still requires private object storage. |
 | Mobile authentication | Short-lived access tokens, refresh rotation, revocation, and device sessions | Web authentication now uses Better Auth secure cookie sessions. A native-token contract remains intentionally separate. |
 | Rate limiting | Login, lookup, mutation, upload, and export limits | Requires the deployment/runtime decision and a shared limiter store. |
 

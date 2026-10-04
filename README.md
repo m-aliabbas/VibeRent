@@ -1,14 +1,21 @@
 # VibeRent
 
+## Windows desktop pilot
+
+VibeRent now includes a Tauri v2 desktop shell, Firebase-backed signed device licensing, SQLite-safe local and Google Drive backups, restart-only restore, and GitHub Actions workflows for quality checks and Windows NSIS releases. The desktop build launches the existing standalone Next.js modular monolith; there is no separate Python backend.
+
+See [`WINDOWS_RELEASE.md`](./WINDOWS_RELEASE.md) for Firebase, Google OAuth, installer, runtime-data, backup/restore, and release setup.
+
 ## SQLite pilot database
 
-The pilot uses SQLite in WAL mode through Drizzle ORM. It supports one deployed application instance with the database on durable local storage; do not place the database on a shared network filesystem or run multiple writers across app instances.
+The pilot uses SQLite in WAL mode through Drizzle ORM. It supports one deployed application instance with the database on durable local storage; do not place the database on a shared network filesystem or run multiple writers across app instances. In the desktop build, the database and private files live under the OS application-data directory and survive installer upgrades.
 
 ```bash
 npm run db:generate
 npm run db:migrate
 npm run db:seed
 npm run db:check
+npm run db:check:desktop-backup
 ```
 
 Set `DATABASE_URL` to an absolute SQLite file path in deployment. The default local file is `.data/viberent.db` and is ignored by Git.
@@ -54,7 +61,7 @@ The maintained endpoint inventory, completion criteria, and intentionally deferr
 
 API responses use consistent `{ data, meta }` and `{ error }` envelopes. Browser requests use the same secure session and application-service authorization as Server Actions. Native mobile access tokens remain a separate API phase.
 
-VibeRent is a responsive car-rental operations system for Pakistani agencies managing owned and third-party vehicles. The current release is a frontend prototype using deterministic mock data.
+VibeRent is a responsive car-rental operations system for Pakistani agencies managing owned and third-party vehicles. Core fleet, customer, booking, rental-operation, expense, audit, authentication, and desktop backup flows now persist through the local SQLite backend; remaining product gaps are tracked separately.
 
 ## Run locally
 
@@ -77,11 +84,12 @@ npm run build
 
 Start with [docs/README.md](./docs/README.md). It links the product scope, detailed features, user flows, domain rules, data model, roadmap, backlog, development tracker, QA checklist, decisions, and changelog.
 
-## Current prototype
+## Current application
 
 - Responsive application shell and dashboard.
-- Initial Vehicles list and CRUD interactions.
+- Persistent vehicle, customer, booking, rental-operation, expense, owner, and settings workflows.
+- Tauri desktop packaging with signed device licensing and local/Google Drive recovery.
 - Pakistani rental fixtures and PKR formatting.
-- Planned-state routes for Bookings, Customers, Expenses, Reports, Owners, and Settings.
+- Some settings, reports, and integrations remain prototype-level or intentionally deferred.
 
 See [docs/DEVELOPMENT_TRACKER.md](./docs/DEVELOPMENT_TRACKER.md) for the current status and known gaps.

@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Permissions required by the VibeRent desktop shell","local":true,"windows":["main"],"permissions":["core:default","opener:default",{"identifier":"shell:allow-spawn","allow":[{"args":true,"name":"bin/next-server","sidecar":true}]}]}}

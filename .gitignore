@@ -7,4 +7,10 @@
 .env*.local
 node_modules/
 .next/
-
+src-tauri/bin/*
+!src-tauri/bin/.gitkeep
+src-tauri/target/
+desktop/.env
+release/
+firebase/functions/lib/
+firebase/functions/node_modules/

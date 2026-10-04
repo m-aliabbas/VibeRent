@@ -1,0 +1,21 @@
+{
+  "name": "viberent-license-functions",
+  "version": "0.1.0",
+  "private": true,
+  "main": "lib/index.js",
+  "engines": {
+    "node": "22"
+  },
+  "scripts": {
+    "build": "tsc",
+    "deploy": "npm run build && firebase deploy --only functions:viberentLicense,firestore:rules"
+  },
+  "dependencies": {
+    "firebase-admin": "14.5.0",
+    "firebase-functions": "7.4.0",
+    "jose": "6.2.12"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}

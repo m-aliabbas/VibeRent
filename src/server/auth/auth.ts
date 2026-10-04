@@ -9,6 +9,11 @@ import { sendAuthEmail } from "@/server/auth/email";
 import { organizationAccess, organizationRoles } from "@/server/auth/permissions";
 
 const baseUrl = process.env.BETTER_AUTH_URL ?? "http://localhost:3000";
+const requireEmailVerification = process.env.AUTH_REQUIRE_EMAIL_VERIFICATION === "true";
+const trustedOrigins = [
+  baseUrl,
+  ...(process.env.BETTER_AUTH_TRUSTED_ORIGINS?.split(",").map(value => value.trim()).filter(Boolean) ?? []),
+];
 
 export const auth = betterAuth({
   appName: "VibeRent",
@@ -18,7 +23,7 @@ export const auth = betterAuth({
     (process.env.NODE_ENV === "production"
       ? undefined
       : "viberent-development-secret-change-before-production"),
-  trustedOrigins: [baseUrl],
+  trustedOrigins: [...new Set(trustedOrigins)],
   database: drizzleAdapter(db, {
     provider: "sqlite",
     schema,
@@ -27,7 +32,7 @@ export const auth = betterAuth({
     user: {
       create: {
         before: async user => {
-          return { data: { ...user, emailVerified: true } };
+          return { data: { ...user, emailVerified: requireEmailVerification ? user.emailVerified : true } };
         },
       },
     },
@@ -43,7 +48,7 @@ export const auth = betterAuth({
   },
   emailAndPassword: {
     enabled: true,
-    requireEmailVerification: false,
+    requireEmailVerification,
     minPasswordLength: 10,
     maxPasswordLength: 128,
     revokeSessionsOnPasswordReset: true,
@@ -59,7 +64,7 @@ export const auth = betterAuth({
     },
   },
   emailVerification: {
-    sendOnSignUp: false,
+    sendOnSignUp: requireEmailVerification,
     sendOnSignIn: false,
     autoSignInAfterVerification: true,
     sendVerificationEmail: async ({ user, url }) => {

@@ -1,0 +1,36 @@
+name: Quality
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  application:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22.20.0"
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+      - name: Verify migrations and booking transaction on a temporary database
+        shell: bash
+        run: |
+          runtime_dir="${RUNNER_TEMP}/viberent-quality"
+          mkdir -p "$runtime_dir"
+          export DATABASE_URL="$runtime_dir/viberent.db"
+          npm run db:migrate
+          npm run db:seed
+          npm run db:check
+      - name: Verify desktop backup and restart-only restore
+        run: npm run db:check:desktop-backup

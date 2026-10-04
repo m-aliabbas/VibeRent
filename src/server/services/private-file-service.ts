@@ -1,12 +1,13 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { sqlite } from "@/db/connection";
 import { requireRole } from "@/server/auth/authorize";
 import type { RequestContext } from "@/server/context/request-context";
 import { DomainError } from "@/server/domain/errors";
+import { getPrivateFileRoot } from "@/server/desktop/runtime-paths";
 
 export type PrivateFileDto = {
   id: string;
@@ -22,7 +23,7 @@ export type PrivateFileDto = {
 
 type PrivateFileRow = Omit<PrivateFileDto, "downloadUrl"> & { storageKey: string };
 
-const storageRoot = path.resolve(process.cwd(), ".data", "private-files");
+const storageRoot = getPrivateFileRoot();
 const allowed = {
   vehicle_photo: { max: 8 * 1024 * 1024, mime: ["image/jpeg", "image/png", "image/webp"] },
   vehicle_document: { max: 12 * 1024 * 1024, mime: ["application/pdf", "image/jpeg", "image/png", "image/webp"] },
@@ -70,8 +71,10 @@ export async function uploadVehicleFile(context: RequestContext, vehicleId: stri
   const id = `file_${randomUUID()}`;
   const storageKey = `${context.agencyId}/${randomUUID()}`;
   const absolutePath = path.join(storageRoot, storageKey);
+  const temporaryPath = `${absolutePath}.uploading`;
   await mkdir(path.dirname(absolutePath), { recursive: true });
-  await writeFile(absolutePath, Buffer.from(await file.arrayBuffer()), { flag: "wx", mode: 0o600 });
+  await writeFile(temporaryPath, Buffer.from(await file.arrayBuffer()), { flag: "wx", mode: 0o600 });
+  await rename(temporaryPath, absolutePath);
   const now = new Date().toISOString();
   try {
     sqlite.transaction(() => {
@@ -81,6 +84,7 @@ export async function uploadVehicleFile(context: RequestContext, vehicleId: stri
         .run(randomUUID(), context.agencyId, context.userId, "vehicle.file_uploaded", "vehicle", vehicleId, JSON.stringify({ fileId: id, classification, mimeType: file.type, size: file.size }), now);
     })();
   } catch (error) {
+    await unlink(temporaryPath).catch(() => undefined);
     await unlink(absolutePath).catch(() => undefined);
     throw error;
   }

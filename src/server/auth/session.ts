@@ -6,6 +6,7 @@ import { staffRoles } from "@/server/context/request-context";
 import { DomainError } from "@/server/domain/errors";
 import { auth } from "@/server/auth/auth";
 import { sqlite } from "@/db/connection";
+import { assertDesktopLicense } from "@/server/desktop/license-service";
 
 type BetterSession = NonNullable<Awaited<ReturnType<typeof auth.api.getSession>>>;
 
@@ -36,11 +37,13 @@ export async function getSessionViewer(requestHeaders?: Headers): Promise<Sessio
 }
 
 export async function getWebRequestContext(): Promise<RequestContext> {
+  assertDesktopLicense();
   const viewer = await getSessionViewer();
   return viewerToContext(viewer);
 }
 
 export async function getApiRequestContext(request: Request): Promise<RequestContext> {
+  assertDesktopLicense();
   const viewer = await getSessionViewer(request.headers);
   return viewerToContext(viewer);
 }

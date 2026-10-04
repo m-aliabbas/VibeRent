@@ -65,6 +65,14 @@ Use this file for durable product and architecture decisions. Do not record casu
 
 ## Open decisions
 
+### D-114 — Local Windows desktop distribution and recovery
+
+- **Status:** Accepted for the first client pilot
+- **Date:** 4 October 2026
+- **Decision:** Package the existing Next.js modular monolith with Tauri v2 and a bundled Node.js sidecar. Store SQLite, attachments, backup archives, OAuth state, and license cache under the OS application-data directory. Use Firebase through an HTTPS license broker that signs device tokens; never bundle Firebase Admin credentials. Use Google Drive OAuth with `drive.file` scope for off-device backup copies. Publish Windows NSIS installers from the private source repository to a separate release-only repository.
+- **Consequences:** The desktop application remains a single writable backend instance. Restore is staged and applied on restart. License revocation is bounded by the signed offline-token lifetime. The first release is unsigned until an Authenticode certificate is provisioned.
+- **Operational artifact:** `WINDOWS_RELEASE.md`
+
 ### D-102 — Authentication provider
 
 - **Status:** Open; blocks pilot backend
