@@ -4,13 +4,15 @@ import { getVehicle, saveVehicle } from "@/server/services/vehicle-service";
 
 export const runtime = "nodejs";
 
-export async function GET(request: Request, context: RouteContext<"/api/v1/vehicles/[id]">) {
+type VehicleRouteContext = { params: Promise<{ id: string }> };
+
+export async function GET(request: Request, context: VehicleRouteContext) {
   let requestId: string | undefined;
   try { const auth = await getApiRequestContext(request); requestId = auth.requestId; const { id } = await context.params; return apiSuccess(getVehicle(auth, id), requestId); }
   catch (error) { return apiFailure(error, requestId); }
 }
 
-export async function PATCH(request: Request, context: RouteContext<"/api/v1/vehicles/[id]">) {
+export async function PATCH(request: Request, context: VehicleRouteContext) {
   let requestId: string | undefined;
   try {
     const auth = await getApiRequestContext(request); requestId = auth.requestId;
