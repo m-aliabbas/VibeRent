@@ -1,6 +1,6 @@
 {
   "name": "viberent",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -18,6 +18,8 @@
     "desktop:dev": "tauri dev",
     "desktop:prepare": "node scripts/package-desktop.mjs",
     "desktop:build": "tauri build",
+    "license:test": "tsx --test tests/license-policy.test.ts",
+    "license:test:web": "node scripts/run-license-web-test.mjs",
     "credentials:encrypt": "tsx scripts/secure-credentials.ts",
     "release:check": "node scripts/check-release-version.mjs",
     "release:set": "node scripts/set-release-version.mjs"

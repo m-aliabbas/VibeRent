@@ -1,15 +1,22 @@
 import "server-only";
 
-import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 import { cert, getApp, initializeApp } from "firebase-admin/app";
 import { FieldValue, getFirestore } from "firebase-admin/firestore";
 import { DomainError } from "@/server/domain/errors";
+import {
+  getDeviceFingerprint,
+  getDeviceFingerprintPayload,
+  type DeviceFingerprintPayload,
+} from "@/server/desktop/device-identity";
 import { loadFirebaseCredentials } from "@/server/desktop/encrypted-credentials";
+import {
+  defaultLicenseExpiry,
+  evaluateLicenseDocument,
+  resolveLicenseExpiry,
+} from "@/server/desktop/license-policy";
 import { readEncryptedJson, writeEncryptedJson } from "@/server/desktop/local-crypto";
 import {
   getLicenseCachePath,
@@ -38,56 +45,11 @@ export type DesktopLicenseStatus = {
   checkedAt: string;
   expiresAt?: string;
   offlineUntil?: string;
+  device: DeviceFingerprintPayload;
 };
-
-type FirestoreTimestamp = { toDate(): Date };
 
 let refreshPromise: Promise<DesktopLicenseStatus> | null = null;
 let currentStatus: DesktopLicenseStatus | null = null;
-
-function readMachineIdentifier() {
-  if (process.platform === "win32") {
-    const result = spawnSync("reg", [
-      "query",
-      String.raw`HKLM\SOFTWARE\Microsoft\Cryptography`,
-      "/v",
-      "MachineGuid",
-    ], { encoding: "utf8", windowsHide: true });
-    const match = result.stdout?.match(/MachineGuid\s+REG_SZ\s+([^\r\n]+)/i);
-    if (match?.[1]) return match[1].trim();
-  }
-  for (const candidate of ["/etc/machine-id", "/var/lib/dbus/machine-id"]) {
-    try {
-      const value = readFileSync(candidate, "utf8").trim();
-      if (value) return value;
-    } catch {}
-  }
-  const macs = Object.values(os.networkInterfaces())
-    .flat()
-    .filter(item => item && !item.internal && item.mac !== "00:00:00:00:00:00")
-    .map(item => item!.mac)
-    .sort();
-  return `${os.hostname()}|${os.platform()}|${os.arch()}|${macs.join(",")}`;
-}
-
-export function getDeviceFingerprint() {
-  return createHash("sha256")
-    .update(`${process.env.LICENSE_APPLICATION_ID || "viberent"}|${readMachineIdentifier()}`)
-    .digest("hex");
-}
-
-function parseExpiry(value: unknown) {
-  if (value && typeof value === "object" && "toDate" in value) {
-    const date = (value as FirestoreTimestamp).toDate();
-    return Number.isNaN(date.getTime()) ? null : date;
-  }
-  if (value instanceof Date) return value;
-  if (typeof value === "string") {
-    const date = new Date(value);
-    return Number.isNaN(date.getTime()) ? null : date;
-  }
-  return null;
-}
 
 function statusIsActive(status: DesktopLicenseStatus, fingerprint: string) {
   const offlineUntil = status.offlineUntil ? new Date(status.offlineUntil).getTime() : Number.NaN;
@@ -111,13 +73,14 @@ async function writeStatus(status: DesktopLicenseStatus) {
   return status;
 }
 
-async function loadCachedStatus(fingerprint: string) {
+async function loadCachedStatus(fingerprint: string, device: DeviceFingerprintPayload) {
   const status = await readEncryptedJson<DesktopLicenseStatus>(getLicenseCachePath());
   if (!status || !statusIsActive(status, fingerprint)) return null;
   return {
     ...status,
     checkedAt: new Date().toISOString(),
     message: "License verified from the encrypted offline cache.",
+    device,
   } satisfies DesktopLicenseStatus;
 }
 
@@ -141,6 +104,8 @@ async function firebaseDatabase() {
 
 async function checkOnlineLicense(fingerprint: string): Promise<DesktopLicenseStatus> {
   const database = await firebaseDatabase();
+  const now = new Date();
+  const device = getDeviceFingerprintPayload();
   const reference = database
     .collection(process.env.FIREBASE_LICENSE_COLLECTION?.trim() || DEFAULT_LICENSE_COLLECTION)
     .doc(fingerprint);
@@ -154,6 +119,8 @@ async function checkOnlineLicense(fingerprint: string): Promise<DesktopLicenseSt
         createdAt: FieldValue.serverTimestamp(),
         lastSeenAt: FieldValue.serverTimestamp(),
         appVersion: (process.env.VIBERENT_VERSION || "0.0.0").slice(0, 32),
+        expireDate: defaultLicenseExpiry(now),
+        fingerprint_payload: device,
       }, { merge: true });
     }
     return {
@@ -162,29 +129,27 @@ async function checkOnlineLicense(fingerprint: string): Promise<DesktopLicenseSt
       fingerprint,
       message: "Device registered and waiting for administrator approval.",
       checkedAt: new Date().toISOString(),
+      device,
     };
   }
 
   const license = snapshot.data() || {};
-  await reference.set({
+  const { expiresAt, needsBackfill } = resolveLicenseExpiry(license, now);
+  const updates: Record<string, unknown> = {
     lastSeenAt: FieldValue.serverTimestamp(),
     appVersion: (process.env.VIBERENT_VERSION || "0.0.0").slice(0, 32),
-  }, { merge: true });
-  if (license.disabled === true) {
-    return { enforced: true, state: "revoked", fingerprint, message: "This device license has been revoked.", checkedAt: new Date().toISOString() };
-  }
-  if (license.approved !== true) {
-    return { enforced: true, state: "pending", fingerprint, message: "This device is waiting for administrator approval.", checkedAt: new Date().toISOString() };
-  }
-
-  const expiresAt = parseExpiry(license.expireDate ?? license.expire_date);
-  if (!expiresAt || expiresAt.getTime() <= Date.now()) {
-    return { enforced: true, state: "expired", fingerprint, message: "This device license has expired.", checkedAt: new Date().toISOString() };
-  }
+    fingerprint_payload: device,
+  };
+  if (needsBackfill) updates.expireDate = expiresAt;
+  await reference.set(updates, { merge: true });
+  const state = evaluateLicenseDocument(license, expiresAt, now);
+  if (state === "revoked") return { enforced: true, state, fingerprint, message: "This device license has been revoked.", checkedAt: now.toISOString(), device };
+  if (state === "pending") return { enforced: true, state, fingerprint, message: "This device is waiting for administrator approval.", checkedAt: now.toISOString(), device };
+  if (state === "expired") return { enforced: true, state, fingerprint, message: "This device license has expired.", checkedAt: now.toISOString(), expiresAt: expiresAt.toISOString(), device };
 
   const offlineUntil = new Date(Math.min(
     expiresAt.getTime(),
-    Date.now() + OFFLINE_LICENSE_DAYS * 24 * 60 * 60 * 1000,
+    now.getTime() + OFFLINE_LICENSE_DAYS * 24 * 60 * 60 * 1000,
   ));
   const status: DesktopLicenseStatus = {
     enforced: true,
@@ -194,6 +159,7 @@ async function checkOnlineLicense(fingerprint: string): Promise<DesktopLicenseSt
     checkedAt: new Date().toISOString(),
     expiresAt: expiresAt.toISOString(),
     offlineUntil: offlineUntil.toISOString(),
+    device,
   };
   await writeEncryptedJson(getLicenseCachePath(), status);
   return status;
@@ -201,6 +167,7 @@ async function checkOnlineLicense(fingerprint: string): Promise<DesktopLicenseSt
 
 async function refreshLicenseStatusInternal(): Promise<DesktopLicenseStatus> {
   const fingerprint = getDeviceFingerprint();
+  const device = getDeviceFingerprintPayload();
   if (!isDesktopRuntime() || process.env.LICENSE_ENFORCEMENT !== "true") {
     return writeStatus({
       enforced: false,
@@ -208,13 +175,14 @@ async function refreshLicenseStatusInternal(): Promise<DesktopLicenseStatus> {
       fingerprint,
       message: "Desktop license enforcement is disabled for this runtime.",
       checkedAt: new Date().toISOString(),
+      device,
     });
   }
 
   try {
     return writeStatus(await checkOnlineLicense(fingerprint));
   } catch {
-    const cached = await loadCachedStatus(fingerprint);
+    const cached = await loadCachedStatus(fingerprint, device);
     if (cached) return writeStatus(cached);
     return writeStatus({
       enforced: true,
@@ -222,6 +190,7 @@ async function refreshLicenseStatusInternal(): Promise<DesktopLicenseStatus> {
       fingerprint,
       message: "Firebase credentials are unavailable or the license service could not be reached.",
       checkedAt: new Date().toISOString(),
+      device,
     });
   }
 }
@@ -236,6 +205,7 @@ export function refreshDesktopLicense() {
 export function getDesktopLicenseStatus(): DesktopLicenseStatus {
   const enforced = isDesktopRuntime() && process.env.LICENSE_ENFORCEMENT === "true";
   const fingerprint = getDeviceFingerprint();
+  const device = getDeviceFingerprintPayload();
   let status = currentStatus;
   if (!status) {
     try {
@@ -243,7 +213,7 @@ export function getDesktopLicenseStatus(): DesktopLicenseStatus {
     } catch {}
   }
   if (status && (!enforced || statusIsActive(status, fingerprint) || status.state !== "active")) {
-    return status;
+    return { ...status, device: status.device ?? device };
   }
   return {
     enforced,
@@ -251,6 +221,7 @@ export function getDesktopLicenseStatus(): DesktopLicenseStatus {
     fingerprint,
     message: enforced ? "License verification has not completed." : "Desktop license enforcement is disabled.",
     checkedAt: new Date().toISOString(),
+    device,
   };
 }
 

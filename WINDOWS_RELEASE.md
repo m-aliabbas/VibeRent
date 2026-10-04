@@ -29,8 +29,19 @@ The desktop runtime reads the Firebase Admin service account from `k1.json.enc`.
    ```
 
 3. Start VibeRent on the customer PC. The first online check creates a pending document in `viberent_licenses`.
-4. In Firestore, set `approved: true`, `disabled: false`, `expireDate` to a Firestore timestamp, and optionally `customerName`.
+4. The registration includes a 30-day `expireDate` and a `fingerprint_payload` map containing the hostname, OS, processor, user, and MAC diagnostics. In Firestore, set `approved: true`, keep `disabled: false`, and optionally adjust `expireDate` or add `customerName`.
 5. Select **Check license again** on the desktop license screen.
+
+Older VibeRent documents that do not contain `expireDate` are backfilled with a 30-day expiry on their next check. The validator also accepts the VibePOS-compatible `expire_date` field.
+
+Before producing a Windows installer, exercise the same license screen and Firebase code through the local web server:
+
+```bash
+npm run license:test
+npm run license:test:web
+```
+
+Open `http://localhost:3000/license`, confirm the system-information panel, approve the generated document in Firestore, and select **Check license again**. A successful approval redirects away from the license screen. The web-test command uses `.data/license-web-test` and does not use the normal development database.
 
 Successful checks are cached for offline use for no more than 30 days and never beyond the remote expiry. The cache and Google session use a separate random key created on each customer PC. Bundling an encrypted credential beside the decrypting application protects the file at rest but is not a hard security boundary; use a dedicated restricted service account and rotate it when an installer is retired.
 

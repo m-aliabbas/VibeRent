@@ -11,6 +11,7 @@ const applicationId = "viberent";
 const audience = "viberent-desktop";
 const collection = "viberent_licenses";
 const maxOfflineDays = 30;
+const defaultLicenseTermDays = 30;
 
 type HttpResponse = {
   status(code: number): HttpResponse;
@@ -31,6 +32,22 @@ function expiry(value: unknown) {
   return null;
 }
 
+function fingerprintPayload(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const source = value as Record<string, unknown>;
+  const stringField = (key: string) => typeof source[key] === "string" ? source[key].slice(0, 256) : "";
+  return {
+    system: stringField("system"),
+    node: stringField("node"),
+    release: stringField("release"),
+    version: stringField("version"),
+    machine: stringField("machine"),
+    processor: stringField("processor"),
+    mac: typeof source.mac === "number" && Number.isSafeInteger(source.mac) ? source.mac : 0,
+    os_user: stringField("os_user"),
+  };
+}
+
 export const viberentLicense = onRequest(
   { region: "asia-south1", secrets: [signingPrivateKey], timeoutSeconds: 15 },
   async (req, res) => {
@@ -43,6 +60,7 @@ export const viberentLicense = onRequest(
 
     const reference = getFirestore().collection(collection).doc(fingerprint);
     const snapshot = await reference.get();
+    const device = fingerprintPayload(body.fingerprint_payload ?? body.fingerprintPayload);
     if (!snapshot.exists) {
       await reference.create({
         applicationId,
@@ -51,15 +69,27 @@ export const viberentLicense = onRequest(
         createdAt: FieldValue.serverTimestamp(),
         lastSeenAt: FieldValue.serverTimestamp(),
         appVersion: typeof body.version === "string" ? body.version.slice(0, 32) : null,
+        expireDate: new Date(Date.now() + defaultLicenseTermDays * 24 * 60 * 60 * 1000),
+        ...(device ? { fingerprint_payload: device } : {}),
       });
       return response(res, 403, { state: "pending", message: "Device registered and waiting for administrator approval." });
     }
 
     const license = snapshot.data() || {};
-    await reference.set({ lastSeenAt: FieldValue.serverTimestamp(), appVersion: typeof body.version === "string" ? body.version.slice(0, 32) : null }, { merge: true });
+    const rawExpiry = license.expireDate ?? license.expire_date;
+    let licenseExpiry = expiry(rawExpiry);
+    const updates: Record<string, unknown> = {
+      lastSeenAt: FieldValue.serverTimestamp(),
+      appVersion: typeof body.version === "string" ? body.version.slice(0, 32) : null,
+      ...(device ? { fingerprint_payload: device } : {}),
+    };
+    if (rawExpiry === undefined || rawExpiry === null) {
+      licenseExpiry = new Date(Date.now() + defaultLicenseTermDays * 24 * 60 * 60 * 1000);
+      updates.expireDate = licenseExpiry;
+    }
+    await reference.set(updates, { merge: true });
     if (license.disabled === true) return response(res, 403, { state: "revoked", message: "This device license has been revoked." });
     if (license.approved !== true) return response(res, 403, { state: "pending", message: "This device is waiting for administrator approval." });
-    const licenseExpiry = expiry(license.expireDate);
     if (!licenseExpiry || licenseExpiry.getTime() <= Date.now()) {
       return response(res, 403, { state: "expired", message: "This device license has expired." });
     }

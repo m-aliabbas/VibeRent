@@ -23,6 +23,17 @@ export default function LicensePage() {
           <p className="text-xs font-semibold uppercase tracking-wide text-[#667085]">Device fingerprint</p>
           <code className="mt-2 block break-all rounded-lg bg-[#F2F4F7] p-3 text-xs text-[#344054]">{status.fingerprint}</code>
         </div>
+        <details className="rounded-xl border border-[#EAECF0] bg-white p-4">
+          <summary className="cursor-pointer text-sm font-semibold text-[#344054]">System information sent to Firebase</summary>
+          <dl className="mt-3 grid gap-2 text-xs text-[#475467]">
+            {Object.entries(status.device).map(([label, value]) => (
+              <div key={label} className="grid grid-cols-[96px_1fr] gap-2">
+                <dt className="font-semibold">{label}</dt>
+                <dd className="break-all font-mono">{String(value)}</dd>
+              </div>
+            ))}
+          </dl>
+        </details>
         <LicenseRefreshButton />
         <p className="text-center text-xs text-[#667085]">Checked {new Date(status.checkedAt).toLocaleString("en-PK")}</p>
       </div>

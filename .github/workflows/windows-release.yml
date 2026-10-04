@@ -49,6 +49,9 @@ jobs:
           RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
         run: npm run release:check -- $env:RELEASE_TAG
 
+      - name: Test Windows license fingerprint and approval policy
+        run: npm run license:test
+
       - run: npm run lint
       - run: npm run typecheck
 
