@@ -146,7 +146,13 @@ jobs:
           } catch {
             $statusCode = [int]$_.Exception.Response.StatusCode
             if ($statusCode -ne 409) { throw }
-            Write-Host "The public release repository is empty; continuing with the first release."
+            $readme = "# VibeRent Releases`n`nOfficial customer release downloads for VibeRent.`n"
+            $body = @{
+              message = "Initialize release repository"
+              content = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($readme))
+            } | ConvertTo-Json
+            Invoke-RestMethod -Method Put -Headers $headers -ContentType "application/json" -Body $body -Uri "https://api.github.com/repos/$env:RELEASE_REPOSITORY/contents/README.md" | Out-Null
+            Write-Host "Initialized the public release repository with README.md."
           }
           if ($unexpected.Count -gt 0) {
             throw "The public release repository contains unexpected files: $($unexpected.path -join ', ')"
