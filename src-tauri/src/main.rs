@@ -14,6 +14,8 @@ use tauri_plugin_shell::ShellExt;
 
 struct ServerProcess(Mutex<Option<CommandChild>>);
 
+const DESKTOP_PORT: u16 = 4322;
+
 fn append_log(path: &Path, message: &str) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -93,65 +95,68 @@ fn main() {
                 let log_path = app_data.join("startup.log");
                 append_log(&log_path, "=== VibeRent desktop start ===");
 
-                let port = 4321_u16;
-                if TcpStream::connect(("127.0.0.1", port)).is_err() {
-                    let standalone = standalone_directory(&handle).map_err(std::io::Error::other)?;
-                    let mut command = handle
-                        .shell()
-                        .sidecar("next-server")?
-                        .current_dir(&standalone)
-                        .arg("server.js");
-                    let environment = packaged_environment(&handle);
-                    let lan_enabled = environment
-                        .get("VIBERENT_LAN_ENABLED")
-                        .map(|value| value.eq_ignore_ascii_case("true"))
-                        .unwrap_or(false);
-                    for (key, value) in environment {
-                        command = command.env(key, value);
-                    }
-                    let mut trusted_origins = vec![
-                        format!("http://127.0.0.1:{port}"),
-                        format!("http://localhost:{port}"),
-                    ];
-                    if lan_enabled {
-                        if let Some(ip) = local_lan_ip() {
-                            trusted_origins.push(format!("http://{ip}:{port}"));
-                        }
-                    }
-                    command = command
-                        .env("PORT", port.to_string())
-                        .env("HOSTNAME", if lan_enabled { "0.0.0.0" } else { "127.0.0.1" })
-                        .env("NODE_ENV", "production")
-                        .env("NEXT_TELEMETRY_DISABLED", "1")
-                        .env("VIBERENT_DESKTOP", "1")
-                        .env("VIBERENT_VERSION", env!("CARGO_PKG_VERSION"))
-                        .env("VIBERENT_DATA_DIR", data.to_string_lossy().to_string())
-                        .env("DATABASE_URL", data.join("viberent.db").to_string_lossy().to_string())
-                        .env("PRIVATE_FILE_STORAGE_ROOT", private_files.to_string_lossy().to_string())
-                        .env("BACKUP_ROOT", backups.to_string_lossy().to_string())
-                        .env("LICENSE_CACHE_PATH", data.join("license-cache.enc").to_string_lossy().to_string())
-                        .env("GOOGLE_DRIVE_SESSION_PATH", data.join("google-drive-session.enc").to_string_lossy().to_string())
-                        .env("VIBERENT_MIGRATIONS_DIR", standalone.join("drizzle").to_string_lossy().to_string())
-                        .env("BETTER_AUTH_URL", format!("http://127.0.0.1:{port}"))
-                        .env("BETTER_AUTH_TRUSTED_ORIGINS", trusted_origins.join(","));
-
-                    let (mut receiver, child) = command.spawn()?;
-                    *app.state::<ServerProcess>().0.lock().expect("server process lock") = Some(child);
-                    let log_for_output = log_path.clone();
-                    tauri::async_runtime::spawn(async move {
-                        while let Some(event) = receiver.recv().await {
-                            match event {
-                                CommandEvent::Stdout(bytes) => append_log(&log_for_output, &format!("SERVER: {}", String::from_utf8_lossy(&bytes))),
-                                CommandEvent::Stderr(bytes) => append_log(&log_for_output, &format!("SERVER_ERROR: {}", String::from_utf8_lossy(&bytes))),
-                                CommandEvent::Error(error) => append_log(&log_for_output, &format!("SERVER_EVENT_ERROR: {error}")),
-                                CommandEvent::Terminated(payload) => append_log(&log_for_output, &format!("SERVER_EXIT: {:?}", payload.code)),
-                                _ => {}
-                            }
-                        }
-                    });
-                } else {
-                    append_log(&log_path, "Using the VibeRent server already listening on port 4321.");
+                let port = DESKTOP_PORT;
+                if TcpStream::connect(("127.0.0.1", port)).is_ok() {
+                    append_log(&log_path, &format!("Startup blocked because port {port} is already in use."));
+                    let _ = window.eval(&format!("document.body.innerHTML='<main style=\"font-family:system-ui;padding:48px\"><h2>VibeRent could not start</h2><p>Local port {port} is already in use. Close the other application and start VibeRent again.</p></main>'"));
+                    return Ok(());
                 }
+
+                let standalone = standalone_directory(&handle).map_err(std::io::Error::other)?;
+                let mut command = handle
+                    .shell()
+                    .sidecar("next-server")?
+                    .current_dir(&standalone)
+                    .arg("server.js");
+                let environment = packaged_environment(&handle);
+                let lan_enabled = environment
+                    .get("VIBERENT_LAN_ENABLED")
+                    .map(|value| value.eq_ignore_ascii_case("true"))
+                    .unwrap_or(false);
+                for (key, value) in environment {
+                    command = command.env(key, value);
+                }
+                let mut trusted_origins = vec![
+                    format!("http://127.0.0.1:{port}"),
+                    format!("http://localhost:{port}"),
+                ];
+                if lan_enabled {
+                    if let Some(ip) = local_lan_ip() {
+                        trusted_origins.push(format!("http://{ip}:{port}"));
+                    }
+                }
+                command = command
+                    .env("PORT", port.to_string())
+                    .env("HOSTNAME", if lan_enabled { "0.0.0.0" } else { "127.0.0.1" })
+                    .env("NODE_ENV", "production")
+                    .env("NEXT_TELEMETRY_DISABLED", "1")
+                    .env("VIBERENT_DESKTOP", "1")
+                    .env("VIBERENT_VERSION", env!("CARGO_PKG_VERSION"))
+                    .env("VIBERENT_DATA_DIR", data.to_string_lossy().to_string())
+                    .env("DATABASE_URL", data.join("viberent.db").to_string_lossy().to_string())
+                    .env("PRIVATE_FILE_STORAGE_ROOT", private_files.to_string_lossy().to_string())
+                    .env("BACKUP_ROOT", backups.to_string_lossy().to_string())
+                    .env("LICENSE_CACHE_PATH", data.join("license-cache.enc").to_string_lossy().to_string())
+                    .env("GOOGLE_DRIVE_SESSION_PATH", data.join("google-drive-session.enc").to_string_lossy().to_string())
+                    .env("VIBERENT_MIGRATIONS_DIR", standalone.join("drizzle").to_string_lossy().to_string())
+                    .env("BETTER_AUTH_URL", format!("http://127.0.0.1:{port}"))
+                    .env("GOOGLE_DRIVE_REDIRECT_URI", format!("http://127.0.0.1:{port}/api/v1/backups/google-drive/callback"))
+                    .env("BETTER_AUTH_TRUSTED_ORIGINS", trusted_origins.join(","));
+
+                let (mut receiver, child) = command.spawn()?;
+                *app.state::<ServerProcess>().0.lock().expect("server process lock") = Some(child);
+                let log_for_output = log_path.clone();
+                tauri::async_runtime::spawn(async move {
+                    while let Some(event) = receiver.recv().await {
+                        match event {
+                            CommandEvent::Stdout(bytes) => append_log(&log_for_output, &format!("SERVER: {}", String::from_utf8_lossy(&bytes))),
+                            CommandEvent::Stderr(bytes) => append_log(&log_for_output, &format!("SERVER_ERROR: {}", String::from_utf8_lossy(&bytes))),
+                            CommandEvent::Error(error) => append_log(&log_for_output, &format!("SERVER_EVENT_ERROR: {error}")),
+                            CommandEvent::Terminated(payload) => append_log(&log_for_output, &format!("SERVER_EXIT: {:?}", payload.code)),
+                            _ => {}
+                        }
+                    }
+                });
 
                 tauri::async_runtime::spawn(async move {
                     if wait_for_server(port, Duration::from_secs(60)).await {

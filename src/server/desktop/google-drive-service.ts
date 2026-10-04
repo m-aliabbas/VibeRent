@@ -33,7 +33,7 @@ export class GoogleDriveBackupError extends DomainError {
 
 function redirectUri() {
   return process.env.GOOGLE_DRIVE_REDIRECT_URI?.trim()
-    || `${process.env.BETTER_AUTH_URL || "http://127.0.0.1:4321"}/api/v1/backups/google-drive/callback`;
+    || `${process.env.BETTER_AUTH_URL || "http://127.0.0.1:4322"}/api/v1/backups/google-drive/callback`;
 }
 
 async function oauthClient() {
