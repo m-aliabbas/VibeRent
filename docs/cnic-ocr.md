@@ -17,10 +17,11 @@ Signed-in agency owners, fleet managers, and rental agents can test the module
 from `/cnic-ocr`. The screen previews both selected files locally and sends them to
 the authenticated Server Action only after **Analyze CNIC** is selected.
 
-For local web development, set `OPENAI_API_KEY` only in the server environment.
-Do not use a `NEXT_PUBLIC_` variable for this credential. Desktop builds instead
-decrypt `o1.json.enc` inside the local server at runtime; generate it from the
-ignored `.env.local` with `npm run credentials:encrypt:openai`.
+The server first checks `OPENAI_API_KEY`, then falls back to decrypting
+`o1.json.enc` at runtime. This works for local web development and desktop
+builds, so `.env.local` can be removed after generating the encrypted credential
+with `npm run credentials:encrypt:openai`. Do not use a `NEXT_PUBLIC_` variable
+for this credential.
 
 ```ts
 import { readFile } from "node:fs/promises";

@@ -72,7 +72,7 @@ The desktop build reads the CNIC OCR API key from `o1.json.enc`; it does not req
 npm run credentials:encrypt:openai
 ```
 
-The command reads `OPENAI_API_KEY` from `.env.local`, writes only the encrypted `{ "api_key": "..." }` document, and the desktop packager requires and copies `o1.json.enc` into the standalone server bundle. Local web development continues to use `OPENAI_API_KEY` from `.env.local`.
+The command reads `OPENAI_API_KEY` from `.env.local`, writes only the encrypted `{ "api_key": "..." }` document, and the desktop packager requires and copies `o1.json.enc` into the standalone server bundle. The local web server also falls back to `o1.json.enc`, so `.env.local` can be removed after the encrypted credential is generated.
 
 ## Local build
 
