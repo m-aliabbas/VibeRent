@@ -18,6 +18,7 @@ import {
   LogOut,
   Menu,
   Search,
+  ScanText,
   Settings,
   Users,
   UserSquare2,
@@ -40,6 +41,7 @@ const nav = [
   { label: "Expenses", href: "/expenses", icon: CircleDollarSign },
   { label: "Reports", href: "/reports", icon: BarChart3 },
   { label: "Owners", href: "/owners", icon: UserSquare2 },
+  { label: "CNIC OCR", href: "/cnic-ocr", icon: ScanText },
   { label: "Settings", href: "/settings", icon: Settings },
 ];
 

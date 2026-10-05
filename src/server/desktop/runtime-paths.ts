@@ -43,6 +43,20 @@ export function getGoogleDriveSessionPath() {
   );
 }
 
+export function getWhatsAppDatabasePath() {
+  return resolveFromProcess(
+    process.env.WHATSAPP_DATABASE_PATH,
+    path.join(getDataDirectory(), "whatsapp.db"),
+  );
+}
+
+export function getWhatsAppImageInboxPath() {
+  return resolveFromProcess(
+    process.env.WHATSAPP_IMAGE_INBOX_PATH,
+    path.join(getDataDirectory(), "whatsapp-images"),
+  );
+}
+
 export function getPendingRestoreDirectory() {
   return path.join(getDataDirectory(), "pending-restore");
 }

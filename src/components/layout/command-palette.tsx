@@ -9,6 +9,7 @@ import {
   FileText,
   Gauge,
   Search,
+  ScanText,
   UsersRound,
   X,
 } from "lucide-react";
@@ -23,6 +24,7 @@ const pages = [
   ["Expenses", "Fleet costs and receipts", "/expenses", FileText],
   ["Reports", "Profitability and utilization", "/reports", FileText],
   ["Owners", "Managed fleet and payouts", "/owners", UsersRound],
+  ["CNIC OCR", "Extract identity fields from a CNIC image", "/cnic-ocr", ScanText],
 ] as const;
 const records = [
   ...vehicles.map((item) => ({
