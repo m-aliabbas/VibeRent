@@ -26,6 +26,7 @@ test("persists credentials and Signal keys in the dedicated SQLite database", as
     firstStore.close();
 
     const secondStore = new SqliteWhatsAppAuthStore(databasePath);
+    assert.equal(secondStore.hasRegisteredSession("agency-one"), true);
     const restored = await secondStore.useSession("agency-one");
     const keys = await restored.state.keys.get("session", ["customer", "missing"]);
 
@@ -42,6 +43,7 @@ test("persists credentials and Signal keys in the dedicated SQLite database", as
     );
 
     secondStore.clearSession("agency-one");
+    assert.equal(secondStore.hasRegisteredSession("agency-one"), false);
     const cleared = await secondStore.useSession("agency-one");
     assert.equal(cleared.state.creds.registered, false);
     assert.deepEqual(await cleared.state.keys.get("session", ["customer"]), {});

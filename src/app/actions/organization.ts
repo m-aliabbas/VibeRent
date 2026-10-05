@@ -10,6 +10,13 @@ import { requireRole } from "@/server/auth/authorize";
 import { sqlite } from "@/db/connection";
 import { asDomainError, DomainError } from "@/server/domain/errors";
 import { staffRoles, type StaffRole } from "@/server/context/request-context";
+import {
+  updateAgreementDesigner,
+  updateEnglishRentalTerms,
+  updateOrganizationProfile,
+  type OrganizationSettingsDto,
+} from "@/server/services/organization-settings-service";
+import type { AgreementDesignConfig } from "@/lib/agreement-config";
 
 export type OrganizationActionResult<T = undefined> =
   | { ok: true; data?: T; message?: string }
@@ -41,7 +48,15 @@ export async function updateMyProfileAction(input:{name:string;phone:string}):Pr
 }
 
 export async function updateRentalTermsAction(terms:string):Promise<OrganizationActionResult<{terms:string}>> {
-  try { const context=await getWebRequestContext();requireRole(context,["agency_owner","fleet_manager"]);const value=terms.trim();if(value.length<40)return {ok:false,message:"Rental terms should contain at least 40 characters.",fieldErrors:{terms:"Add the key renter obligations."}};const now=new Date().toISOString();sqlite.transaction(()=>{sqlite.prepare("UPDATE agencies SET rental_terms=?,version=version+1,updated_at=? WHERE id=?").run(value,now,context.agencyId);writeAudit(context.agencyId,context.userId,"rental_terms.updated","agency",context.agencyId)})();return {ok:true,data:{terms:value},message:"Rental terms updated for future bookings."};} catch(error){return actionFailure(error);}
+  try { const context=await getWebRequestContext();const value=terms.trim();if(value.length<40)return {ok:false,message:"Rental terms should contain at least 40 characters.",fieldErrors:{terms:"Add the key renter obligations."}};updateEnglishRentalTerms(context,value);revalidatePath("/settings");return {ok:true,data:{terms:value},message:"English terms updated for future bookings."};} catch(error){return actionFailure(error);}
+}
+
+export async function updateOrganizationProfileAction(input:OrganizationSettingsDto["profile"]):Promise<OrganizationActionResult<OrganizationSettingsDto["profile"]>> {
+  try{const data=updateOrganizationProfile(await getWebRequestContext(),input);revalidatePath("/","layout");return {ok:true,data,message:"Organization profile saved."}}catch(error){return actionFailure(error)}
+}
+
+export async function updateAgreementDesignerAction(input:AgreementDesignConfig):Promise<OrganizationActionResult<AgreementDesignConfig>> {
+  try{const data=updateAgreementDesigner(await getWebRequestContext(),input);revalidatePath("/settings");return {ok:true,data,message:"Agreement design saved for future rentals."}}catch(error){return actionFailure(error)}
 }
 
 export async function createAgencyAction(input: { name: string; slug: string; city: string; branchName: string; address: string }): Promise<OrganizationActionResult<{ agencyId: string }>> {

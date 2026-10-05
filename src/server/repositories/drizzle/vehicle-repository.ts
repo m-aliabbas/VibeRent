@@ -9,6 +9,8 @@ type VehicleRow = {
   id: string;
   branch_id: string;
   plate: string;
+  chassis_number: string | null;
+  engine_number: string | null;
   make: string;
   model: string;
   year: number;
@@ -19,6 +21,7 @@ type VehicleRow = {
   status: string;
   ownership: string;
   daily_rate: number;
+  with_driver_rate: number | null;
   city: string;
   owner_id: string | null;
   owner_name: string | null;
@@ -64,6 +67,8 @@ function mapVehicle(row: VehicleRow): Vehicle {
   return {
     id: row.id,
     plate: row.plate,
+    chassisNumber: row.chassis_number ?? "",
+    engineNumber: row.engine_number ?? "",
     make: row.make,
     model: row.model,
     year: row.year,
@@ -72,6 +77,7 @@ function mapVehicle(row: VehicleRow): Vehicle {
     ownership: row.ownership === "managed" ? "Managed" : "Own",
     status: title(row.status) as Vehicle["status"],
     dailyRate: row.daily_rate,
+    withDriverRate: row.with_driver_rate ?? row.daily_rate,
     color: row.color,
     transmission: title(row.transmission) as Vehicle["transmission"],
     fuel: title(row.fuel) as Vehicle["fuel"],
@@ -126,11 +132,11 @@ export class SqliteVehicleRepository implements VehicleRepository {
       }
 
       const id = existing?.id ?? `veh_${randomUUID()}`;
-      const values = [branch.id, ownerId, agreementId, input.plate, input.make, input.model, input.year, input.category.toLowerCase(), input.color, input.transmission.toLowerCase(), input.fuel.toLowerCase(), input.status.toLowerCase().replaceAll(" ", "_"), input.ownership === "Managed" ? "managed" : "owned", input.dailyRate, input.status === "Archived" ? now : null, now];
+      const values = [branch.id, ownerId, agreementId, input.plate, input.chassisNumber!, input.engineNumber!, input.make, input.model, input.year, input.category.toLowerCase(), input.color, input.transmission.toLowerCase(), input.fuel.toLowerCase(), input.status.toLowerCase().replaceAll(" ", "_"), input.ownership === "Managed" ? "managed" : "owned", input.dailyRate, input.withDriverRate!, input.status === "Archived" ? now : null, now];
       if (existing) {
-        sqlite.prepare(`UPDATE vehicles SET branch_id=?, owner_id=?, agreement_id=?, plate=?, make=?, model=?, year=?, category=?, color=?, transmission=?, fuel=?, status=?, ownership=?, daily_rate=?, archived_at=?, updated_at=?, version=version+1 WHERE agency_id=? AND id=?`).run(...values, agencyId, id);
+        sqlite.prepare(`UPDATE vehicles SET branch_id=?, owner_id=?, agreement_id=?, plate=?, chassis_number=?, engine_number=?, make=?, model=?, year=?, category=?, color=?, transmission=?, fuel=?, status=?, ownership=?, daily_rate=?, with_driver_rate=?, archived_at=?, updated_at=?, version=version+1 WHERE agency_id=? AND id=?`).run(...values, agencyId, id);
       } else {
-        sqlite.prepare(`INSERT INTO vehicles (id, agency_id, branch_id, owner_id, agreement_id, plate, make, model, year, category, color, transmission, fuel, status, ownership, daily_rate, version, archived_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`).run(id, agencyId, ...values.slice(0, -1), now, now);
+        sqlite.prepare(`INSERT INTO vehicles (id, agency_id, branch_id, owner_id, agreement_id, plate, chassis_number, engine_number, make, model, year, category, color, transmission, fuel, status, ownership, daily_rate, with_driver_rate, version, archived_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`).run(id, agencyId, ...values.slice(0, -1), now, now);
       }
       sqlite.prepare("DELETE FROM vehicle_rate_rules WHERE agency_id=? AND vehicle_id=?").run(agencyId, id);
       const insertRule = sqlite.prepare(`INSERT INTO vehicle_rate_rules (id,agency_id,vehicle_id,destination_city,daily_rate,per_km_rate,minimum_days,active,version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,1,1,?,?)`);

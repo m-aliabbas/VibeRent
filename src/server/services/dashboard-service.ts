@@ -6,7 +6,6 @@ import type { RequestContext } from "@/server/context/request-context";
 export type DashboardData = {
   totalVehicles: number;
   activeRentals: number;
-  totalIncome: number;
   todayRevenue: number;
   monthRevenue: number;
   todayExpenses: number;
@@ -28,15 +27,14 @@ export function getDashboard(context: RequestContext): DashboardData {
     SELECT
       (SELECT count(*) FROM vehicles WHERE agency_id=? AND archived_at IS NULL) AS totalVehicles,
       (SELECT count(*) FROM bookings WHERE agency_id=? AND status='checked_out') AS activeRentals,
-      (SELECT coalesce(sum(CASE WHEN lower(kind) IN ('refund','reversal') THEN -amount ELSE amount END),0) FROM financial_transactions WHERE agency_id=? AND status='posted' AND lower(kind) IN ('payment','deposit_applied','reversal','refund')) AS totalIncome,
       (SELECT coalesce(sum(CASE WHEN lower(kind) IN ('refund','reversal') THEN -amount ELSE amount END),0) FROM financial_transactions WHERE agency_id=? AND status='posted' AND lower(kind) IN ('payment','deposit_applied','reversal','refund') AND posted_at>=? AND posted_at<?) AS todayRevenue,
       (SELECT coalesce(sum(CASE WHEN lower(kind) IN ('refund','reversal') THEN -amount ELSE amount END),0) FROM financial_transactions WHERE agency_id=? AND status='posted' AND lower(kind) IN ('payment','deposit_applied','reversal','refund') AND posted_at>=? AND posted_at<?) AS monthRevenue,
       (SELECT coalesce(sum(amount),0) FROM expenses WHERE agency_id=? AND status='approved' AND occurred_on>=? AND occurred_on<?) AS todayExpenses,
       (SELECT coalesce(sum(amount),0) FROM expenses WHERE agency_id=? AND status='approved' AND occurred_on>=? AND occurred_on<?) AS monthExpenses,
       (SELECT count(DISTINCT vehicle_id) FROM bookings WHERE agency_id=? AND status='checked_out') AS utilizedVehicles
-  `).get(context.agencyId, context.agencyId, context.agencyId, context.agencyId, start, end, context.agencyId, monthStart, end, context.agencyId, localDate, nextLocalDate, context.agencyId, `${localDate.slice(0,7)}-01`, nextLocalDate, context.agencyId) as { totalVehicles: number; activeRentals: number; totalIncome:number; todayRevenue: number; monthRevenue:number; todayExpenses:number; monthExpenses:number; utilizedVehicles: number };
+  `).get(context.agencyId, context.agencyId, context.agencyId, start, end, context.agencyId, monthStart, end, context.agencyId, localDate, nextLocalDate, context.agencyId, `${localDate.slice(0,7)}-01`, nextLocalDate, context.agencyId) as { totalVehicles: number; activeRentals: number; todayRevenue: number; monthRevenue:number; todayExpenses:number; monthExpenses:number; utilizedVehicles: number };
   const scheduleRows = sqlite.prepare(`
-    SELECT bk.id, bk.pickup_at AS pickupAt, bk.return_at AS returnAt, c.name AS customer,
+    SELECT bk.id, bk.status, bk.pickup_at AS pickupAt, bk.return_at AS returnAt, c.name AS customer,
       v.make || ' ' || v.model || ' ' || v.year AS vehicle, v.plate, br.name || ', ' || br.city AS location
     FROM bookings bk
     JOIN customers c ON c.id=bk.customer_id AND c.agency_id=bk.agency_id
@@ -45,11 +43,11 @@ export function getDashboard(context: RequestContext): DashboardData {
     WHERE bk.agency_id=? AND bk.status IN ('confirmed','checked_out')
       AND ((bk.pickup_at>=? AND bk.pickup_at<?) OR (bk.return_at>=? AND bk.return_at<?))
     ORDER BY min(bk.pickup_at,bk.return_at)
-  `).all(context.agencyId, start, end, start, end) as Array<{ id: string; pickupAt: string; returnAt: string; customer: string; vehicle: string; plate: string; location: string }>;
+  `).all(context.agencyId, start, end, start, end) as Array<{ id: string; status: "confirmed" | "checked_out"; pickupAt: string; returnAt: string; customer: string; vehicle: string; plate: string; location: string }>;
   const schedule = scheduleRows.flatMap(row => {
     const events: DashboardData["schedule"] = [];
-    if (row.pickupAt >= start && row.pickupAt < end) events.push({ id: `${row.id}-pickup`, time: row.pickupAt, type: "Pickup", customer: row.customer, vehicle: row.vehicle, plate: row.plate, location: row.location });
-    if (row.returnAt >= start && row.returnAt < end) events.push({ id: `${row.id}-return`, time: row.returnAt, type: "Return", customer: row.customer, vehicle: row.vehicle, plate: row.plate, location: row.location });
+    if (row.status === "confirmed" && row.pickupAt >= start && row.pickupAt < end) events.push({ id: `${row.id}-pickup`, time: row.pickupAt, type: "Pickup", customer: row.customer, vehicle: row.vehicle, plate: row.plate, location: row.location });
+    if (row.status === "checked_out" && row.returnAt >= start && row.returnAt < end) events.push({ id: `${row.id}-return`, time: row.returnAt, type: "Return", customer: row.customer, vehicle: row.vehicle, plate: row.plate, location: row.location });
     return events;
   }).sort((a, b) => a.time.localeCompare(b.time));
   const activeRentalRows = sqlite.prepare(`

@@ -15,12 +15,14 @@ import {
   reverseBookingTransaction,
   startBooking,
 } from "@/server/services/booking-service";
+import { clearBookingDraft } from "@/server/services/booking-cnic-service";
 import type { BookingListItem } from "@/server/repositories/contracts";
 import type { ConfirmBookingInput, RecordDepositInput, RecordPaymentInput, ReverseTransactionInput } from "@/server/validation/booking";
 import type { CheckInRentalInput, RentalInspectionInput } from "@/server/validation/rental-operation";
+import { deliverRentalAgreement, type AgreementDeliveryResult } from "@/server/services/agreement-delivery-service";
 
 export type ConfirmBookingActionResult =
-  | { ok: true; data: ReturnType<typeof confirmBooking> }
+  | { ok: true; data: ReturnType<typeof confirmBooking> & { agreementDelivery: AgreementDeliveryResult } }
   | { ok: false; error: { code: string; message: string; fieldErrors: Record<string, string> } };
 
 export async function startBookingAction(existingDraftId?: string) {
@@ -28,9 +30,25 @@ export async function startBookingAction(existingDraftId?: string) {
   catch (error) { const issue = asDomainError(error); return { ok: false as const, error: { code: issue.code, message: issue.message } }; }
 }
 
+export async function clearBookingAction(bookingDraftId:string) {
+  try {
+    const context=await getWebRequestContext();
+    await clearBookingDraft(context,bookingDraftId);
+    return {ok:true as const,data:startBooking(context)};
+  } catch(error) {
+    const issue=asDomainError(error);
+    return {ok:false as const,error:{code:issue.code,message:issue.message}};
+  }
+}
+
 export async function confirmBookingAction(input: ConfirmBookingInput): Promise<ConfirmBookingActionResult> {
-  try { return { ok: true, data: confirmBooking(await getWebRequestContext(), input) }; }
+  try { const context=await getWebRequestContext();const data=confirmBooking(context,input);const agreementDelivery=await deliverRentalAgreement(context,data.id);return { ok: true, data:{...data,agreementDelivery} }; }
   catch (error) { const issue = asDomainError(error); return { ok: false, error: { code: issue.code, message: issue.message, fieldErrors: issue.fieldErrors ?? {} } }; }
+}
+
+export async function sendBookingAgreementAction(bookingId:string) {
+  try { return {ok:true as const,data:await deliverRentalAgreement(await getWebRequestContext(),bookingId)}; }
+  catch(error){const issue=asDomainError(error);return {ok:false as const,error:{code:issue.code,message:issue.message}};}
 }
 
 export async function listBookingsAction(): Promise<{ ok: true; data: BookingListItem[] } | { ok: false; error: { message: string } }> {

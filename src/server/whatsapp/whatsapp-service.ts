@@ -145,8 +145,13 @@ export class WhatsAppService extends EventEmitter {
   ): Promise<SentWhatsAppMessage> {
     const socket = this.requireConnectedSocket();
     const jid = toWhatsAppJid(phoneNumber);
-    if (this.options.checkRecipientBeforeSending && !(await this.isRegistered(phoneNumber))) {
-      throw new Error("The recipient is not registered on WhatsApp.");
+    if (this.options.checkRecipientBeforeSending) {
+      try {
+        if (!(await this.isRegistered(phoneNumber))) throw new Error("The recipient is not registered on WhatsApp.");
+      } catch (error) {
+        if (error instanceof Error && error.message.includes("not registered")) throw error;
+        this.logger.warn({ err:error },"WhatsApp recipient lookup failed; attempting direct delivery");
+      }
     }
 
     const message = await socket.sendMessage(jid, content);

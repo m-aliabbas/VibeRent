@@ -14,10 +14,13 @@ export function parseVehicleInput(value: unknown): Vehicle {
     throw new DomainError("VALIDATION_FAILED", "Invalid vehicle payload.", 400);
   }
   if (!input.plate?.trim()) errors.plate = "Plate number is required.";
+  if (!input.chassisNumber?.trim()) errors.chassisNumber = "Chassis number is required.";
+  if (!input.engineNumber?.trim()) errors.engineNumber = "Engine number is required.";
   if (!input.make?.trim()) errors.make = "Make is required.";
   if (!input.model?.trim()) errors.model = "Model is required.";
   if (!Number.isInteger(input.year) || input.year! < 2000 || input.year! > 2035) errors.year = "Enter a valid model year.";
   if (!Number.isInteger(input.dailyRate) || input.dailyRate! < 1000) errors.dailyRate = "Daily rate must be at least PKR 1,000.";
+  if (!Number.isInteger(input.withDriverRate) || input.withDriverRate! < input.dailyRate!) errors.withDriverRate = "With-driver rate must be at least the self-drive rate.";
   if (!categories.includes(input.category ?? "")) errors.category = "Choose a valid category.";
   if (!input.city?.trim()) errors.city = "City is required.";
   if (!statuses.includes(input.status ?? "")) errors.status = "Choose a valid status.";
@@ -36,6 +39,8 @@ export function parseVehicleInput(value: unknown): Vehicle {
     ...input,
     id: typeof input.id === "string" ? input.id : "",
     plate: input.plate!.trim().toUpperCase(),
+    chassisNumber: input.chassisNumber!.trim().toUpperCase(),
+    engineNumber: input.engineNumber!.trim().toUpperCase(),
     make: input.make!.trim(),
     model: input.model!.trim(),
     color: input.color?.trim() || "Not specified",

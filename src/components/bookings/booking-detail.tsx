@@ -3,8 +3,8 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import Link from "next/link";
 import { useState } from "react";
-import { ArrowLeft, CalendarDays, Car, CheckCircle2, ClipboardCheck, CreditCard, FileText, Pencil, Printer, ShieldCheck, X, XCircle } from "lucide-react";
-import { amendBookingAction, checkOutRentalAction } from "@/app/actions/bookings";
+import { ArrowLeft, CalendarDays, Car, CheckCircle2, ClipboardCheck, CreditCard, FileText, MessageCircle, Pencil, Printer, ShieldCheck, X, XCircle } from "lucide-react";
+import { amendBookingAction, checkOutRentalAction, sendBookingAgreementAction } from "@/app/actions/bookings";
 import { updateRentalTermsAction } from "@/app/actions/organization";
 import { Button } from "@/components/ui/button";
 import { FormInput, FormSelect } from "@/components/forms/form-controls";
@@ -20,6 +20,7 @@ import type { Vehicle } from "@/types/vehicle";
 export function BookingDetail({initial,vehicles}:{initial:BookingListItem;vehicles:Vehicle[]}) {
   const [booking,setBooking]=useState(initial);
   const [notice,setNotice]=useState("");
+  const [sendingAgreement,setSendingAgreement]=useState(false);
   const [mode,setMode]=useState<"amend"|"cancel"|"checkout"|"extend"|"return"|"terms">();
   const total=booking.dailyRate*booking.days+booking.mileageRate*booking.estimatedKm+booking.extras-booking.discount;
   const balance=total-booking.paid;
@@ -30,6 +31,8 @@ export function BookingDetail({initial,vehicles}:{initial:BookingListItem;vehicl
       <span className="grid h-14 w-14 place-items-center rounded-xl bg-[#EFF8FF] text-[#006FE6]"><CalendarDays size={25}/></span>
       <div className="flex-1"><div className="flex flex-wrap items-center gap-2"><h1 className="text-2xl font-bold">{booking.id}</h1><StatusBadge status={booking.status}/></div><p className="mt-1 text-sm text-[#667085]">{booking.customer} · {booking.vehicle} · {booking.plate}</p></div>
       <div className="flex flex-wrap gap-2">
+        <Button asChild variant="secondary"><a href={`/api/v1/bookings/${booking.id}/agreement`}><FileText size={16}/>Download PDF</a></Button>
+        <Button variant="secondary" disabled={sendingAgreement} onClick={async()=>{setSendingAgreement(true);const result=await sendBookingAgreementAction(booking.id);setSendingAgreement(false);setNotice(result.ok?result.data.message:result.error.message)}}><MessageCircle size={16}/>{sendingAgreement?"Sending…":"Send PDF"}</Button>
         {["Confirmed","Checked Out"].includes(booking.status)&&<Button variant="secondary" onClick={()=>setMode("terms")}><FileText size={16}/>Rental terms</Button>}
         {booking.status==="Confirmed"&&<><Button variant="secondary" onClick={()=>setMode("amend")}><Pencil size={16}/>Amend</Button><Button variant="secondary" onClick={()=>setMode("cancel")}><XCircle size={16}/>Cancel</Button><Button onClick={()=>setMode("checkout")}><ClipboardCheck size={16}/>Start rental</Button></>}
         {booking.status==="Checked Out"&&<><Button variant="secondary" onClick={()=>setMode("extend")}>Extend rental</Button><Button onClick={()=>setMode("return")}>Check in</Button></>}

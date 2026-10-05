@@ -174,6 +174,18 @@ export class SqliteWhatsAppAuthStore {
     })();
   }
 
+  hasRegisteredSession(sessionId: string): boolean {
+    const row = this.database
+      .prepare("SELECT payload FROM whatsapp_auth_credentials WHERE session_id = ?")
+      .get(sessionId.trim()) as CredentialsRow | undefined;
+    if (!row) return false;
+    try {
+      return deserialize<AuthenticationCreds>(row.payload).registered === true;
+    } catch {
+      return false;
+    }
+  }
+
   close(): void {
     if (this.database.open) this.database.close();
   }

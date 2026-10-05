@@ -13,6 +13,8 @@ import type { Vehicle } from "@/types/vehicle";
 const blank: Vehicle = {
   id: "",
   plate: "",
+  chassisNumber: "",
+  engineNumber: "",
   make: "",
   model: "",
   year: 2024,
@@ -21,6 +23,7 @@ const blank: Vehicle = {
   ownership: "Own",
   status: "Available",
   dailyRate: 8000,
+  withDriverRate: 11000,
   color: "",
   transmission: "Automatic",
   fuel: "Petrol",
@@ -73,10 +76,14 @@ export function VehicleDialog({
     event.preventDefault();
     const nextErrors: Record<string, string> = {};
     if (!form.plate.trim()) nextErrors.plate = "Plate number is required.";
+    if (!form.chassisNumber?.trim()) nextErrors.chassisNumber = "Chassis number is required.";
+    if (!form.engineNumber?.trim()) nextErrors.engineNumber = "Engine number is required.";
     if (!form.make.trim()) nextErrors.make = "Make is required.";
     if (!form.model.trim()) nextErrors.model = "Model is required.";
     if (form.dailyRate < 1000)
       nextErrors.dailyRate = "Enter a valid daily rate.";
+    if ((form.withDriverRate??0) < form.dailyRate)
+      nextErrors.withDriverRate = "With-driver rate must be at least the self-drive rate.";
     if (form.ownership === "Managed" && !form.ownerId?.trim())
       nextErrors.owner = "Select or enter the vehicle owner.";
     if (
@@ -148,6 +155,8 @@ export function VehicleDialog({
                 error={errors.plate}
                 required
               />
+              <FormInput label="Chassis number" placeholder="e.g. MRHGM6650NP012345" value={form.chassisNumber??""} onChange={(e)=>update("chassisNumber",e.target.value)} error={errors.chassisNumber} required />
+              <FormInput label="Engine number" placeholder="e.g. L15Z1-1234567" value={form.engineNumber??""} onChange={(e)=>update("engineNumber",e.target.value)} error={errors.engineNumber} required />
               {vehicle ? (
                 <div>
                   <p className="mb-1.5 text-sm font-semibold text-[#344054]">
@@ -352,7 +361,7 @@ export function VehicleDialog({
                 </div>
               )}
               <FormInput
-                label="Daily rate (PKR)"
+                label="Self-drive rate (PKR)"
                 type="number"
                 min={1000}
                 step={500}
@@ -361,6 +370,7 @@ export function VehicleDialog({
                 error={errors.dailyRate}
                 required
               />
+              <FormInput label="With-driver rate (PKR)" type="number" min={form.dailyRate} step={500} value={form.withDriverRate??form.dailyRate} onChange={(e)=>update("withDriverRate",Number(e.target.value))} error={errors.withDriverRate} required />
               <FormSelect
                 label="Transmission"
                 value={form.transmission}

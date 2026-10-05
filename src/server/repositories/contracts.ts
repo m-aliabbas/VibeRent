@@ -11,6 +11,10 @@ export type BookingListItem = {
   publicNumber: number | null;
   customerId: string;
   customer: string;
+  rentalMode?: "self_drive"|"with_driver";
+  driverId?: string|null;
+  driver?: string|null;
+  renterSkipped?: boolean;
   vehicleId: string;
   vehicle: string;
   plate: string;

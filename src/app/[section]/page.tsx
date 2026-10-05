@@ -4,11 +4,14 @@ import { BookingsWorkspace } from "@/components/bookings/bookings-workspace";
 import { OwnersWorkspace } from "@/components/owners/owners-workspace";
 import { ExpensesWorkspace } from "@/components/expenses/expenses-workspace";
 import { ReportsWorkspace } from "@/components/reports/reports-workspace";
+import { DriversWorkspace } from "@/components/drivers/drivers-workspace";
 import { SettingsWorkspace } from "@/components/settings/settings-workspace";
 import { getWebRequestContext } from "@/server/auth/session";
 import { getExpenseWorkspace } from "@/server/services/expense-service";
 import { listOwners } from "@/server/services/owner-service";
 import { getReports } from "@/server/services/report-service";
+import { listDrivers } from "@/server/services/driver-service";
+import { getOrganizationSettings } from "@/server/services/organization-settings-service";
 
 const sections: Record<string, { title: string; description: string }> = {
   bookings: {
@@ -34,6 +37,7 @@ const sections: Record<string, { title: string; description: string }> = {
     title: "Owners",
     description: "Managed vehicles, statements, and payouts will live here.",
   },
+  drivers: { title:"Drivers",description:"Drivers for with-driver rentals." },
   settings: {
     title: "Settings",
     description:
@@ -57,5 +61,7 @@ export default async function SectionPage({
   if (section === "owners") return <OwnersWorkspace data={listOwners(await getWebRequestContext())} />;
   if (section === "expenses") return <ExpensesWorkspace data={getExpenseWorkspace(await getWebRequestContext())} />;
   if (section === "reports") return <ReportsWorkspace data={getReports(await getWebRequestContext())} />;
-  return <SettingsWorkspace />;
+  if (section === "drivers") return <DriversWorkspace initial={listDrivers(await getWebRequestContext())} />;
+  if (section === "settings") return <SettingsWorkspace initial={getOrganizationSettings(await getWebRequestContext())} />;
+  notFound();
 }

@@ -26,6 +26,8 @@ export type VehicleRateRule = {
 export type Vehicle = {
   id: string;
   plate: string;
+  chassisNumber?: string;
+  engineNumber?: string;
   make: string;
   model: string;
   year: number;
@@ -34,6 +36,7 @@ export type Vehicle = {
   ownership: Ownership;
   status: VehicleStatus;
   dailyRate: number;
+  withDriverRate?: number;
   color: string;
   transmission: "Automatic" | "Manual";
   fuel: "Petrol" | "Hybrid" | "Diesel";

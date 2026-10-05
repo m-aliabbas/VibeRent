@@ -7,6 +7,7 @@ import { applyPendingRestore } from "@/server/desktop/backup-service";
 import { startBackupScheduler } from "@/server/desktop/backup-scheduler";
 import { refreshDesktopLicense, startLicenseRefreshScheduler } from "@/server/desktop/license-service";
 import { ensureDesktopAuthSecret } from "@/server/desktop/local-crypto";
+import { startDailyReportScheduler } from "@/server/desktop/daily-report-scheduler";
 
 export async function prepareDesktopRuntime() {
   await ensureDesktopAuthSecret();
@@ -39,6 +40,7 @@ export async function prepareDesktopRuntime() {
     startBackupScheduler();
     const { startConfiguredWhatsAppRuntimes } = await import("@/server/services/whatsapp-settings-service");
     await startConfiguredWhatsAppRuntimes();
+    startDailyReportScheduler();
   }
   console.info(JSON.stringify({ event: "desktop.ready", license: license.state }));
 }

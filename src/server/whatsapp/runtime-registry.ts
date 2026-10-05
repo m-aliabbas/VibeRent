@@ -5,6 +5,7 @@ import type { IncomingWhatsAppMessage, WhatsAppConnectionStatus } from "./types"
 import { WhatsAppService } from "./whatsapp-service";
 import { parseCnicImageCommand } from "./incoming-image-command";
 import { findActiveDraftByNumber, ingestBookingCnic } from "@/server/services/booking-cnic-service";
+import { runOwnerCommand } from "./owner-command-service";
 
 type RuntimeEntry = {
   agencyId: string;
@@ -52,7 +53,11 @@ export async function startWhatsAppRuntime(input: { agencyId:string; sessionId:s
 async function handleIncomingOwnerMessage(entry: RuntimeEntry, message: IncomingWhatsAppMessage) {
   if (!entry.listeningEnabled || !entry.ownerNumber || message.senderNumber !== entry.ownerNumber) return;
   const command=parseCnicImageCommand(message.media?.caption??message.text);
-  if(!command||message.media?.kind!=="image")return;
+  if(!command||message.media?.kind!=="image"){
+    const result=runOwnerCommand(entry.agencyId,message.text);
+    if(result.handled&&result.reply)await entry.service.sendText(entry.ownerNumber,result.reply).catch(error=>{entry.lastError=error instanceof Error?error.message:"Could not send command reply."});
+    return;
+  }
   const draft=findActiveDraftByNumber(entry.agencyId,command.bookingNumber);
   if(!draft){await entry.service.sendText(entry.ownerNumber,`Booking ID #${command.bookingNumber} is not active. Open the booking form and use the ID shown there.`).catch(()=>undefined);return;}
   try{
@@ -71,4 +76,32 @@ export async function logoutWhatsAppRuntime(agencyId:string) {
   await entry.service.logout();
   await entry.service.close();
   runtimes.delete(agencyId);
+}
+
+export async function sendWhatsAppDocument(agencyId:string,phoneNumber:string,input:{document:Buffer;mimeType:string;fileName:string;caption?:string}){
+  const entry=runtimes.get(agencyId);
+  if(!entry)throw new Error("WhatsApp is not connected.");
+  if(entry.status!=="connected")await waitForConnection(entry,15_000);
+  return entry.service.sendDocument(phoneNumber,input);
+}
+
+function waitForConnection(entry:RuntimeEntry,timeoutMs:number){
+  if(entry.status==="connected")return Promise.resolve();
+  return new Promise<void>((resolve,reject)=>{
+    const timeout=setTimeout(()=>finish(new Error("WhatsApp did not reconnect in time.")),timeoutMs);
+    const onStatus=(status:WhatsAppConnectionStatus)=>{
+      if(status==="connected")finish();
+      else if(status==="logged_out"||status==="idle")finish(new Error("WhatsApp is not connected."));
+    };
+    const onError=(error:unknown)=>finish(error instanceof Error?error:new Error("WhatsApp connection failed."));
+    function finish(error?:Error){
+      clearTimeout(timeout);
+      entry.service.off("status",onStatus);
+      entry.service.off("error",onError);
+      if(error)reject(error);else resolve();
+    }
+    entry.service.on("status",onStatus);
+    entry.service.on("error",onError);
+    if(entry.status==="connected")finish();
+  });
 }

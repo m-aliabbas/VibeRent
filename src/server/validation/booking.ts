@@ -4,6 +4,9 @@ export type ConfirmBookingInput = {
   bookingDraftId?: string;
   vehicleId: string;
   customerId: string;
+  rentalMode: "self_drive" | "with_driver";
+  driverId?: string;
+  renterSkipped?: boolean;
   destinationCity: string;
   pickupAt: string;
   returnAt: string;
@@ -21,8 +24,11 @@ export function parseConfirmBookingInput(value: unknown): ConfirmBookingInput {
   const input = value as Partial<ConfirmBookingInput> | null;
   const errors: Record<string, string> = {};
   if (!input || typeof input !== "object") throw new DomainError("VALIDATION_FAILED", "Invalid booking payload.", 400);
+  const rentalMode=input.rentalMode??"self_drive";
   if (!input.vehicleId) errors.vehicleId = "Select a vehicle.";
-  if (!input.customerId) errors.customerId = "Select an existing customer.";
+  if (!input.customerId && !(rentalMode === "with_driver" && input.renterSkipped)) errors.customerId = "Select an existing customer.";
+  if (rentalMode !== "self_drive" && rentalMode !== "with_driver") errors.rentalMode = "Choose self drive or with driver.";
+  if (rentalMode === "with_driver" && !input.driverId) errors.driverId = "Select a driver.";
   const pickup = Date.parse(input.pickupAt ?? "");
   const returned = Date.parse(input.returnAt ?? "");
   if (!Number.isFinite(pickup)) errors.pickupAt = "Enter a valid pickup time.";
@@ -35,7 +41,7 @@ export function parseConfirmBookingInput(value: unknown): ConfirmBookingInput {
   if (input.dailyRateOverride !== undefined && !input.overrideReason?.trim()) errors.overrideReason = "Explain why the destination rate is being changed.";
   if (Object.keys(errors).length) throw new DomainError("VALIDATION_FAILED", "Review the booking details.", 400, errors);
   return {
-    bookingDraftId: input.bookingDraftId?.trim() || undefined, vehicleId: input.vehicleId!, customerId: input.customerId!, destinationCity: input.destinationCity?.trim() || "Local", pickupAt: new Date(pickup).toISOString(), returnAt: new Date(returned).toISOString(),
+    bookingDraftId: input.bookingDraftId?.trim() || undefined, vehicleId: input.vehicleId!, customerId: input.customerId?.trim() || "", rentalMode, driverId:input.driverId?.trim()||undefined, renterSkipped:Boolean(input.renterSkipped), destinationCity: input.destinationCity?.trim() || "Local", pickupAt: new Date(pickup).toISOString(), returnAt: new Date(returned).toISOString(),
     extras: input.extras!, discount: input.discount!, depositRequired: input.depositRequired!, source: input.source?.trim() || "counter", notes: input.notes?.trim() || undefined, estimatedKm: input.estimatedKm ?? 0, dailyRateOverride: input.dailyRateOverride, overrideReason: input.overrideReason?.trim() || undefined,
   };
 }

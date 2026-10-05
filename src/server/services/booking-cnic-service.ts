@@ -164,6 +164,23 @@ export async function uploadBookingCnic(context: RequestContext, draftId: string
   return ingestBookingCnic({agencyId:context.agencyId,draftId,actorId:context.userId,side,bytes:new Uint8Array(await file.arrayBuffer()),mimeType:file.type,originalName:file.name});
 }
 
+export async function clearBookingDraft(context: RequestContext, draftId: string) {
+  requireRole(context,["agency_owner","fleet_manager","rental_agent"]);
+  const draft = sqlite.prepare(`SELECT id FROM booking_drafts WHERE agency_id=? AND actor_id=? AND id=? AND status='active' LIMIT 1`)
+    .get(context.agencyId,context.userId,draftId) as {id:string}|undefined;
+  if(!draft) throw new DomainError("NOT_FOUND","The booking draft is no longer active.",404);
+  const files = sqlite.prepare(`SELECT storage_key AS storageKey FROM private_files WHERE agency_id=? AND entity_type='booking_draft' AND entity_id=?`)
+    .all(context.agencyId,draftId) as Array<{storageKey:string}>;
+  const now=new Date().toISOString();
+  sqlite.transaction(()=>{
+    sqlite.prepare(`UPDATE booking_drafts SET status='expired',updated_at=? WHERE agency_id=? AND id=?`).run(now,context.agencyId,draftId);
+    sqlite.prepare(`DELETE FROM private_files WHERE agency_id=? AND entity_type='booking_draft' AND entity_id=?`).run(context.agencyId,draftId);
+    sqlite.prepare(`INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)`)
+      .run(randomUUID(),context.agencyId,context.userId,"booking.draft_cleared","booking_draft",draftId,JSON.stringify({documentsRemoved:files.length}),now);
+  })();
+  await Promise.all(files.map(file=>unlink(path.join(storageRoot,file.storageKey)).catch(()=>undefined)));
+}
+
 export function findActiveDraftByNumber(agencyId: string, publicNumber: number) {
   return sqlite.prepare(`SELECT id FROM booking_drafts WHERE agency_id=? AND public_number=? AND status='active' AND expires_at>? LIMIT 1`)
     .get(agencyId,publicNumber,new Date().toISOString()) as {id:string}|undefined;

@@ -2,16 +2,17 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { ArrowLeft, Check, Loader2, Plus, ShieldAlert, X } from "lucide-react";
+import { ArrowLeft, Check, Loader2, MessageCircle, Plus, ShieldAlert, X } from "lucide-react";
 
-import { confirmBookingAction, startBookingAction } from "@/app/actions/bookings";
+import { clearBookingAction, confirmBookingAction, startBookingAction } from "@/app/actions/bookings";
 import { listCustomersAction, createCustomerAction } from "@/app/actions/customers";
 import { listVehiclesAction } from "@/app/actions/vehicles";
 import { listBookingsAction } from "@/app/actions/bookings";
 import { createAgencyCityAction, listAgencyCitiesAction } from "@/app/actions/catalogs";
 import { getBookingCnicAction, uploadBookingCnicAction } from "@/app/actions/booking-cnic";
+import { listDriversAction } from "@/app/actions/drivers";
 import { CnicDocumentDrawer } from "@/components/customers/cnic-document-drawer";
-import { FormInput } from "@/components/forms/form-controls";
+import { FormInput, FormSelect } from "@/components/forms/form-controls";
 import { Button } from "@/components/ui/button";
 import { cnicExtractionKey, mergeCnicExtraction, type CnicExtractedValues, type CnicIntake } from "@/lib/cnic-intake";
 import { formatPkr } from "@/lib/utils";
@@ -44,13 +45,18 @@ type FleetOption = {
   baseRate: number;
   perKmRate: number;
   minimumDays: number;
+  withDriverRate:number;
 };
+type DriverOption={id:string;name:string;phone:string};
 
 type ConflictInfo = { bookingId: string; reason: string };
 
 // ─── Draft ──────────────────────────────────────────────────────────────────
 
 type Draft = {
+  rentalMode:"self_drive"|"with_driver";
+  driverId:string;
+  renterSkipped:boolean;
   city: string;
   from: string;
   to: string;
@@ -74,6 +80,9 @@ function defaultDraft(): Draft {
   returned.setHours(23, 59, 0, 0);
   const local = (date: Date) => new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
   return {
+  rentalMode:"self_drive",
+  driverId:"",
+  renterSkipped:false,
   city: "Lahore",
   from: local(pickup),
   to: local(returned),
@@ -118,16 +127,19 @@ export function BookingWizard() {
   const [step, setStep] = useState(0);
   const [draft, setDraft] = useState<Draft>(defaultDraft);
   const [confirmed, setConfirmed] = useState("");
+  const [agreementDelivery,setAgreementDelivery]=useState<{status:"sent"|"skipped"|"failed";message:string}>();
   const [conflictMode, setConflictMode] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [bookingReference, setBookingReference] = useState<{ id: string; publicNumber: number }>();
+  const [clearing,setClearing]=useState(false);
 
   // Server data
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [bookings, setBookings] = useState<BookingListItem[]>([]);
   const [customers, setCustomers] = useState<CustomerDto[]>([]);
   const [savedCities, setSavedCities] = useState<string[]>([]);
+  const [drivers,setDrivers]=useState<DriverOption[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
   const [dataError, setDataError] = useState("");
 
@@ -153,11 +165,12 @@ export function BookingWizard() {
       setDataLoading(true);
       setDataError("");
       const savedReference = sessionStorage.getItem("viberent-booking-reference");
-      const [vResult, bResult, cResult, cityResult, referenceResult] = await Promise.all([
+      const [vResult, bResult, cResult, cityResult, driverResult, referenceResult] = await Promise.all([
         listVehiclesAction(),
         listBookingsAction(),
         listCustomersAction(),
         listAgencyCitiesAction(),
+        listDriversAction(),
         startBookingAction(savedReference || undefined),
       ]);
       if (cancelled) return;
@@ -170,6 +183,8 @@ export function BookingWizard() {
       else errors.push(`Customers: ${cResult.error.message}`);
       if (cityResult.ok) setSavedCities(cityResult.data.map(item=>item.name));
       else errors.push(`Cities: ${cityResult.error.message}`);
+      if(driverResult.ok)setDrivers(driverResult.data.filter(item=>item.status==="active"));
+      else errors.push(`Drivers: ${driverResult.error.message}`);
       if (referenceResult.ok) {
         setBookingReference(referenceResult.data);
         sessionStorage.setItem("viberent-booking-reference", referenceResult.data.id);
@@ -184,7 +199,7 @@ export function BookingWizard() {
   // Derived fleet options from live vehicle data
   const fleetOptions: FleetOption[] = vehicles.map((v) => {
     const rule=v.rateRules?.find(item=>item.destinationCity.toLowerCase()===draft.city.toLowerCase());
-    return {id:v.id,label:`${v.make} ${v.model} ${v.year}`,plate:v.plate,city:v.city,baseRate:v.dailyRate,rate:rule?.dailyRate??v.dailyRate,perKmRate:rule?.perKmRate??0,minimumDays:rule?.minimumDays??1};
+    return {id:v.id,label:`${v.make} ${v.model} ${v.year}`,plate:v.plate,city:v.city,baseRate:v.dailyRate,rate:draft.rentalMode==="with_driver"?(v.withDriverRate??v.dailyRate):(rule?.dailyRate??v.dailyRate),withDriverRate:v.withDriverRate??v.dailyRate,perKmRate:draft.rentalMode==="with_driver"?0:(rule?.perKmRate??0),minimumDays:rule?.minimumDays??1};
   });
 
   // Unique cities from loaded vehicles (+ Lahore as default fallback)
@@ -201,22 +216,25 @@ export function BookingWizard() {
     }));
 
   const canContinue = [
-    Boolean(draft.from && draft.to && new Date(draft.to) > new Date(draft.from)),
+    Boolean(draft.from && draft.to && new Date(draft.to) > new Date(draft.from) && (draft.rentalMode==="self_drive"||draft.driverId)),
     Boolean(vehicle && getConflicts(vehicle.id, draft.from, draft.to, bookings).length === 0),
-    Boolean(draft.customerId),
+    Boolean(draft.customerId || (draft.rentalMode==="with_driver"&&draft.renterSkipped)),
     draft.dailyRate > 0 && days >= (vehicle?.minimumDays??1) && draft.discount <= draft.dailyRate * days + draft.extras && (draft.dailyRate === (vehicle?.rate??draft.dailyRate) || Boolean(draft.overrideReason.trim())),
     true,
   ][step];
 
   async function confirm(event: FormEvent) {
     event.preventDefault();
-    if (!vehicle || !draft.customerId || !bookingReference || submitting) return;
+    if (!vehicle || (!draft.customerId && !draft.renterSkipped) || !bookingReference || submitting) return;
     setSubmitting(true);
     setSubmitError("");
     const result = await confirmBookingAction({
       bookingDraftId: bookingReference.id,
       vehicleId: vehicle.id,
       customerId: draft.customerId,
+      rentalMode:draft.rentalMode,
+      driverId:draft.driverId||undefined,
+      renterSkipped:draft.renterSkipped,
       destinationCity: draft.city,
       pickupAt: draft.from,
       returnAt: draft.to,
@@ -240,7 +258,21 @@ export function BookingWizard() {
     }
     sessionStorage.removeItem("viberent-booking-draft");
     sessionStorage.removeItem("viberent-booking-reference");
+    setAgreementDelivery(result.data.agreementDelivery);
     setConfirmed(result.data.id);
+  }
+
+  async function clearBooking() {
+    if(!bookingReference||clearing)return;
+    if(!window.confirm("Clear this booking draft and permanently remove its attached CNIC images?"))return;
+    setClearing(true);setSubmitError("");
+    const result=await clearBookingAction(bookingReference.id);
+    setClearing(false);
+    if(!result.ok){setSubmitError(result.error.message);return;}
+    sessionStorage.removeItem("viberent-booking-draft");
+    sessionStorage.setItem("viberent-booking-reference",result.data.id);
+    setBookingReference(result.data);
+    setDraft(defaultDraft());setStep(0);setConflictMode(false);
   }
 
   if (confirmed) {
@@ -249,6 +281,7 @@ export function BookingWizard() {
         <span className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-[#ECFDF3] text-[#067647]"><Check size={28} /></span>
         <h1 className="mt-4 text-2xl font-bold">Booking confirmed</h1>
         <p className="mt-2 text-sm text-[#667085]">Booking <strong className="text-[#101828]">#{bookingReference?.publicNumber}</strong> now persistently blocks {vehicle?.plate} for the selected interval.</p>
+        {agreementDelivery&&<p role="status" className={`mx-auto mt-4 flex max-w-lg items-start justify-center gap-2 rounded-lg border p-3 text-sm ${agreementDelivery.status==="sent"?"border-[#ABEFC6] bg-[#ECFDF3] text-[#067647]":agreementDelivery.status==="failed"?"border-[#FEDF89] bg-[#FFFAEB] text-[#93370D]":"border-[#D0D5DD] bg-[#F8FAFC] text-[#475467]"}`}><MessageCircle size={17} className="mt-0.5 shrink-0"/>{agreementDelivery.message}</p>}
         <div className="mt-6 flex justify-center gap-2"><Button asChild><Link href="/bookings">View bookings</Link></Button></div>
       </div>
     );
@@ -276,13 +309,13 @@ export function BookingWizard() {
   return (
     <form onSubmit={confirm} className="space-y-6">
       <Link href="/bookings" className="inline-flex items-center gap-2 text-sm font-semibold text-[#475467]"><ArrowLeft size={17} />Bookings</Link>
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between"><div><p className="text-xs font-bold uppercase tracking-wider text-[#006FE6]">New booking</p><h1 className="mt-1 text-2xl font-bold">Create a reservation</h1><p className="mt-1 text-sm text-[#667085]">Your progress is preserved in this browser session.</p></div>{bookingReference&&<div className="flex flex-col gap-2 sm:flex-row sm:items-stretch"><div className="w-fit rounded-xl border border-[#B2DDFF] bg-[#EFF8FF] px-4 py-2 text-sm text-[#175CD3]">Booking ID <strong className="ml-1 text-xl text-[#004EAA]">#{bookingReference.publicNumber}</strong></div><BookingCnicDrawer bookingReference={bookingReference}/></div>}</div>
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between"><div><p className="text-xs font-bold uppercase tracking-wider text-[#006FE6]">New booking</p><h1 className="mt-1 text-2xl font-bold">Create a reservation</h1><p className="mt-1 text-sm text-[#667085]">Your progress is preserved in this browser session.</p></div>{bookingReference&&<div className="flex flex-col gap-2 sm:flex-row sm:items-stretch"><div className="w-fit rounded-xl border border-[#B2DDFF] bg-[#EFF8FF] px-4 py-2 text-sm text-[#175CD3]">Booking ID <strong className="ml-1 text-xl text-[#004EAA]">#{bookingReference.publicNumber}</strong></div><BookingCnicDrawer bookingReference={bookingReference}/><Button type="button" variant="secondary" disabled={clearing} onClick={()=>void clearBooking()}><X size={16}/>{clearing?"Clearing…":"Clear"}</Button></div>}</div>
       {dataError && <p className="rounded-lg border border-[#FEDF89] bg-[#FFFAEB] px-3 py-2 text-xs text-[#93370D]">{dataError}</p>}
       <ol className="grid grid-cols-5 gap-1" aria-label="Booking steps">
         {steps.map((label, index) => <li key={label} className={`rounded-lg px-2 py-2 text-center text-[11px] font-semibold sm:text-xs ${index === step ? "bg-[#006FE6] text-white" : index < step ? "bg-[#EAF4FF] text-[#0058B8]" : "bg-[#F2F4F7] text-[#667085]"}`}>{index + 1}. {label}</li>)}
       </ol>
       <section className="rounded-xl border border-[#E4E7EC] bg-white p-5">
-        {step === 0 && <ScheduleStep draft={draft} setDraft={setDraft} cities={cities} onCityCreated={city=>setSavedCities(current=>[...new Set([...current,city])].sort())} />}
+        {step === 0 && <ScheduleStep draft={draft} setDraft={setDraft} cities={cities} drivers={drivers} onCityCreated={city=>setSavedCities(current=>[...new Set([...current,city])].sort())} />}
         {step === 1 && <VehicleStep draft={draft} setDraft={setDraft} vehicles={eligibleVehicles} conflictMode={conflictMode} clearConflict={() => setConflictMode(false)} />}
         {step === 2 && <CustomerStep draft={draft} setDraft={setDraft} customers={customers} bookingReference={bookingReference} onCustomerCreated={(c) => setCustomers((prev) => [...prev, c])} />}
         {step === 3 && <PricingStep draft={draft} setDraft={setDraft} days={days} total={total} />}
@@ -335,7 +368,7 @@ function BookingCnicDrawer({ bookingReference }: { bookingReference: { id: strin
 
 // ─── Schedule step ───────────────────────────────────────────────────────────
 
-function ScheduleStep({ draft, setDraft, cities, onCityCreated }: { draft: Draft; setDraft: (value: Draft) => void; cities: string[]; onCityCreated: (city:string)=>void }) {
+function ScheduleStep({ draft, setDraft, cities, drivers, onCityCreated }: { draft: Draft; setDraft: (value: Draft) => void; cities: string[]; drivers:DriverOption[]; onCityCreated: (city:string)=>void }) {
   const [cityInput,setCityInput]=useState(draft.city);
   const [pending,setPending]=useState(false);
   const [error,setError]=useState("");
@@ -344,6 +377,8 @@ function ScheduleStep({ draft, setDraft, cities, onCityCreated }: { draft: Draft
   async function addCity(){if(!cityInput.trim()||pending)return;setPending(true);setError("");const result=await createAgencyCityAction(cityInput);setPending(false);if(!result.ok){setError(result.error.message);return}onCityCreated(result.data.name);chooseCity(result.data.name)}
   return (
     <div className="grid gap-4 sm:grid-cols-2">
+      <FormSelect label="Rental type" value={draft.rentalMode} onChange={e=>setDraft({...draft,rentalMode:e.target.value as Draft["rentalMode"],driverId:e.target.value==="self_drive"?"":draft.driverId,renterSkipped:e.target.value==="self_drive"?false:draft.renterSkipped,vehicleId:"",dailyRate:0})} options={[{label:"Self drive",value:"self_drive"},{label:"With driver",value:"with_driver"}]}/>
+      {draft.rentalMode==="with_driver"?<FormSelect label="Driver" value={draft.driverId} onChange={e=>setDraft({...draft,driverId:e.target.value})} options={[{label:"Select a driver",value:""},...drivers.map(driver=>({label:`${driver.name} · ${driver.phone}`,value:driver.id}))]}/>:<div/>}
       <div>
         <label className="block">
           <span className="mb-1.5 block text-sm font-semibold text-[#344054]">Going to city</span>
@@ -362,6 +397,7 @@ function ScheduleStep({ draft, setDraft, cities, onCityCreated }: { draft: Draft
       <div />
       <FormInput label="Pickup" type="datetime-local" value={draft.from} onChange={(e) => setDraft({ ...draft, from: e.target.value })} />
       <FormInput label="Return" type="datetime-local" value={draft.to} onChange={(e) => setDraft({ ...draft, to: e.target.value })} />
+      {draft.rentalMode==="with_driver"&&<label className="flex items-center gap-2 rounded-lg border bg-[#F8FAFC] p-3 text-sm sm:col-span-2"><input type="checkbox" checked={draft.renterSkipped} onChange={e=>setDraft({...draft,renterSkipped:e.target.checked,customerId:e.target.checked?"":draft.customerId})}/>Skip renter details for this with-driver booking</label>}
     </div>
   );
 }
@@ -515,6 +551,7 @@ function CustomerStep({ draft, setDraft, customers, bookingReference, onCustomer
   return (
     <div>
       <h2 className="font-bold">Customer</h2>
+      {draft.rentalMode==="with_driver"&&draft.renterSkipped&&<div className="mt-3 rounded-lg border border-[#B2DDFF] bg-[#EFF8FF] p-3 text-sm text-[#175CD3]">Renter details are skipped for this with-driver booking. Continue to pricing, or untick the option in Schedule to attach a customer.</div>}
       <p className="mt-1 text-xs text-[#667085]">Use one search for name or phone, or add a new customer without leaving the booking.</p>
 
       <div className="mt-4 space-y-4">
