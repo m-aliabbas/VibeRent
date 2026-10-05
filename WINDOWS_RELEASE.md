@@ -64,6 +64,16 @@ VibeRent requests only `https://www.googleapis.com/auth/drive.file`. The refresh
 
 Restore is deliberately restart-only. VibeRent validates the archive, checks its checksum and SQLite integrity, creates a pre-restore safety backup, and stages the restore. The database and attachments are replaced before SQLite opens on the next application start.
 
+## OpenAI OCR credential
+
+The desktop build reads the CNIC OCR API key from `o1.json.enc`; it does not require `OPENAI_API_KEY` in the packaged `.env`. Generate or rotate the encrypted file directly from the ignored local environment without creating a plaintext JSON file:
+
+```bash
+npm run credentials:encrypt:openai
+```
+
+The command reads `OPENAI_API_KEY` from `.env.local`, writes only the encrypted `{ "api_key": "..." }` document, and the desktop packager requires and copies `o1.json.enc` into the standalone server bundle. Local web development continues to use `OPENAI_API_KEY` from `.env.local`.
+
 ## Local build
 
 Optionally create a local desktop configuration. If it is absent, the packager writes safe non-secret desktop defaults and the application generates its Better Auth secret on first launch:
@@ -84,7 +94,7 @@ NSIS installers must be built on Windows. `cargo check --release --manifest-path
 
 Create a public release-only repository named `m-aliabbas/viberent-releases`. Keep it empty except for `README.md`; the workflow refuses to publish if it contains other files.
 
-Configure `RELEASE_REPO_TOKEN`, a fine-grained token with **Contents: Read and write** for only `m-aliabbas/viberent-releases`. The release no longer requires `DESKTOP_ENV_FILE_BASE64`; the two encrypted credential resources are packaged directly.
+Configure `RELEASE_REPO_TOKEN`, a fine-grained token with **Contents: Read and write** for only `m-aliabbas/viberent-releases`. The release no longer requires `DESKTOP_ENV_FILE_BASE64`; the three encrypted credential resources are packaged directly.
 
 A manual **Windows Release** run creates a private 90-day Actions artifact. It does not publish publicly. A `v*` tag publishes only the installer, `SHA256SUMS.txt`, and `latest.json` to the release-only repository.
 

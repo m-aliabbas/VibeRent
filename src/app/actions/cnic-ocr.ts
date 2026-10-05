@@ -2,7 +2,11 @@
 
 import { requireRole } from "@/server/auth/authorize";
 import { getWebRequestContext } from "@/server/auth/session";
-import { CnicOcrError, createCnicOcrService } from "@/server/cnic-ocr";
+import {
+  CnicOcrError,
+  createCnicOcrService,
+  resolveOpenAiApiKey,
+} from "@/server/cnic-ocr";
 import {
   MAX_CNIC_IMAGE_BYTES,
 } from "@/server/cnic-ocr/cnic-ocr-service";
@@ -48,17 +52,18 @@ export async function extractCnicAction(formData: FormData): Promise<CnicOcrActi
         error: { code: "INVALID_IMAGE", message: "The image must be 10 MiB or smaller." },
       };
     }
-    if (!process.env.OPENAI_API_KEY?.trim()) {
+    const apiKey = await resolveOpenAiApiKey();
+    if (!apiKey) {
       return {
         ok: false,
         error: {
           code: "OPENAI_NOT_CONFIGURED",
-          message: "Add OPENAI_API_KEY to .env.local and restart VibeRent.",
+          message: "OpenAI OCR is not configured for this VibeRent installation.",
         },
       };
     }
 
-    const service = createCnicOcrService();
+    const service = createCnicOcrService({ apiKey });
     const data = await service.extract({
       front: {
         imageBytes: new Uint8Array(await frontImage.arrayBuffer()),

@@ -9,6 +9,7 @@ import {
 
 const DEFAULT_FIREBASE_FILENAME = "k1.json.enc";
 const DEFAULT_GOOGLE_DRIVE_FILENAME = "g1.json.enc";
+const DEFAULT_OPENAI_FILENAME = "o1.json.enc";
 
 export type FirebaseServiceAccount = {
   project_id?: string;
@@ -28,6 +29,10 @@ export type GoogleOAuthClient = {
 type GoogleOAuthDocument = {
   installed?: GoogleOAuthClient;
   web?: GoogleOAuthClient;
+};
+
+type OpenAiCredentialDocument = {
+  api_key?: string;
 };
 
 export class EncryptedCredentialError extends Error {
@@ -107,4 +112,21 @@ export function loadGoogleDriveClient() {
     return client;
   });
   return googleClientPromise;
+}
+
+let openAiApiKeyPromise: Promise<string> | undefined;
+
+export function loadOpenAiApiKey() {
+  openAiApiKeyPromise ??= loadEncryptedJson<OpenAiCredentialDocument>(
+    process.env.OPENAI_CREDENTIALS_ENC_PATH,
+    DEFAULT_OPENAI_FILENAME,
+    "OpenAI",
+  ).then(document => {
+    const apiKey = document.api_key?.trim();
+    if (!apiKey) {
+      throw new EncryptedCredentialError("OpenAI credentials are incomplete.");
+    }
+    return apiKey;
+  });
+  return openAiApiKeyPromise;
 }

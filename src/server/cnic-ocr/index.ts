@@ -2,6 +2,10 @@ import "server-only";
 
 import OpenAI from "openai";
 
+import {
+  EncryptedCredentialError,
+  loadOpenAiApiKey,
+} from "@/server/desktop/encrypted-credentials";
 import { CnicOcrService } from "./cnic-ocr-service";
 import {
   OpenAiCnicOcrGateway,
@@ -11,6 +15,20 @@ import {
 export type CreateCnicOcrServiceOptions = OpenAiCnicOcrGatewayOptions & {
   apiKey?: string;
 };
+
+export async function resolveOpenAiApiKey(apiKey?: string) {
+  const explicitApiKey = apiKey?.trim();
+  if (explicitApiKey) return explicitApiKey;
+  if (process.env.VIBERENT_DESKTOP === "1") {
+    try {
+      return await loadOpenAiApiKey();
+    } catch (error) {
+      if (error instanceof EncryptedCredentialError) return undefined;
+      throw error;
+    }
+  }
+  return process.env.OPENAI_API_KEY?.trim() || undefined;
+}
 
 export function createCnicOcrService(
   options: CreateCnicOcrServiceOptions = {},

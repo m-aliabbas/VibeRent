@@ -23,7 +23,7 @@ for (const [source, destination] of [
   await cp(source, destination, { recursive: true });
 }
 
-for (const filename of ["k1.json.enc", "g1.json.enc"]) {
+for (const filename of ["k1.json.enc", "g1.json.enc", "o1.json.enc"]) {
   const source = path.join(root, filename);
   await requirePath(source, `Missing encrypted desktop credential: ${filename}`);
   await copyFile(source, path.join(standalone, filename));

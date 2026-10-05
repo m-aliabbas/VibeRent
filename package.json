@@ -3,6 +3,7 @@
   "version": "1.0.5",
   "private": true,
   "scripts": {
+    "predev": "npm run db:migrate",
     "dev": "next dev",
     "build": "next build --webpack",
     "start": "next start",
@@ -21,6 +22,7 @@
     "license:test": "tsx --test tests/license-policy.test.ts",
     "license:test:web": "node scripts/run-license-web-test.mjs",
     "credentials:encrypt": "tsx scripts/secure-credentials.ts",
+    "credentials:encrypt:openai": "tsx scripts/secure-openai-credential.ts",
     "whatsapp:connect": "tsx scripts/whatsapp-connect.ts",
     "whatsapp:web-test": "tsx scripts/whatsapp-web-test.ts",
     "whatsapp:test": "tsx --test tests/whatsapp-*.test.ts",
