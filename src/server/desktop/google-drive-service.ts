@@ -4,8 +4,8 @@ import { createReadStream, createWriteStream } from "node:fs";
 import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
-import { google } from "googleapis";
-import type { Credentials } from "google-auth-library";
+import { OAuth2Client, type Credentials } from "google-auth-library";
+import { drive as createDriveClient } from "googleapis/build/src/apis/drive";
 import {
   EncryptedCredentialError,
   loadGoogleDriveClient,
@@ -39,7 +39,7 @@ function redirectUri() {
 async function oauthClient() {
   try {
     const client = await loadGoogleDriveClient();
-    return new google.auth.OAuth2(client.client_id, client.client_secret, redirectUri());
+    return new OAuth2Client(client.client_id, client.client_secret, redirectUri());
   } catch (error) {
     if (error instanceof EncryptedCredentialError) {
       throw new GoogleDriveBackupError(error.message);
@@ -97,7 +97,7 @@ export async function completeGoogleDriveAuthorization(code: string, state: stri
     throw new GoogleDriveBackupError("Google did not return long-term backup access. Disconnect and try again.");
   }
   client.setCredentials(tokens);
-  const drive = google.drive({ version: "v3", auth: client });
+  const drive = createDriveClient({ version: "v3", auth: client });
   const about = await drive.about.get({ fields: "user(displayName,emailAddress)" });
   const session: DriveSession = {
     credentials: tokens,
@@ -130,7 +130,7 @@ async function authenticatedDrive() {
       credentials: { ...session.credentials, ...tokens },
     } satisfies DriveSession);
   });
-  return { drive: google.drive({ version: "v3", auth: client }), session };
+  return { drive: createDriveClient({ version: "v3", auth: client }), session };
 }
 
 async function getOrCreateFolder() {
