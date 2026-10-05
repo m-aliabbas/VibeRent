@@ -164,7 +164,7 @@ function PaymentDialog({
     });
     setPending(false);
     if (result.ok) {
-      onSave(result.data, "Payment posted and receipt prepared.");
+      onSave(result.data, `Payment posted. ${result.data.notificationDelivery.message}`);
     } else {
       setError(result.error.message || "Failed to record payment.");
     }

@@ -72,6 +72,13 @@ export class SqliteWhatsAppAuthStore {
 
       CREATE INDEX IF NOT EXISTS whatsapp_messages_session_created_idx
         ON whatsapp_messages (session_id, created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS whatsapp_session_leases (
+        session_id TEXT PRIMARY KEY,
+        holder_id TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        updated_at TEXT NOT NULL
+      );
     `);
   }
 
@@ -191,12 +198,49 @@ export class SqliteWhatsAppAuthStore {
   }
 
   getMessage(sessionId: string, remoteJid: string, messageId: string): WAMessageContent | undefined {
-    const row = this.database.prepare(`
+    const exact = this.database.prepare(`
       SELECT payload
       FROM whatsapp_messages
       WHERE session_id = ? AND remote_jid = ? AND message_id = ?
     `).get(sessionId, remoteJid, messageId) as { payload: string } | undefined;
+    const row = exact ?? this.database.prepare(`
+      SELECT payload
+      FROM whatsapp_messages
+      WHERE session_id = ? AND message_id = ?
+      ORDER BY created_at DESC
+      LIMIT 1
+    `).get(sessionId, messageId) as { payload: string } | undefined;
     return row ? deserialize<WAMessageContent>(row.payload) : undefined;
+  }
+
+  acquireSessionLease(sessionId: string, holderId: string, ttlMs: number): boolean {
+    const now = Date.now();
+    const result = this.database.prepare(`
+      INSERT INTO whatsapp_session_leases (session_id, holder_id, expires_at, updated_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(session_id) DO UPDATE SET
+        holder_id = excluded.holder_id,
+        expires_at = excluded.expires_at,
+        updated_at = excluded.updated_at
+      WHERE whatsapp_session_leases.holder_id = excluded.holder_id
+         OR whatsapp_session_leases.expires_at <= ?
+    `).run(sessionId, holderId, now + ttlMs, new Date(now).toISOString(), now);
+    return result.changes === 1;
+  }
+
+  refreshSessionLease(sessionId: string, holderId: string, ttlMs: number): boolean {
+    const now = Date.now();
+    const result = this.database.prepare(`
+      UPDATE whatsapp_session_leases
+      SET expires_at = ?, updated_at = ?
+      WHERE session_id = ? AND holder_id = ? AND expires_at > ?
+    `).run(now + ttlMs, new Date(now).toISOString(), sessionId, holderId, now);
+    return result.changes === 1;
+  }
+
+  releaseSessionLease(sessionId: string, holderId: string): void {
+    this.database.prepare("DELETE FROM whatsapp_session_leases WHERE session_id = ? AND holder_id = ?")
+      .run(sessionId, holderId);
   }
 
   saveMessage(

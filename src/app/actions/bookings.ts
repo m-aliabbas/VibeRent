@@ -20,6 +20,7 @@ import type { BookingListItem } from "@/server/repositories/contracts";
 import type { ConfirmBookingInput, RecordDepositInput, RecordPaymentInput, ReverseTransactionInput } from "@/server/validation/booking";
 import type { CheckInRentalInput, RentalInspectionInput } from "@/server/validation/rental-operation";
 import { deliverRentalAgreement, type AgreementDeliveryResult } from "@/server/services/agreement-delivery-service";
+import { deliverCheckinInvoice, deliverCheckoutNotice, deliverPaymentInvoice } from "@/server/services/notification-delivery-service";
 
 export type ConfirmBookingActionResult =
   | { ok: true; data: ReturnType<typeof confirmBooking> & { agreementDelivery: AgreementDeliveryResult } }
@@ -72,19 +73,21 @@ export async function amendBookingAction(bookingId:string,input:{vehicleId:strin
 }
 
 export async function checkOutRentalAction(bookingId: string, input: RentalInspectionInput) {
-  try { return { ok: true as const, data: checkOutRental(await getWebRequestContext(), bookingId, input) }; }
+  try { const context=await getWebRequestContext();const data=checkOutRental(context,bookingId,input);const notificationDelivery=await deliverCheckoutNotice(context,bookingId);return { ok: true as const, data:{...data,notificationDelivery} }; }
   catch (error) { const issue=asDomainError(error);return {ok:false as const,error:{code:issue.code,message:issue.message,fieldErrors:issue.fieldErrors??{}}}; }
 }
 
 export async function checkInRentalAction(bookingId: string, input: CheckInRentalInput) {
-  try { return { ok: true as const, data: checkInRental(await getWebRequestContext(), bookingId, input) }; }
+  try { const context=await getWebRequestContext();const data=checkInRental(context,bookingId,input);const notificationDelivery=await deliverCheckinInvoice(context,bookingId);return { ok: true as const, data:{...data,notificationDelivery} }; }
   catch (error) { const issue=asDomainError(error);return {ok:false as const,error:{code:issue.code,message:issue.message,fieldErrors:issue.fieldErrors??{}}}; }
 }
 
 export async function recordBookingPaymentAction(bookingId: string, input: RecordPaymentInput) {
   try {
-    const data = recordBookingPayment(await getWebRequestContext(), bookingId, input);
-    return { ok: true as const, data };
+    const context=await getWebRequestContext();
+    const data = recordBookingPayment(context, bookingId, input);
+    const notificationDelivery=await deliverPaymentInvoice(context,bookingId,input);
+    return { ok: true as const, data:{...data,notificationDelivery} };
   } catch (error) {
     const issue = asDomainError(error);
     return { ok: false as const, error: { code: issue.code, message: issue.message, fieldErrors: issue.fieldErrors ?? {} } };

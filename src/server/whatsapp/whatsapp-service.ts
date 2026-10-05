@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { randomUUID } from "node:crypto";
 import makeWASocket, {
   DisconnectReason,
   downloadMediaMessage,
@@ -49,6 +50,9 @@ export class WhatsAppService extends EventEmitter {
   private readonly authStore: SqliteWhatsAppAuthStore;
   private socket?: WASocket;
   private reconnectTimer?: NodeJS.Timeout;
+  private leaseTimer?: NodeJS.Timeout;
+  private readonly leaseHolderId = randomUUID();
+  private readonly leaseTtlMs = 30_000;
   private stopped = true;
   private status: WhatsAppConnectionStatus = "idle";
 
@@ -73,16 +77,29 @@ export class WhatsAppService extends EventEmitter {
 
   async start(): Promise<void> {
     if (!this.stopped) return;
+    if (!this.authStore.acquireSessionLease(this.options.sessionId, this.leaseHolderId, this.leaseTtlMs)) {
+      throw new Error("This WhatsApp session is already active in another VibeRent process.");
+    }
     this.stopped = false;
-    await this.connect();
+    this.startLeaseHeartbeat();
+    try {
+      await this.connect();
+    } catch (error) {
+      this.stopped = true;
+      this.stopLeaseHeartbeat();
+      this.authStore.releaseSessionLease(this.options.sessionId, this.leaseHolderId);
+      throw error;
+    }
   }
 
   async stop(): Promise<void> {
     this.stopped = true;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
+    this.stopLeaseHeartbeat();
     this.socket?.end(undefined);
     this.socket = undefined;
+    this.authStore.releaseSessionLease(this.options.sessionId, this.leaseHolderId);
     this.setStatus("disconnected");
   }
 
@@ -95,9 +112,11 @@ export class WhatsAppService extends EventEmitter {
     this.stopped = true;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
+    this.stopLeaseHeartbeat();
     if (this.socket) await this.socket.logout("VibeRent WhatsApp session logged out");
     this.socket = undefined;
     this.authStore.clearSession(this.options.sessionId);
+    this.authStore.releaseSessionLease(this.options.sessionId, this.leaseHolderId);
     this.setStatus("logged_out");
   }
 
@@ -193,6 +212,7 @@ export class WhatsAppService extends EventEmitter {
       }
 
       if (update.connection === "close") {
+        if (this.socket !== socket) return;
         const code = disconnectStatusCode(update.lastDisconnect?.error);
         const loggedOut = code === DisconnectReason.loggedOut;
         this.socket = undefined;
@@ -200,7 +220,9 @@ export class WhatsAppService extends EventEmitter {
         this.emit("disconnected", { code, loggedOut });
         if (loggedOut) {
           this.stopped = true;
+          this.stopLeaseHeartbeat();
           this.authStore.clearSession(this.options.sessionId);
+          this.authStore.releaseSessionLease(this.options.sessionId, this.leaseHolderId);
         } else if (!this.stopped) {
           this.scheduleReconnect();
         }
@@ -280,6 +302,26 @@ export class WhatsAppService extends EventEmitter {
         this.scheduleReconnect();
       });
     }, this.options.reconnectDelayMs);
+  }
+
+  private startLeaseHeartbeat(): void {
+    this.stopLeaseHeartbeat();
+    this.leaseTimer = setInterval(() => {
+      if (this.stopped) return;
+      if (this.authStore.refreshSessionLease(this.options.sessionId, this.leaseHolderId, this.leaseTtlMs)) return;
+      this.stopped = true;
+      this.socket?.end(new Error("WhatsApp session lease was lost."));
+      this.socket = undefined;
+      this.setStatus("disconnected");
+      this.emit("error", new Error("WhatsApp session lease was lost to another process."));
+      this.stopLeaseHeartbeat();
+    }, Math.floor(this.leaseTtlMs / 3));
+    this.leaseTimer.unref?.();
+  }
+
+  private stopLeaseHeartbeat(): void {
+    if (this.leaseTimer) clearInterval(this.leaseTimer);
+    this.leaseTimer = undefined;
   }
 
   private requireSocket(): WASocket {

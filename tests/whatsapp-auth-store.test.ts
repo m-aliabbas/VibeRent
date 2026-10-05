@@ -60,3 +60,34 @@ test("persists credentials and Signal keys in the dedicated SQLite database", as
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("allows only one live process lease per WhatsApp session", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "viberent-whatsapp-lease-"));
+  const databasePath = path.join(directory, "whatsapp.db");
+  try {
+    const first = new SqliteWhatsAppAuthStore(databasePath);
+    const second = new SqliteWhatsAppAuthStore(databasePath);
+    assert.equal(first.acquireSessionLease("agency-one", "process-a", 30_000), true);
+    assert.equal(second.acquireSessionLease("agency-one", "process-b", 30_000), false);
+    assert.equal(first.refreshSessionLease("agency-one", "process-a", 30_000), true);
+    first.releaseSessionLease("agency-one", "process-a");
+    assert.equal(second.acquireSessionLease("agency-one", "process-b", 30_000), true);
+    first.close();
+    second.close();
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("finds retained retry content when WhatsApp changes the remote JID", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "viberent-whatsapp-retry-"));
+  const databasePath = path.join(directory, "whatsapp.db");
+  try {
+    const store = new SqliteWhatsAppAuthStore(databasePath);
+    store.saveMessage("agency-one", "12345@lid", "message-one", { conversation: "receipt" });
+    assert.equal(store.getMessage("agency-one", "923001234567@s.whatsapp.net", "message-one")?.conversation, "receipt");
+    store.close();
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

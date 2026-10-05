@@ -85,6 +85,13 @@ export async function sendWhatsAppDocument(agencyId:string,phoneNumber:string,in
   return entry.service.sendDocument(phoneNumber,input);
 }
 
+export async function sendWhatsAppText(agencyId:string,phoneNumber:string,text:string){
+  const entry=runtimes.get(agencyId);
+  if(!entry)throw new Error("WhatsApp is not connected.");
+  if(entry.status!=="connected")await waitForConnection(entry,15_000);
+  return entry.service.sendText(phoneNumber,text);
+}
+
 function waitForConnection(entry:RuntimeEntry,timeoutMs:number){
   if(entry.status==="connected")return Promise.resolve();
   return new Promise<void>((resolve,reject)=>{

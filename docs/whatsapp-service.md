@@ -7,7 +7,7 @@ This unit connects one or more WhatsApp sessions through Baileys without being w
 - Auth credentials and Signal keys are stored in the dedicated `.data/whatsapp.db` SQLite database by default.
 - Override the location with `WHATSAPP_DATABASE_PATH`.
 - Use a distinct `WHATSAPP_SESSION_ID` for each linked WhatsApp account.
-- Run only one active process for a given session ID. SQLite WAL supports the adapter's durable writes, but two Baileys sockets must not control the same linked session.
+- Only one active process may control a session ID. The adapter enforces this with a renewable SQLite lease; a second process fails closed instead of opening a stale Baileys socket. A crashed process's lease expires after 30 seconds.
 - The database contains long-lived private keys. It is gitignored and created with owner-only file permissions. Keep it on persistent private storage and include it in encrypted backups.
 
 The main VibeRent database is not read or modified by this unit.
@@ -48,6 +48,20 @@ It binds only to localhost and uses a random per-process token for its API calls
 Incoming image commands use an exact caption such as `/add be-213`. The image is written to `.data/whatsapp-images/be-213/` with a UTC timestamp and WhatsApp message ID in the filename. Override the root with `WHATSAPP_IMAGE_INBOX_PATH`. Folder names may contain letters, numbers, and internal hyphens only.
 
 Sent message content is retained in the dedicated WhatsApp SQLite database (latest 500 messages per session) so Baileys can satisfy WhatsApp retry requests. This specifically supports recovery from the recipient-side “message is waiting” state for newly sent documents and media.
+
+Retry lookup first uses the exact remote JID, then falls back to the message ID within the same session. This supports WhatsApp retry requests when the recipient is addressed by a phone-number JID on one event and a LID on another.
+
+## VibeRent workflow delivery
+
+The connected agency session now sends these post-transaction notifications:
+
+- vehicle checkout: customer PDF receipt with the checkout odometer and fuel level;
+- vehicle check-in: customer final invoice with checkout/check-in odometers, distance, paid total, and balance;
+- recorded booking payment: customer PDF payment receipt;
+- owner payout: owner PDF payout receipt; and
+- owner-allocated expense: owner WhatsApp message with date, vehicle, category, description, and amount.
+
+Database changes commit before network delivery. A WhatsApp failure does not undo a checkout, check-in, payment, payout, or expense; it returns a warning to the UI and writes a safe delivery-failure audit event.
 
 ### Terminal harness
 

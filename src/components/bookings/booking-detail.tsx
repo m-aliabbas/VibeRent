@@ -47,9 +47,9 @@ export function BookingDetail({initial,vehicles}:{initial:BookingListItem;vehicl
     <DetailPanel title="Activity"><Timeline items={[{id:"1",title:`Booking ${booking.status.toLowerCase()}`,detail:`${booking.customer} · ${formatPkr(total)}`,time:"Latest",icon:<CheckCircle2 size={16}/>},{id:"2",title:"Availability reserved",detail:`${booking.plate} assigned`,time:"At confirmation",icon:<Car size={16}/>} ]}/></DetailPanel>
     {mode==="amend"&&<AmendDialog booking={booking} vehicles={vehicles} onClose={()=>setMode(undefined)} onSave={next=>{setBooking(next);setMode(undefined);setNotice("Booking amended and availability atomically rechecked.")}}/>}
     {mode==="cancel"&&<SimpleDialog title="Cancel booking" description="Cancellation requires finance review for any paid amount." onClose={()=>setMode(undefined)}><p className="mt-5 text-sm text-[#667085]">Cancellation persistence is not part of this amendment flow yet.</p></SimpleDialog>}
-    {mode==="checkout"&&<CheckoutDialog booking={booking} onClose={()=>setMode(undefined)} onSave={updated=>{setBooking(updated);setMode(undefined);setNotice("Rental checkout and handover inspection saved.")}}/>}
+    {mode==="checkout"&&<CheckoutDialog booking={booking} onClose={()=>setMode(undefined)} onSave={updated=>{setBooking(updated);setMode(undefined);setNotice(`Rental checkout saved. ${(updated as BookingListItem&{notificationDelivery:{message:string}}).notificationDelivery.message}`)}}/>}
     {mode==="extend"&&<ExtensionDialog booking={booking} onClose={()=>setMode(undefined)} onSave={(next,charge)=>{setBooking({...booking,...next});setMode(undefined);setNotice(`Rental extended. ${formatPkr(charge)} added.`)}}/>}
-    {mode==="return"&&<ReturnDialog booking={booking} onClose={()=>setMode(undefined)} onComplete={updated=>{setBooking(updated);setMode(undefined);setNotice("Return inspection saved and rental completed.")}}/>}
+    {mode==="return"&&<ReturnDialog booking={booking} onClose={()=>setMode(undefined)} onComplete={updated=>{setBooking(updated);setMode(undefined);setNotice(`Rental completed. ${(updated as BookingListItem&{notificationDelivery:{message:string}}).notificationDelivery.message}`)}}/>}
     {mode==="terms"&&<TermsDialog booking={booking} onClose={()=>setMode(undefined)}/>} 
   </div>;
 }
