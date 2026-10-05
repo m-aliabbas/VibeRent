@@ -1,16 +1,19 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { ArrowLeft, Check, Loader2, Plus, ShieldAlert, X } from "lucide-react";
 
-import { confirmBookingAction } from "@/app/actions/bookings";
+import { confirmBookingAction, startBookingAction } from "@/app/actions/bookings";
 import { listCustomersAction, createCustomerAction } from "@/app/actions/customers";
 import { listVehiclesAction } from "@/app/actions/vehicles";
 import { listBookingsAction } from "@/app/actions/bookings";
 import { createAgencyCityAction, listAgencyCitiesAction } from "@/app/actions/catalogs";
+import { getBookingCnicAction, uploadBookingCnicAction } from "@/app/actions/booking-cnic";
+import { CnicDocumentDrawer } from "@/components/customers/cnic-document-drawer";
 import { FormInput } from "@/components/forms/form-controls";
 import { Button } from "@/components/ui/button";
+import { cnicExtractionKey, mergeCnicExtraction, type CnicExtractedValues, type CnicIntake } from "@/lib/cnic-intake";
 import { formatPkr } from "@/lib/utils";
 import type { Vehicle } from "@/types/vehicle";
 import type { BookingListItem } from "@/server/repositories/contracts";
@@ -24,6 +27,9 @@ type CustomerDto = {
   phone: string;
   cnic: string;
   email: string | null;
+  dateOfBirth: string | null;
+  address: string | null;
+  cnicExpiresAt: string | null;
   licenseNumber: string | null;
   licenseExpiresAt: string | null;
   status: string;
@@ -115,6 +121,7 @@ export function BookingWizard() {
   const [conflictMode, setConflictMode] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
+  const [bookingReference, setBookingReference] = useState<{ id: string; publicNumber: number }>();
 
   // Server data
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
@@ -145,11 +152,13 @@ export function BookingWizard() {
     async function load() {
       setDataLoading(true);
       setDataError("");
-      const [vResult, bResult, cResult, cityResult] = await Promise.all([
+      const savedReference = sessionStorage.getItem("viberent-booking-reference");
+      const [vResult, bResult, cResult, cityResult, referenceResult] = await Promise.all([
         listVehiclesAction(),
         listBookingsAction(),
         listCustomersAction(),
         listAgencyCitiesAction(),
+        startBookingAction(savedReference || undefined),
       ]);
       if (cancelled) return;
       const errors: string[] = [];
@@ -161,6 +170,10 @@ export function BookingWizard() {
       else errors.push(`Customers: ${cResult.error.message}`);
       if (cityResult.ok) setSavedCities(cityResult.data.map(item=>item.name));
       else errors.push(`Cities: ${cityResult.error.message}`);
+      if (referenceResult.ok) {
+        setBookingReference(referenceResult.data);
+        sessionStorage.setItem("viberent-booking-reference", referenceResult.data.id);
+      } else errors.push(`Booking number: ${referenceResult.error.message}`);
       if (errors.length) setDataError(errors.join(" · "));
       setDataLoading(false);
     }
@@ -197,10 +210,11 @@ export function BookingWizard() {
 
   async function confirm(event: FormEvent) {
     event.preventDefault();
-    if (!vehicle || !draft.customerId || submitting) return;
+    if (!vehicle || !draft.customerId || !bookingReference || submitting) return;
     setSubmitting(true);
     setSubmitError("");
     const result = await confirmBookingAction({
+      bookingDraftId: bookingReference.id,
       vehicleId: vehicle.id,
       customerId: draft.customerId,
       destinationCity: draft.city,
@@ -225,6 +239,7 @@ export function BookingWizard() {
       return;
     }
     sessionStorage.removeItem("viberent-booking-draft");
+    sessionStorage.removeItem("viberent-booking-reference");
     setConfirmed(result.data.id);
   }
 
@@ -233,7 +248,7 @@ export function BookingWizard() {
       <div className="mx-auto max-w-2xl rounded-xl border border-[#ABEFC6] bg-white p-8 text-center">
         <span className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-[#ECFDF3] text-[#067647]"><Check size={28} /></span>
         <h1 className="mt-4 text-2xl font-bold">Booking confirmed</h1>
-        <p className="mt-2 text-sm text-[#667085]">{confirmed} now persistently blocks {vehicle?.plate} for the selected interval.</p>
+        <p className="mt-2 text-sm text-[#667085]">Booking <strong className="text-[#101828]">#{bookingReference?.publicNumber}</strong> now persistently blocks {vehicle?.plate} for the selected interval.</p>
         <div className="mt-6 flex justify-center gap-2"><Button asChild><Link href="/bookings">View bookings</Link></Button></div>
       </div>
     );
@@ -261,7 +276,7 @@ export function BookingWizard() {
   return (
     <form onSubmit={confirm} className="space-y-6">
       <Link href="/bookings" className="inline-flex items-center gap-2 text-sm font-semibold text-[#475467]"><ArrowLeft size={17} />Bookings</Link>
-      <div><p className="text-xs font-bold uppercase tracking-wider text-[#006FE6]">New booking</p><h1 className="mt-1 text-2xl font-bold">Create a reservation</h1><p className="mt-1 text-sm text-[#667085]">Your progress is preserved in this browser session.</p></div>
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between"><div><p className="text-xs font-bold uppercase tracking-wider text-[#006FE6]">New booking</p><h1 className="mt-1 text-2xl font-bold">Create a reservation</h1><p className="mt-1 text-sm text-[#667085]">Your progress is preserved in this browser session.</p></div>{bookingReference&&<div className="flex flex-col gap-2 sm:flex-row sm:items-stretch"><div className="w-fit rounded-xl border border-[#B2DDFF] bg-[#EFF8FF] px-4 py-2 text-sm text-[#175CD3]">Booking ID <strong className="ml-1 text-xl text-[#004EAA]">#{bookingReference.publicNumber}</strong></div><BookingCnicDrawer bookingReference={bookingReference}/></div>}</div>
       {dataError && <p className="rounded-lg border border-[#FEDF89] bg-[#FFFAEB] px-3 py-2 text-xs text-[#93370D]">{dataError}</p>}
       <ol className="grid grid-cols-5 gap-1" aria-label="Booking steps">
         {steps.map((label, index) => <li key={label} className={`rounded-lg px-2 py-2 text-center text-[11px] font-semibold sm:text-xs ${index === step ? "bg-[#006FE6] text-white" : index < step ? "bg-[#EAF4FF] text-[#0058B8]" : "bg-[#F2F4F7] text-[#667085]"}`}>{index + 1}. {label}</li>)}
@@ -269,17 +284,53 @@ export function BookingWizard() {
       <section className="rounded-xl border border-[#E4E7EC] bg-white p-5">
         {step === 0 && <ScheduleStep draft={draft} setDraft={setDraft} cities={cities} onCityCreated={city=>setSavedCities(current=>[...new Set([...current,city])].sort())} />}
         {step === 1 && <VehicleStep draft={draft} setDraft={setDraft} vehicles={eligibleVehicles} conflictMode={conflictMode} clearConflict={() => setConflictMode(false)} />}
-        {step === 2 && <CustomerStep draft={draft} setDraft={setDraft} customers={customers} onCustomerCreated={(c) => setCustomers((prev) => [...prev, c])} />}
+        {step === 2 && <CustomerStep draft={draft} setDraft={setDraft} customers={customers} bookingReference={bookingReference} onCustomerCreated={(c) => setCustomers((prev) => [...prev, c])} />}
         {step === 3 && <PricingStep draft={draft} setDraft={setDraft} days={days} total={total} />}
         {step === 4 && <Review draft={draft} days={days} total={total} vehicle={vehicle} customers={customers} />}
       </section>
       {submitError && <p role="alert" className="rounded-lg border border-[#FDA29B] bg-[#FEF3F2] p-3 text-sm text-[#B42318]">{submitError}</p>}
       <div className="flex justify-between">
         <Button type="button" variant="secondary" disabled={step === 0 || submitting} onClick={() => setStep(step - 1)}>Back</Button>
-        {step < 4 ? <Button type="button" disabled={!canContinue} onClick={() => setStep(step + 1)}>Continue</Button> : <Button type="submit" disabled={submitting}>{submitting ? "Confirming…" : "Confirm booking"}</Button>}
+        {step < 4 ? <Button type="button" disabled={!canContinue||!bookingReference} onClick={() => setStep(step + 1)}>Continue</Button> : <Button type="submit" disabled={submitting||!bookingReference}>{submitting ? "Confirming…" : `Confirm booking #${bookingReference?.publicNumber ?? ""}`}</Button>}
       </div>
     </form>
   );
+}
+
+function BookingCnicDrawer({ bookingReference }: { bookingReference: { id: string; publicNumber: number } }) {
+  const [intake, setIntake] = useState<CnicIntake>();
+  const [loading, setLoading] = useState(false);
+  const [uploading, setUploading] = useState<"front"|"back"|null>(null);
+  const [error, setError] = useState("");
+
+  async function refresh(silent = false) {
+    if (!silent) setLoading(true);
+    const result = await getBookingCnicAction(bookingReference.id);
+    if (!silent) setLoading(false);
+    if (!result.ok) { if (!silent) setError(result.error.message); return; }
+    setIntake(result.data as CnicIntake);
+  }
+
+  useEffect(() => {
+    const initial = window.setTimeout(() => void refresh(), 0);
+    const timer = window.setInterval(() => void refresh(true), 5000);
+    return () => { window.clearTimeout(initial); window.clearInterval(timer); };
+    // The booking reference is stable for this wizard.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bookingReference.id]);
+
+  async function upload(side: "front"|"back", file: File|undefined) {
+    if (!file || uploading) return;
+    setUploading(side); setError("");
+    const data = new FormData();
+    data.set("bookingDraftId", bookingReference.id); data.set("side", side); data.set("image", file);
+    const result = await uploadBookingCnicAction(data);
+    setUploading(null);
+    if (!result.ok) { setError(result.error.message); return; }
+    setIntake(result.data as CnicIntake);
+  }
+
+  return <CnicDocumentDrawer label="Booking CNIC" commandHint={{bookingNumber:bookingReference.publicNumber}} intake={intake} loading={loading} uploading={uploading} error={error} onRefresh={() => void refresh()} onUpload={(side,file) => void upload(side,file)}/>;
 }
 
 // ─── Schedule step ───────────────────────────────────────────────────────────
@@ -364,21 +415,66 @@ function VehicleStep({ draft, setDraft, vehicles, conflictMode, clearConflict }:
 
 type NewCustomerFormErrors = Partial<Record<keyof CreateCustomerInput, string>>;
 
-function CustomerStep({ draft, setDraft, customers, onCustomerCreated }: {
+function CustomerStep({ draft, setDraft, customers, bookingReference, onCustomerCreated }: {
   draft: Draft;
   setDraft: (value: Draft) => void;
   customers: CustomerDto[];
+  bookingReference?: {id:string;publicNumber:number};
   onCustomerCreated: (c: CustomerDto) => void;
 }) {
   const [customerSearch, setCustomerSearch] = useState("");
   const [showNewForm, setShowNewForm] = useState(false);
-  const [newForm, setNewForm] = useState<CreateCustomerInput>({ name: "", phone: "", cnic: "", email: "", licenseNumber: "", licenseExpiresAt: "" });
+  const [newForm, setNewForm] = useState<CreateCustomerInput>({ name: "", phone: "", cnic: "", email: "", dateOfBirth:"", address:"", cnicExpiresAt:"", licenseNumber: "", licenseExpiresAt: "" });
   const [formErrors, setFormErrors] = useState<NewCustomerFormErrors>({});
   const [formSubmitting, setFormSubmitting] = useState(false);
   const [formSubmitError, setFormSubmitError] = useState("");
+  const [cnicIntake,setCnicIntake]=useState<CnicIntake>();
+  const [cnicLoading,setCnicLoading]=useState(false);
+  const [cnicUploading,setCnicUploading]=useState<"front"|"back"|null>(null);
+  const [cnicError,setCnicError]=useState("");
+  const lastExtraction=useRef<CnicExtractedValues | undefined>(undefined);
+  const lastExtractionKey=useRef("");
 
   const selected = customers.find((c) => c.id === draft.customerId);
   const matches=customerSearch.trim()?customers.filter(customer=>`${customer.name} ${customer.phone}`.toLowerCase().includes(customerSearch.trim().toLowerCase())).slice(0,8):customers.slice(0,8);
+
+  function applyExtracted(intake:CnicIntake){
+    const key=cnicExtractionKey(intake.extracted);
+    if(key===lastExtractionKey.current)return;
+    setNewForm(current=>mergeCnicExtraction(current,intake.extracted,lastExtraction.current));
+    lastExtraction.current=intake.extracted;
+    lastExtractionKey.current=key;
+  }
+
+  async function refreshCnic(silent=false){
+    if(!bookingReference||cnicLoading)return;
+    if(!silent)setCnicLoading(true);
+    const result=await getBookingCnicAction(bookingReference.id);
+    if(!silent)setCnicLoading(false);
+    if(!result.ok){if(!silent)setCnicError(result.error.message);return;}
+    const intake=result.data as CnicIntake;
+    setCnicIntake(intake);
+    if(intake.front||intake.back){if(!draft.customerId)setShowNewForm(true);applyExtracted(intake);}
+  }
+
+  useEffect(()=>{
+    if(!bookingReference)return;
+    const initial=window.setTimeout(()=>void refreshCnic(),0);
+    const timer=window.setInterval(()=>void refreshCnic(true),7000);
+    return()=>{window.clearTimeout(initial);window.clearInterval(timer);};
+    // The draft reference is stable for this booking wizard.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[bookingReference?.id]);
+
+  async function uploadCnic(side:"front"|"back",file:File|undefined){
+    if(!file||!bookingReference||cnicUploading)return;
+    setCnicUploading(side);setCnicError("");
+    const formData=new FormData();formData.set("bookingDraftId",bookingReference.id);formData.set("side",side);formData.set("image",file);
+    const result=await uploadBookingCnicAction(formData);
+    setCnicUploading(null);
+    if(!result.ok){setCnicError(result.error.message);return;}
+    const intake=result.data as CnicIntake;setCnicIntake(intake);if(!draft.customerId)setShowNewForm(true);applyExtracted(intake);
+  }
 
   async function handleCreateCustomer(e: FormEvent) {
     e.preventDefault();
@@ -390,6 +486,9 @@ function CustomerStep({ draft, setDraft, customers, onCustomerCreated }: {
       phone: newForm.phone,
       cnic: newForm.cnic,
       email: newForm.email || undefined,
+      dateOfBirth:newForm.dateOfBirth||undefined,
+      address:newForm.address||undefined,
+      cnicExpiresAt:newForm.cnicExpiresAt||undefined,
       licenseNumber: newForm.licenseNumber || undefined,
       licenseExpiresAt: newForm.licenseExpiresAt || undefined,
     });
@@ -410,7 +509,7 @@ function CustomerStep({ draft, setDraft, customers, onCustomerCreated }: {
     onCustomerCreated(result.data);
     setDraft({ ...draft, customerId: result.data.id });
     setShowNewForm(false);
-    setNewForm({ name: "", phone: "", cnic: "", email: "", licenseNumber: "", licenseExpiresAt: "" });
+    setNewForm({ name: "", phone: "", cnic: "", email: "", dateOfBirth:"", address:"", cnicExpiresAt:"", licenseNumber: "", licenseExpiresAt: "" });
   }
 
   return (
@@ -435,6 +534,17 @@ function CustomerStep({ draft, setDraft, customers, onCustomerCreated }: {
           </div>
         )}
 
+        {bookingReference&&<CnicDocumentDrawer
+          label="CNIC documents"
+          commandHint={{bookingNumber:bookingReference.publicNumber}}
+          intake={cnicIntake}
+          loading={cnicLoading}
+          uploading={cnicUploading}
+          error={cnicError}
+          onRefresh={()=>void refreshCnic()}
+          onUpload={(side,file)=>void uploadCnic(side,file)}
+        />}
+
         {/* New customer toggle */}
         {!showNewForm ? (
           <button
@@ -456,8 +566,14 @@ function CustomerStep({ draft, setDraft, customers, onCustomerCreated }: {
               <FormInput label="Phone" required type="tel" placeholder="03001234567" value={newForm.phone} onChange={(e) => setNewForm({ ...newForm, phone: e.target.value })} error={formErrors.phone} />
               <FormInput label="CNIC" required placeholder="3520212345679" value={newForm.cnic} onChange={(e) => setNewForm({ ...newForm, cnic: e.target.value })} error={formErrors.cnic} />
               <FormInput label="Email" type="email" placeholder="optional" value={newForm.email ?? ""} onChange={(e) => setNewForm({ ...newForm, email: e.target.value })} error={formErrors.email} />
+              <FormInput label="Date of birth" type="date" value={newForm.dateOfBirth ?? ""} onChange={(e) => setNewForm({ ...newForm, dateOfBirth: e.target.value })} error={formErrors.dateOfBirth} />
+              <FormInput label="CNIC expiry" type="date" value={newForm.cnicExpiresAt ?? ""} onChange={(e) => setNewForm({ ...newForm, cnicExpiresAt: e.target.value })} error={formErrors.cnicExpiresAt} />
               <FormInput label="License number" placeholder="optional" value={newForm.licenseNumber ?? ""} onChange={(e) => setNewForm({ ...newForm, licenseNumber: e.target.value })} error={formErrors.licenseNumber} />
               <FormInput label="License expiry" type="date" placeholder="YYYY-MM-DD" value={newForm.licenseExpiresAt ?? ""} onChange={(e) => setNewForm({ ...newForm, licenseExpiresAt: e.target.value })} error={formErrors.licenseExpiresAt} />
+              <label className="text-sm font-semibold text-[#344054] sm:col-span-2">Address
+                <textarea className="mt-1.5 min-h-20 w-full rounded-[9px] border border-[#D0D5DD] bg-white px-3 py-2 text-sm font-normal outline-none focus:border-[#006FE6] focus:ring-2 focus:ring-[#006FE6]/10" value={newForm.address??""} onChange={e=>setNewForm({...newForm,address:e.target.value})} placeholder="Address printed on CNIC"/>
+                {formErrors.address&&<span className="mt-1 block text-xs font-normal text-[#B42318]">{formErrors.address}</span>}
+              </label>
             </div>
             <div className="mt-3 flex justify-end gap-2">
               <Button type="button" variant="secondary" size="sm" onClick={() => { setShowNewForm(false); setFormErrors({}); setFormSubmitError(""); }}>Cancel</Button>

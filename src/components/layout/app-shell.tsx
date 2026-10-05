@@ -16,7 +16,7 @@ import {
   CircleHelp,
   Gauge,
   LogOut,
-  Menu,
+  Menu, MessageCircle,
   Search,
   ScanText,
   Settings,
@@ -41,6 +41,7 @@ const nav = [
   { label: "Expenses", href: "/expenses", icon: CircleDollarSign },
   { label: "Reports", href: "/reports", icon: BarChart3 },
   { label: "Owners", href: "/owners", icon: UserSquare2 },
+  { label: "WhatsApp", href: "/whatsapp", icon: MessageCircle },
   { label: "CNIC OCR", href: "/cnic-ocr", icon: ScanText },
   { label: "Settings", href: "/settings", icon: Settings },
 ];

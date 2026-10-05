@@ -1,6 +1,7 @@
 import { DomainError } from "@/server/domain/errors";
 
 export type ConfirmBookingInput = {
+  bookingDraftId?: string;
   vehicleId: string;
   customerId: string;
   destinationCity: string;
@@ -34,7 +35,7 @@ export function parseConfirmBookingInput(value: unknown): ConfirmBookingInput {
   if (input.dailyRateOverride !== undefined && !input.overrideReason?.trim()) errors.overrideReason = "Explain why the destination rate is being changed.";
   if (Object.keys(errors).length) throw new DomainError("VALIDATION_FAILED", "Review the booking details.", 400, errors);
   return {
-    vehicleId: input.vehicleId!, customerId: input.customerId!, destinationCity: input.destinationCity?.trim() || "Local", pickupAt: new Date(pickup).toISOString(), returnAt: new Date(returned).toISOString(),
+    bookingDraftId: input.bookingDraftId?.trim() || undefined, vehicleId: input.vehicleId!, customerId: input.customerId!, destinationCity: input.destinationCity?.trim() || "Local", pickupAt: new Date(pickup).toISOString(), returnAt: new Date(returned).toISOString(),
     extras: input.extras!, discount: input.discount!, depositRequired: input.depositRequired!, source: input.source?.trim() || "counter", notes: input.notes?.trim() || undefined, estimatedKm: input.estimatedKm ?? 0, dailyRateOverride: input.dailyRateOverride, overrideReason: input.overrideReason?.trim() || undefined,
   };
 }

@@ -1,6 +1,6 @@
 import { sqlite } from "@/db/connection";
 import { DomainError } from "@/server/domain/errors";
-import { confirmBooking } from "@/server/services/booking-service";
+import { confirmBooking, startBooking } from "@/server/services/booking-service";
 import type { RequestContext } from "@/server/context/request-context";
 
 const context: RequestContext = {
@@ -24,10 +24,15 @@ const input = {
 sqlite.prepare("DELETE FROM financial_transactions WHERE booking_id IN (SELECT id FROM bookings WHERE source = 'transaction-check')").run();
 sqlite.prepare("DELETE FROM audit_events WHERE entity_id IN (SELECT id FROM bookings WHERE source = 'transaction-check')").run();
 sqlite.prepare("DELETE FROM bookings WHERE source = 'transaction-check'").run();
-const first = confirmBooking(context, input);
+const firstDraft = startBooking(context);
+const first = confirmBooking(context, { ...input, bookingDraftId: firstDraft.id });
 let conflictProtected = false;
+let conflictDraftId = "";
 try {
-  confirmBooking(context, input);
+  const conflictDraft = startBooking(context);
+  conflictDraftId = conflictDraft.id;
+  if (conflictDraft.publicNumber === firstDraft.publicNumber) throw new Error("Booking numbers were not unique.");
+  confirmBooking(context, { ...input, bookingDraftId: conflictDraft.id });
 } catch (error) {
   conflictProtected = error instanceof DomainError && error.code === "BOOKING_CONFLICT";
 }
@@ -98,10 +103,14 @@ if (!auditReversal) throw new Error("Reversal audit event was not written.");
 sqlite.prepare("DELETE FROM financial_transactions WHERE booking_id = ?").run(first.id);
 sqlite.prepare("DELETE FROM audit_events WHERE entity_id = ?").run(first.id);
 sqlite.prepare("DELETE FROM bookings WHERE id = ?").run(first.id);
+sqlite.prepare("DELETE FROM audit_events WHERE entity_type='booking_draft' AND entity_id IN (?,?)").run(firstDraft.id, conflictDraftId);
+sqlite.prepare("DELETE FROM booking_drafts WHERE id IN (?,?)").run(firstDraft.id, conflictDraftId);
 
 console.log(JSON.stringify({
   ok: true,
   created: first.id,
+  publicNumber: first.publicNumber,
+  uniqueDraftNumbers: true,
   authoritativeTotal: first.totalAmount,
   overlapRejected: conflictProtected,
   paymentPersisted: true,

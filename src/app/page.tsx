@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowRight, BarChart3, CalendarDays, CarFront, CircleDollarSign, Clock3, FileText, Hand, MapPin, Plus, ReceiptText, TrendingUp, Users, Zap } from "lucide-react";
+import { ArrowRight, BarChart3, CalendarDays, CarFront, CircleDollarSign, Clock3, FileText, Hand, MapPin, Plus, ReceiptText, Users, Zap } from "lucide-react";
 import { TimeGreeting } from "@/components/dashboard/time-greeting";
 import { formatPkr } from "@/lib/utils";
 import { getSessionViewer, getWebRequestContext } from "@/server/auth/session";
@@ -18,8 +18,8 @@ export default async function Dashboard() {
   const stats = [
     { label: "Total Vehicles", value: String(data.totalVehicles), note: "View the full fleet", icon: CarFront, href: "/vehicles" },
     { label: "Active Rentals", value: String(data.activeRentals), note: "Open checked-out rentals", icon: CalendarDays, href: "/bookings?status=Checked+Out" },
-    { label: "Today’s Revenue", value: formatPkr(data.todayRevenue), note: "Review collection methods", icon: CircleDollarSign, href: "/reports?tab=Revenue+%26+collections" },
-    { label: "Utilization", value: `${data.utilization}%`, note: "Vehicles currently rented", icon: TrendingUp, href: "/vehicles?status=Booked" },
+    { label: "Total Income", value: formatPkr(data.totalIncome), note: `${formatPkr(data.monthRevenue)} this month`, icon: CircleDollarSign, href: "/reports?tab=Revenue+%26+collections" },
+    { label: "Today’s Expenses", value: formatPkr(data.todayExpenses), note: `${formatPkr(data.monthExpenses)} this month`, icon: ReceiptText, href: "/expenses" },
   ];
   const activityIcon = { booking: CalendarDays, vehicle: CarFront, customer: Users, finance: CircleDollarSign, other: FileText };
 

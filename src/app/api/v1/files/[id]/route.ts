@@ -10,7 +10,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     const auth = await getApiRequestContext(request); requestId = auth.requestId;
     const { id } = await context.params;
     const { file, bytes } = await readPrivateFile(auth, id);
-    const disposition = file.classification === "vehicle_photo" ? "inline" : "attachment";
+    const disposition = file.classification === "vehicle_document" ? "attachment" : "inline";
     return new Response(bytes, {
       headers: {
         "Content-Type": file.mimeType,

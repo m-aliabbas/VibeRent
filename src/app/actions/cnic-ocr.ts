@@ -25,14 +25,15 @@ export async function extractCnicAction(formData: FormData): Promise<CnicOcrActi
     const context = await getWebRequestContext();
     requireRole(context, ["agency_owner", "fleet_manager", "rental_agent"]);
 
-    const image = formData.get("image");
-    if (!(image instanceof File) || image.size === 0) {
+    const frontImage = formData.get("frontImage");
+    const backImage = formData.get("backImage");
+    if (!(frontImage instanceof File) || frontImage.size === 0 || !(backImage instanceof File) || backImage.size === 0) {
       return {
         ok: false,
-        error: { code: "INVALID_IMAGE", message: "Choose a CNIC image to analyze." },
+        error: { code: "INVALID_IMAGE", message: "Choose both the front and back CNIC images to analyze." },
       };
     }
-    if (!isSupportedMimeType(image.type)) {
+    if (!isSupportedMimeType(frontImage.type) || !isSupportedMimeType(backImage.type)) {
       return {
         ok: false,
         error: {
@@ -41,7 +42,7 @@ export async function extractCnicAction(formData: FormData): Promise<CnicOcrActi
         },
       };
     }
-    if (image.size > MAX_CNIC_IMAGE_BYTES) {
+    if (frontImage.size > MAX_CNIC_IMAGE_BYTES || backImage.size > MAX_CNIC_IMAGE_BYTES) {
       return {
         ok: false,
         error: { code: "INVALID_IMAGE", message: "The image must be 10 MiB or smaller." },
@@ -59,8 +60,14 @@ export async function extractCnicAction(formData: FormData): Promise<CnicOcrActi
 
     const service = createCnicOcrService();
     const data = await service.extract({
-      imageBytes: new Uint8Array(await image.arrayBuffer()),
-      mimeType: image.type,
+      front: {
+        imageBytes: new Uint8Array(await frontImage.arrayBuffer()),
+        mimeType: frontImage.type,
+      },
+      back: {
+        imageBytes: new Uint8Array(await backImage.arrayBuffer()),
+        mimeType: backImage.type,
+      },
     });
     return { ok: true, data };
   } catch (error) {

@@ -50,6 +50,27 @@
       "when": 1790965496617,
       "tag": "0006_known_gravity",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1791163585374,
+      "tag": "0007_sour_sway",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1791163709813,
+      "tag": "0008_wonderful_thunderbolt_ross",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1791174951514,
+      "tag": "0009_chemical_starfox",
+      "breakpoints": true
     }
   ]
 }

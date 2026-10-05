@@ -35,6 +35,10 @@ export async function prepareDesktopRuntime() {
 
   const license = await refreshDesktopLicense();
   startLicenseRefreshScheduler();
-  if (!license.enforced || license.state === "active") startBackupScheduler();
+  if (!license.enforced || license.state === "active") {
+    startBackupScheduler();
+    const { startConfiguredWhatsAppRuntimes } = await import("@/server/services/whatsapp-settings-service");
+    await startConfiguredWhatsAppRuntimes();
+  }
   console.info(JSON.stringify({ event: "desktop.ready", license: license.state }));
 }

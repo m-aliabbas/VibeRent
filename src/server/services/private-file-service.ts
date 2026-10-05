@@ -16,7 +16,7 @@ export type PrivateFileDto = {
   originalName: string;
   mimeType: string;
   size: number;
-  classification: "vehicle_photo" | "vehicle_document";
+  classification: "vehicle_photo" | "vehicle_document" | "customer_cnic_front" | "customer_cnic_back";
   createdAt: string;
   downloadUrl: string;
 };
@@ -36,6 +36,16 @@ function safeName(value: string) {
 function assertVehicle(context: RequestContext, entityId: string) {
   const row = sqlite.prepare(`SELECT id FROM vehicles WHERE agency_id=? AND id=? AND archived_at IS NULL LIMIT 1`).get(context.agencyId, entityId);
   if (!row) throw new DomainError("NOT_FOUND", "Vehicle not found.", 404);
+}
+
+function assertBookingDraft(context: RequestContext, entityId: string) {
+  const row = sqlite.prepare(`SELECT id FROM booking_drafts WHERE agency_id=? AND id=? LIMIT 1`).get(context.agencyId, entityId);
+  if (!row) throw new DomainError("NOT_FOUND", "Booking draft not found.", 404);
+}
+
+function assertCustomer(context: RequestContext, entityId: string) {
+  const row = sqlite.prepare(`SELECT id FROM customers WHERE agency_id=? AND id=? AND archived_at IS NULL LIMIT 1`).get(context.agencyId, entityId);
+  if (!row) throw new DomainError("NOT_FOUND", "Customer not found.", 404);
 }
 
 function toDto(row: PrivateFileRow): PrivateFileDto {
@@ -97,6 +107,8 @@ export async function readPrivateFile(context: RequestContext, id: string) {
     .get(context.agencyId, id) as PrivateFileRow | undefined;
   if (!row) throw new DomainError("NOT_FOUND", "File not found.", 404);
   if (row.entityType === "vehicle") assertVehicle(context, row.entityId);
+  if (row.entityType === "booking_draft") assertBookingDraft(context, row.entityId);
+  if (row.entityType === "customer") assertCustomer(context, row.entityId);
   const absolutePath = path.resolve(storageRoot, row.storageKey);
   if (!absolutePath.startsWith(`${storageRoot}${path.sep}`)) throw new DomainError("INTERNAL_ERROR", "File storage path is invalid.", 500);
   try { return { file: toDto(row), bytes: await readFile(absolutePath) }; }

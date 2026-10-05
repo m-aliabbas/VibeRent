@@ -6,7 +6,11 @@ import type { RequestContext } from "@/server/context/request-context";
 export type DashboardData = {
   totalVehicles: number;
   activeRentals: number;
+  totalIncome: number;
   todayRevenue: number;
+  monthRevenue: number;
+  todayExpenses: number;
+  monthExpenses: number;
   utilization: number;
   activeRentalRows: Array<{ id:string; customer:string; vehicle:string; plate:string; returnAt:string; destinationCity:string }>;
   schedule: Array<{ id: string; time: string; type: "Pickup" | "Return"; customer: string; vehicle: string; plate: string; location: string }>;
@@ -18,13 +22,19 @@ export function getDashboard(context: RequestContext): DashboardData {
   const localDate = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Karachi", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
   const start = new Date(`${localDate}T00:00:00+05:00`).toISOString();
   const end = new Date(`${localDate}T24:00:00+05:00`).toISOString();
+  const nextLocalDate = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Karachi", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(end));
+  const monthStart = new Date(`${localDate.slice(0, 7)}-01T00:00:00+05:00`).toISOString();
   const counts = sqlite.prepare(`
     SELECT
       (SELECT count(*) FROM vehicles WHERE agency_id=? AND archived_at IS NULL) AS totalVehicles,
       (SELECT count(*) FROM bookings WHERE agency_id=? AND status='checked_out') AS activeRentals,
+      (SELECT coalesce(sum(CASE WHEN lower(kind) IN ('refund','reversal') THEN -amount ELSE amount END),0) FROM financial_transactions WHERE agency_id=? AND status='posted' AND lower(kind) IN ('payment','deposit_applied','reversal','refund')) AS totalIncome,
       (SELECT coalesce(sum(CASE WHEN lower(kind) IN ('refund','reversal') THEN -amount ELSE amount END),0) FROM financial_transactions WHERE agency_id=? AND status='posted' AND lower(kind) IN ('payment','deposit_applied','reversal','refund') AND posted_at>=? AND posted_at<?) AS todayRevenue,
+      (SELECT coalesce(sum(CASE WHEN lower(kind) IN ('refund','reversal') THEN -amount ELSE amount END),0) FROM financial_transactions WHERE agency_id=? AND status='posted' AND lower(kind) IN ('payment','deposit_applied','reversal','refund') AND posted_at>=? AND posted_at<?) AS monthRevenue,
+      (SELECT coalesce(sum(amount),0) FROM expenses WHERE agency_id=? AND status='approved' AND occurred_on>=? AND occurred_on<?) AS todayExpenses,
+      (SELECT coalesce(sum(amount),0) FROM expenses WHERE agency_id=? AND status='approved' AND occurred_on>=? AND occurred_on<?) AS monthExpenses,
       (SELECT count(DISTINCT vehicle_id) FROM bookings WHERE agency_id=? AND status='checked_out') AS utilizedVehicles
-  `).get(context.agencyId, context.agencyId, context.agencyId, start, end, context.agencyId) as { totalVehicles: number; activeRentals: number; todayRevenue: number; utilizedVehicles: number };
+  `).get(context.agencyId, context.agencyId, context.agencyId, context.agencyId, start, end, context.agencyId, monthStart, end, context.agencyId, localDate, nextLocalDate, context.agencyId, `${localDate.slice(0,7)}-01`, nextLocalDate, context.agencyId) as { totalVehicles: number; activeRentals: number; totalIncome:number; todayRevenue: number; monthRevenue:number; todayExpenses:number; monthExpenses:number; utilizedVehicles: number };
   const scheduleRows = sqlite.prepare(`
     SELECT bk.id, bk.pickup_at AS pickupAt, bk.return_at AS returnAt, c.name AS customer,
       v.make || ' ' || v.model || ' ' || v.year AS vehicle, v.plate, br.name || ', ' || br.city AS location

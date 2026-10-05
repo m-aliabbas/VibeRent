@@ -6,8 +6,10 @@ export {
 } from "./pakistan-phone";
 export {
   parseAddImageCommand,
+  parseCnicImageCommand,
   saveAddImageCommand,
   type AddImageCommand,
+  type CnicImageCommand,
   type SavedIncomingImage,
 } from "./incoming-image-command";
 export { SqliteWhatsAppAuthStore } from "./sqlite-auth-store";

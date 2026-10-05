@@ -13,6 +13,7 @@ import {
   recordBookingDeposit,
   recordBookingPayment,
   reverseBookingTransaction,
+  startBooking,
 } from "@/server/services/booking-service";
 import type { BookingListItem } from "@/server/repositories/contracts";
 import type { ConfirmBookingInput, RecordDepositInput, RecordPaymentInput, ReverseTransactionInput } from "@/server/validation/booking";
@@ -21,6 +22,11 @@ import type { CheckInRentalInput, RentalInspectionInput } from "@/server/validat
 export type ConfirmBookingActionResult =
   | { ok: true; data: ReturnType<typeof confirmBooking> }
   | { ok: false; error: { code: string; message: string; fieldErrors: Record<string, string> } };
+
+export async function startBookingAction(existingDraftId?: string) {
+  try { return { ok: true as const, data: startBooking(await getWebRequestContext(), existingDraftId) }; }
+  catch (error) { const issue = asDomainError(error); return { ok: false as const, error: { code: issue.code, message: issue.message } }; }
+}
 
 export async function confirmBookingAction(input: ConfirmBookingInput): Promise<ConfirmBookingActionResult> {
   try { return { ok: true, data: confirmBooking(await getWebRequestContext(), input) }; }

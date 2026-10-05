@@ -2,9 +2,10 @@
 
 import * as Dialog from "@radix-ui/react-dialog";
 import Link from "next/link";
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Pencil, Plus, UserRound, X } from "lucide-react";
-import { createCustomerAction, listCustomersAction, updateCustomerAction } from "@/app/actions/customers";
+import { createCustomerAction, getCustomerCnicAction, listCustomersAction, startCustomerCnicDraftAction, updateCustomerAction, uploadCustomerCnicAction } from "@/app/actions/customers";
+import { CnicDocumentDrawer } from "@/components/customers/cnic-document-drawer";
 import { FormInput, FormSelect } from "@/components/forms/form-controls";
 import { EmptyState } from "@/components/shared/empty-state";
 import { FilterBar, FilterSelect } from "@/components/shared/filter-bar";
@@ -14,9 +15,12 @@ import { PageHeader } from "@/components/shared/page-header";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Toast } from "@/components/shared/toast";
 import { Button } from "@/components/ui/button";
+import { cnicExtractionKey, mergeCnicExtraction, type CnicExtractedValues, type CnicIntake } from "@/lib/cnic-intake";
+import type { CustomerCnicTarget } from "@/server/services/customer-cnic-service";
 
 type CustomerRecord = {
   id: string; name: string; phone: string; cnic: string; email: string | null;
+  dateOfBirth: string | null; address: string | null; cnicExpiresAt: string | null;
   licenseNumber: string | null; licenseExpiresAt: string | null; status: string;
   version: number; updatedAt: string;
 };
@@ -82,17 +86,80 @@ export function CustomersModule() {
 }
 
 function CustomerDialog({ record, onOpenChange, onSaved }: { record?: CustomerRecord; onOpenChange: (open: boolean) => void; onSaved: (item: CustomerRecord) => void }) {
-  const [form, setForm] = useState({ name: record?.name ?? "", phone: record?.phone ?? "", cnic: record?.cnic ?? "", email: record?.email ?? "", licenseNumber: record?.licenseNumber ?? "", licenseExpiresAt: record?.licenseExpiresAt ?? "", status: displayStatus(record?.status ?? "active") });
+  const [form, setForm] = useState({ name: record?.name ?? "", phone: record?.phone ?? "", cnic: record?.cnic ?? "", email: record?.email ?? "", dateOfBirth:record?.dateOfBirth??"", address:record?.address??"", cnicExpiresAt:record?.cnicExpiresAt??"", licenseNumber: record?.licenseNumber ?? "", licenseExpiresAt: record?.licenseExpiresAt ?? "", status: displayStatus(record?.status ?? "active") });
   const [errors, setErrors] = useState<Record<string,string>>({});
   const [message, setMessage] = useState("");
   const [pending, setPending] = useState(false);
+  const [cnicTarget, setCnicTarget] = useState<CustomerCnicTarget>();
+  const [cnicIntake, setCnicIntake] = useState<CnicIntake>();
+  const [cnicLoading, setCnicLoading] = useState(true);
+  const [cnicUploading, setCnicUploading] = useState<"front"|"back"|null>(null);
+  const [cnicError, setCnicError] = useState("");
+  const lastExtraction = useRef<CnicExtractedValues | undefined>(undefined);
+  const lastExtractionKey = useRef("");
+
+  function applyExtracted(intake: CnicIntake) {
+    const key = cnicExtractionKey(intake.extracted);
+    if (key === lastExtractionKey.current) return;
+    setForm(current => mergeCnicExtraction(current, intake.extracted, lastExtraction.current));
+    lastExtraction.current = intake.extracted;
+    lastExtractionKey.current = key;
+  }
+
+  async function loadCnic(target: CustomerCnicTarget, silent = false) {
+    if (!silent) setCnicLoading(true);
+    const result = await getCustomerCnicAction(target);
+    if (!silent) setCnicLoading(false);
+    if (!result.ok) { if (!silent) setCnicError(result.error.message); return; }
+    const intake = result.data as CnicIntake;
+    setCnicIntake(intake);
+    applyExtracted(intake);
+  }
+
+  useEffect(() => {
+    let active = true;
+    async function start() {
+      setCnicLoading(true);
+      if (record) {
+        const target = { type: "customer" as const, id: record.id };
+        if (!active) return;
+        setCnicTarget(target);
+        await loadCnic(target);
+        return;
+      }
+      const result = await startCustomerCnicDraftAction();
+      if (!active) return;
+      if (!result.ok) { setCnicError(result.error.message); setCnicLoading(false); return; }
+      const target = { type: "draft" as const, id: result.data.id };
+      setCnicTarget(target);
+      await loadCnic(target);
+    }
+    void start();
+    return () => { active = false; };
+    // The dialog owns one document target for its lifetime.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [record?.id]);
+
+  async function uploadCnic(side: "front"|"back", file: File|undefined) {
+    if (!file || !cnicTarget || cnicUploading) return;
+    setCnicUploading(side); setCnicError("");
+    const data = new FormData();
+    data.set("targetType", cnicTarget.type); data.set("targetId", cnicTarget.id); data.set("side", side); data.set("image", file);
+    const result = await uploadCustomerCnicAction(data);
+    setCnicUploading(null);
+    if (!result.ok) { setCnicError(result.error.message); return; }
+    const intake = result.data as CnicIntake;
+    setCnicIntake(intake);
+    applyExtracted(intake);
+  }
+
   async function submit(event: FormEvent) {
     event.preventDefault(); setPending(true); setMessage(""); setErrors({});
-    const input = { ...form, email: form.email || undefined, licenseNumber: form.licenseNumber || undefined, licenseExpiresAt: form.licenseExpiresAt || undefined };
+    const input = { ...form, email: form.email || undefined, dateOfBirth:form.dateOfBirth||undefined, address:form.address||undefined, cnicExpiresAt:form.cnicExpiresAt||undefined, licenseNumber: form.licenseNumber || undefined, licenseExpiresAt: form.licenseExpiresAt || undefined, cnicDocumentDraftId: cnicTarget?.type === "draft" ? cnicTarget.id : undefined };
     const result = record ? await updateCustomerAction(record.id, input) : await createCustomerAction(input);
     setPending(false);
     if (!result.ok) { setMessage(result.error.message); setErrors(result.error.fieldErrors); return; }
     onSaved(result.data);
   }
-  return <Dialog.Root open onOpenChange={onOpenChange}><Dialog.Portal><Dialog.Overlay className="fixed inset-0 z-50 bg-[#101828]/45"/><Dialog.Content className="fixed inset-x-0 bottom-0 z-50 max-h-[92vh] overflow-y-auto rounded-t-2xl bg-white sm:left-1/2 sm:top-1/2 sm:bottom-auto sm:w-[calc(100%-32px)] sm:max-w-xl sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-2xl"><div className="flex justify-between border-b border-[#EAECF0] p-5"><div><Dialog.Title className="font-bold">{record ? "Edit customer" : "Add customer"}</Dialog.Title><Dialog.Description className="mt-1 text-xs text-[#667085]">Saved securely to this agency’s customer records.</Dialog.Description></div><Dialog.Close className="grid h-9 w-9 place-items-center rounded-lg hover:bg-[#F2F4F7]"><X size={18}/><span className="sr-only">Close customer form</span></Dialog.Close></div><form onSubmit={submit}><div className="grid gap-4 p-5 sm:grid-cols-2"><FormInput label="Full name" value={form.name} onChange={e => setForm({...form,name:e.target.value})} error={errors.name} required/><FormInput label="Phone" value={form.phone} onChange={e => setForm({...form,phone:e.target.value})} error={errors.phone} required/><FormInput label="CNIC" value={form.cnic} onChange={e => setForm({...form,cnic:e.target.value})} error={errors.cnic} readOnly={Boolean(record)} required/><FormInput label="Email" type="email" value={form.email} onChange={e => setForm({...form,email:e.target.value})} error={errors.email}/><FormInput label="License number" value={form.licenseNumber} onChange={e => setForm({...form,licenseNumber:e.target.value})}/><FormInput label="License expiry" type="date" value={form.licenseExpiresAt} onChange={e => setForm({...form,licenseExpiresAt:e.target.value})} error={errors.licenseExpiresAt}/>{record && <FormSelect label="Status" value={form.status} onChange={e => setForm({...form,status:e.target.value})} options={["Active","Preferred","Review","Blacklisted"]}/>} {message && <div role="alert" className="rounded-lg border border-[#FECDCA] bg-[#FEF3F2] p-3 text-sm text-[#B42318] sm:col-span-2">{message}</div>}</div><div className="flex justify-end gap-2 border-t border-[#EAECF0] p-4"><Button type="button" variant="secondary" onClick={() => onOpenChange(false)}>Cancel</Button><Button disabled={pending}>{pending ? "Saving…" : "Save customer"}</Button></div></form></Dialog.Content></Dialog.Portal></Dialog.Root>;
+  return <Dialog.Root open onOpenChange={onOpenChange}><Dialog.Portal><Dialog.Overlay className="fixed inset-0 z-40 bg-[#101828]/45"/><Dialog.Content className="fixed inset-x-0 bottom-0 z-40 max-h-[92vh] overflow-y-auto rounded-t-2xl bg-white sm:left-1/2 sm:top-1/2 sm:bottom-auto sm:w-[calc(100%-32px)] sm:max-w-2xl sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-2xl"><div className="flex justify-between border-b border-[#EAECF0] p-5"><div><Dialog.Title className="font-bold">{record ? "Edit customer" : "Add customer"}</Dialog.Title><Dialog.Description className="mt-1 text-xs text-[#667085]">Upload CNIC images once; OCR fills editable identity fields automatically.</Dialog.Description></div><Dialog.Close className="grid h-9 w-9 place-items-center rounded-lg hover:bg-[#F2F4F7]"><X size={18}/><span className="sr-only">Close customer form</span></Dialog.Close></div><form onSubmit={submit}><div className="grid gap-4 p-5 sm:grid-cols-2"><div className="sm:col-span-2"><CnicDocumentDrawer intake={cnicIntake} loading={cnicLoading} uploading={cnicUploading} error={cnicError} onRefresh={() => cnicTarget && void loadCnic(cnicTarget)} onUpload={(side,file) => void uploadCnic(side,file)} /></div><FormInput label="Full name" value={form.name} onChange={e => setForm({...form,name:e.target.value})} error={errors.name} required/><FormInput label="Phone" value={form.phone} onChange={e => setForm({...form,phone:e.target.value})} error={errors.phone} required/><FormInput label="CNIC" value={form.cnic} onChange={e => setForm({...form,cnic:e.target.value})} error={errors.cnic} readOnly={Boolean(record)} required/><FormInput label="Email" type="email" value={form.email} onChange={e => setForm({...form,email:e.target.value})} error={errors.email}/><FormInput label="Date of birth" type="date" value={form.dateOfBirth} onChange={e=>setForm({...form,dateOfBirth:e.target.value})} error={errors.dateOfBirth}/><FormInput label="CNIC expiry" type="date" value={form.cnicExpiresAt} onChange={e=>setForm({...form,cnicExpiresAt:e.target.value})} error={errors.cnicExpiresAt}/><FormInput label="License number" value={form.licenseNumber} onChange={e => setForm({...form,licenseNumber:e.target.value})}/><FormInput label="License expiry" type="date" value={form.licenseExpiresAt} onChange={e => setForm({...form,licenseExpiresAt:e.target.value})} error={errors.licenseExpiresAt}/><label className="text-sm font-semibold text-[#344054] sm:col-span-2">Address<textarea className="mt-1.5 min-h-20 w-full rounded-[9px] border border-[#D0D5DD] p-3 text-sm font-normal" value={form.address} onChange={e=>setForm({...form,address:e.target.value})}/></label>{record && <FormSelect label="Status" value={form.status} onChange={e => setForm({...form,status:e.target.value})} options={["Active","Preferred","Review","Blacklisted"]}/>} {message && <div role="alert" className="rounded-lg border border-[#FECDCA] bg-[#FEF3F2] p-3 text-sm text-[#B42318] sm:col-span-2">{message}</div>}</div><div className="flex justify-end gap-2 border-t border-[#EAECF0] p-4"><Button type="button" variant="secondary" onClick={() => onOpenChange(false)}>Cancel</Button><Button disabled={pending}>{pending ? "Saving…" : "Save customer"}</Button></div></form></Dialog.Content></Dialog.Portal></Dialog.Root>;
 }

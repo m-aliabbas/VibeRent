@@ -7,18 +7,26 @@ export const SUPPORTED_CNIC_IMAGE_MIME_TYPES = [
 
 export type CnicImageMimeType = (typeof SUPPORTED_CNIC_IMAGE_MIME_TYPES)[number];
 
-export type CnicOcrInput = {
+export type CnicOcrImage = {
   imageBytes: Uint8Array;
   mimeType: CnicImageMimeType;
+};
+
+export type CnicOcrInput = {
+  front: CnicOcrImage;
+  back: CnicOcrImage;
 };
 
 /** Exact OCR contract requested by the CNIC consumer. */
 export type CnicOcrResult = {
   name: string | null;
-  cnic: string | null;
   dob: string | null;
-  id_expiry: string | null;
+  address: string | null;
+  expiry: string | null;
+  cnic_no: string | null;
 };
+
+export type CnicOcrStatus = "complete" | "failed" | "not_configured" | "waiting_for_pair";
 
 export type CnicOcrErrorCode =
   | "INVALID_IMAGE"

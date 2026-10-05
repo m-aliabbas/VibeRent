@@ -3,8 +3,10 @@ import path from "node:path";
 import type { IncomingWhatsAppMessage } from "./types";
 
 const addImageCommand = /^\/add\s+([a-z0-9]+(?:-[a-z0-9]+)*)$/i;
+const cnicImageCommand = /^\/(id-?1|front|id-?2|back)\s+([1-9]\d{0,8})$/i;
 
 export type AddImageCommand = { folder: string };
+export type CnicImageCommand = { side: "front" | "back"; bookingNumber: number };
 
 export type SavedIncomingImage = {
   folder: string;
@@ -17,6 +19,12 @@ export function parseAddImageCommand(caption: string | undefined): AddImageComma
   const match = caption?.trim().match(addImageCommand);
   if (!match || match[1].length > 40) return null;
   return { folder: match[1].toLowerCase() };
+}
+
+export function parseCnicImageCommand(caption: string | undefined): CnicImageCommand | null {
+  const match=caption?.trim().match(cnicImageCommand);
+  if(!match)return null;
+  return {side:/^(?:id-?1|front)$/i.test(match[1])?"front":"back",bookingNumber:Number(match[2])};
 }
 
 function imageExtension(mimeType: string | undefined) {

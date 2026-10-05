@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   parseAddImageCommand,
+  parseCnicImageCommand,
   saveAddImageCommand,
 } from "../src/server/whatsapp/incoming-image-command";
 import type { IncomingWhatsAppMessage } from "../src/server/whatsapp/types";
@@ -14,6 +15,14 @@ test("parses a safe add-image folder command", () => {
   assert.equal(parseAddImageCommand("/add ../be-213"), null);
   assert.equal(parseAddImageCommand("/add be-213/other"), null);
   assert.equal(parseAddImageCommand("hello"), null);
+});
+
+test("parses CNIC front and back aliases with a numeric booking number",()=>{
+  for(const caption of ["/id1 12","/ID1 12","/id-1 12","/front 12"]) assert.deepEqual(parseCnicImageCommand(caption),{side:"front",bookingNumber:12});
+  for(const caption of ["/id2 9","/ID-2 9","/back 9"]) assert.deepEqual(parseCnicImageCommand(caption),{side:"back",bookingNumber:9});
+  assert.equal(parseCnicImageCommand("/front BKG-12"),null);
+  assert.equal(parseCnicImageCommand("/id1 0"),null);
+  assert.equal(parseCnicImageCommand("/id1 12 extra"),null);
 });
 
 test("saves a commanded image in a timestamped folder path", async () => {

@@ -24,6 +24,8 @@ export { CnicOcrError } from "./types";
 export type {
   CnicImageMimeType,
   CnicOcrErrorCode,
+  CnicOcrImage,
   CnicOcrInput,
   CnicOcrResult,
+  CnicOcrStatus,
 } from "./types";

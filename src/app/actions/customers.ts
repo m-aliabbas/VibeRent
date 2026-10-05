@@ -3,6 +3,8 @@
 import { getWebRequestContext } from "@/server/auth/session";
 import { asDomainError } from "@/server/domain/errors";
 import { createCustomer, listCustomers, updateCustomer } from "@/server/services/customer-service";
+import { createCustomerCnicDraft, getCustomerCnicIntake, uploadCustomerCnic, type CustomerCnicTarget } from "@/server/services/customer-cnic-service";
+import type { CnicSide } from "@/server/services/booking-cnic-service";
 import type { CreateCustomerInput } from "@/server/validation/customer";
 
 type CustomerDto = {
@@ -11,6 +13,9 @@ type CustomerDto = {
   phone: string;
   cnic: string;
   email: string | null;
+  dateOfBirth: string | null;
+  address: string | null;
+  cnicExpiresAt: string | null;
   licenseNumber: string | null;
   licenseExpiresAt: string | null;
   status: string;
@@ -61,4 +66,25 @@ export async function updateCustomerAction(
   } catch (error) {
     return failure(error);
   }
+}
+
+export async function startCustomerCnicDraftAction() {
+  try { return { ok: true as const, data: createCustomerCnicDraft(await getWebRequestContext()) }; }
+  catch (error) { return failure(error); }
+}
+
+export async function getCustomerCnicAction(target: CustomerCnicTarget) {
+  try { return { ok: true as const, data: getCustomerCnicIntake(await getWebRequestContext(), target) }; }
+  catch (error) { return failure(error); }
+}
+
+export async function uploadCustomerCnicAction(formData: FormData) {
+  try {
+    const targetType = formData.get("targetType");
+    const targetId = formData.get("targetId");
+    const side = formData.get("side");
+    const image = formData.get("image");
+    if ((targetType !== "customer" && targetType !== "draft") || typeof targetId !== "string" || (side !== "front" && side !== "back") || !(image instanceof File)) throw new Error("Invalid CNIC upload payload.");
+    return { ok: true as const, data: await uploadCustomerCnic(await getWebRequestContext(), { type: targetType, id: targetId }, side as CnicSide, image) };
+  } catch (error) { return failure(error); }
 }

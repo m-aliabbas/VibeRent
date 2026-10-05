@@ -7,7 +7,7 @@ export default function CnicOcrPage() {
       <PageHeader
         eyebrow="Test utility"
         title="CNIC OCR"
-        description="Upload a CNIC image and test GPT-4o extraction with the configured server-side OpenAI key."
+        description="Upload a CNIC image and  extraction with the configured server-side OpenAI key."
       />
       <CnicOcrWorkspace />
     </div>

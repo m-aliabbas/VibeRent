@@ -8,6 +8,7 @@ export interface VehicleRepository {
 
 export type BookingListItem = {
   id: string;
+  publicNumber: number | null;
   customerId: string;
   customer: string;
   vehicleId: string;

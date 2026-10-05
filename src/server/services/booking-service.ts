@@ -14,7 +14,7 @@ import {
 import { parseCheckInRentalInput, parseRentalInspectionInput, type CheckInRentalInput } from "@/server/validation/rental-operation";
 
 type BookingRow = {
-  id: string; customer_id: string; customer: string; vehicle_id: string; make: string; model: string; year: number; plate: string; city: string;
+  id: string; public_number: number | null; customer_id: string; customer: string; vehicle_id: string; make: string; model: string; year: number; plate: string; city: string;
   destination_city: string; pickup_at: string; return_at: string; daily_rate: number; pricing_mode:string; estimated_km:number; mileage_rate:number; rate_override_reason:string|null; terms_snapshot:string; extras: number; discount: number; total_amount: number; deposit_required: number; paid: number; deposit_held: number; status: string; source: string; notes: string | null; version:number;
 };
 
@@ -50,6 +50,7 @@ export function listBookings(context: RequestContext): BookingListItem[] {
     const days = Math.max(1, Math.ceil((Date.parse(row.return_at) - Date.parse(row.pickup_at)) / 86_400_000));
     return {
       id: row.id,
+      publicNumber: row.public_number,
       customerId: row.customer_id,
       customer: row.customer,
       vehicleId: row.vehicle_id,
@@ -78,6 +79,41 @@ export function listBookings(context: RequestContext): BookingListItem[] {
       version: row.version,
     };
   });
+}
+
+export type BookingDraftReference = { id: string; publicNumber: number; expiresAt: string };
+
+function allocateBookingDraftInTransaction(context: RequestContext): BookingDraftReference {
+  const now = new Date();
+  const nowIso = now.toISOString();
+  sqlite.prepare("UPDATE booking_drafts SET status='expired',updated_at=? WHERE agency_id=? AND status='active' AND expires_at<=?")
+    .run(nowIso, context.agencyId, nowIso);
+  sqlite.prepare(`INSERT INTO booking_number_counters (agency_id,next_number,created_at,updated_at)
+    VALUES (?,coalesce((SELECT max(public_number)+1 FROM bookings WHERE agency_id=?),1),?,?)
+    ON CONFLICT(agency_id) DO NOTHING`).run(context.agencyId, context.agencyId, nowIso, nowIso);
+  const counter = sqlite.prepare("SELECT next_number AS nextNumber FROM booking_number_counters WHERE agency_id=? LIMIT 1")
+    .get(context.agencyId) as { nextNumber: number };
+  sqlite.prepare("UPDATE booking_number_counters SET next_number=next_number+1,updated_at=? WHERE agency_id=?")
+    .run(nowIso, context.agencyId);
+  const reference = { id: `bkd_${randomUUID()}`, publicNumber: counter.nextNumber, expiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString() };
+  sqlite.prepare(`INSERT INTO booking_drafts (id,agency_id,actor_id,public_number,status,expires_at,created_at,updated_at)
+    VALUES (?,?,?,?,'active',?,?,?)`).run(reference.id, context.agencyId, context.userId, reference.publicNumber, reference.expiresAt, nowIso, nowIso);
+  sqlite.prepare(`INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)`)
+    .run(randomUUID(), context.agencyId, context.userId, "booking.number_allocated", "booking_draft", reference.id, JSON.stringify({ publicNumber: reference.publicNumber }), nowIso);
+  return reference;
+}
+
+export function startBooking(context: RequestContext, existingDraftId?: string): BookingDraftReference {
+  requireRole(context, ["agency_owner", "fleet_manager", "rental_agent"]);
+  return sqlite.transaction(() => {
+    if (existingDraftId) {
+      const existing = sqlite.prepare(`SELECT id,public_number AS publicNumber,expires_at AS expiresAt FROM booking_drafts
+        WHERE agency_id=? AND actor_id=? AND id=? AND status='active' AND expires_at>? LIMIT 1`)
+        .get(context.agencyId, context.userId, existingDraftId, new Date().toISOString()) as BookingDraftReference | undefined;
+      if (existing) return existing;
+    }
+    return allocateBookingDraftInTransaction(context);
+  }).immediate();
 }
 
 export function getBooking(context: RequestContext, id: string) {
@@ -182,6 +218,11 @@ export function confirmBooking(context: RequestContext, rawInput: unknown) {
   requireRole(context, ["agency_owner", "fleet_manager", "rental_agent"]);
   const input = parseConfirmBookingInput(rawInput);
   return sqlite.transaction(() => {
+    const bookingDraft = input.bookingDraftId
+      ? sqlite.prepare(`SELECT id,public_number AS publicNumber FROM booking_drafts WHERE agency_id=? AND actor_id=? AND id=? AND status='active' AND expires_at>? LIMIT 1`)
+          .get(context.agencyId, context.userId, input.bookingDraftId, new Date().toISOString()) as { id: string; publicNumber: number } | undefined
+      : allocateBookingDraftInTransaction(context);
+    if (!bookingDraft) throw new DomainError("VERSION_CONFLICT", "This booking number expired or was already used. Start a new booking and try again.", 409);
     const vehicle = sqlite.prepare(`SELECT v.id, v.branch_id, v.daily_rate, v.status FROM vehicles v WHERE v.agency_id=? AND v.id=? AND v.archived_at IS NULL LIMIT 1`).get(context.agencyId, input.vehicleId) as { id: string; branch_id: string; daily_rate: number; status: string } | undefined;
     if (!vehicle) throw new DomainError("NOT_FOUND", "Vehicle not found.", 404);
     if (["maintenance", "out_of_service"].includes(vehicle.status)) throw new DomainError("BOOKING_CONFLICT", "The vehicle is not available for booking.", 409);
@@ -204,9 +245,13 @@ export function confirmBooking(context: RequestContext, rawInput: unknown) {
     const id = `BKG-${randomUUID().slice(0, 8).toUpperCase()}`;
     const now = new Date().toISOString();
     const agency = sqlite.prepare("SELECT rental_terms AS rentalTerms FROM agencies WHERE id=?").get(context.agencyId) as {rentalTerms:string};
-    sqlite.prepare(`INSERT INTO bookings (id,agency_id,branch_id,vehicle_id,customer_id,destination_city,pickup_at,return_at,status,daily_rate,pricing_mode,estimated_km,mileage_rate,rate_override_reason,terms_snapshot,extras,discount,total_amount,deposit_required,source,notes,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?, 'confirmed',?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, context.agencyId, vehicle.branch_id, input.vehicleId, input.customerId, input.destinationCity, input.pickupAt, input.returnAt, dailyRate, pricingMode, input.estimatedKm, mileageRate, input.overrideReason ?? null, agency.rentalTerms, input.extras, input.discount, totalAmount, input.depositRequired, input.source, input.notes ?? null, now, now);
+    sqlite.prepare(`INSERT INTO bookings (id,agency_id,public_number,branch_id,vehicle_id,customer_id,destination_city,pickup_at,return_at,status,daily_rate,pricing_mode,estimated_km,mileage_rate,rate_override_reason,terms_snapshot,extras,discount,total_amount,deposit_required,source,notes,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?, 'confirmed',?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, context.agencyId, bookingDraft.publicNumber, vehicle.branch_id, input.vehicleId, input.customerId, input.destinationCity, input.pickupAt, input.returnAt, dailyRate, pricingMode, input.estimatedKm, mileageRate, input.overrideReason ?? null, agency.rentalTerms, input.extras, input.discount, totalAmount, input.depositRequired, input.source, input.notes ?? null, now, now);
+    sqlite.prepare("UPDATE booking_drafts SET status='consumed',consumed_at=?,updated_at=? WHERE agency_id=? AND id=? AND status='active'")
+      .run(now, now, context.agencyId, bookingDraft.id);
+    sqlite.prepare(`UPDATE private_files SET entity_type='customer',entity_id=?,updated_at=? WHERE agency_id=? AND entity_type='booking_draft' AND entity_id=? AND classification IN ('customer_cnic_front','customer_cnic_back') AND status='ready'`)
+      .run(input.customerId,now,context.agencyId,bookingDraft.id);
     sqlite.prepare(`INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)`).run(randomUUID(), context.agencyId, context.userId, "booking.confirmed", "booking", id, JSON.stringify({ vehicleId: input.vehicleId, destinationCity:input.destinationCity, pickupAt: input.pickupAt, returnAt: input.returnAt, dailyRate, mileageRate, totalAmount, pricingMode }), now);
-    return { id, status: "confirmed" as const, dailyRate, mileageRate, totalAmount, currency: "PKR" as const };
+    return { id, publicNumber: bookingDraft.publicNumber, status: "confirmed" as const, dailyRate, mileageRate, totalAmount, currency: "PKR" as const };
   }).immediate();
 }
 
