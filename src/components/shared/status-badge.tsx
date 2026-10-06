@@ -13,6 +13,8 @@ const tones: Record<string, string> = {
   "expiring soon": "bg-[#FFFAEB] text-[#B54708] ring-[#FEDF89]",
   "needs review": "bg-[#FEF3F2] text-[#B42318] ring-[#FECDCA]",
   active: "bg-[#ECFDF3] text-[#067647] ring-[#ABEFC6]",
+  "up to date": "bg-[#ECFDF3] text-[#067647] ring-[#ABEFC6]",
+  "update available": "bg-[#EFF8FF] text-[#175CD3] ring-[#B2DDFF]",
   preferred: "bg-[#F4F3FF] text-[#5925DC] ring-[#D9D6FE]",
   review: "bg-[#FFFAEB] text-[#B54708] ring-[#FEDF89]",
   due: "bg-[#FFFAEB] text-[#B54708] ring-[#FEDF89]",

@@ -1,6 +1,6 @@
 {
   "name": "viberent",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "private": true,
   "scripts": {
     "predev": "npm run db:migrate",
@@ -32,6 +32,7 @@
     "whatsapp:web-test": "tsx scripts/whatsapp-web-test.ts",
     "whatsapp:test": "tsx --test tests/whatsapp-*.test.ts",
     "cnic-ocr:test": "NODE_OPTIONS=--conditions=react-server tsx --test tests/cnic-ocr.test.ts",
+    "update:test": "tsx --test tests/software-update.test.ts",
     "release:check": "node scripts/check-release-version.mjs",
     "release:set": "node scripts/set-release-version.mjs"
   },

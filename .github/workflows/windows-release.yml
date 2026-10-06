@@ -116,6 +116,25 @@ jobs:
           }
           $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 (Join-Path $releaseDir "latest.json")
 
+      - name: Validate software update assets
+        shell: pwsh
+        run: |
+          $releaseDir = Join-Path $env:GITHUB_WORKSPACE "release\windows"
+          $package = Get-Content "package.json" -Raw | ConvertFrom-Json
+          $manifest = Get-Content (Join-Path $releaseDir "latest.json") -Raw | ConvertFrom-Json
+          $download = $manifest.downloads."windows-x86_64"
+          $installer = Join-Path $releaseDir "VibeRent_$($package.version)_x64-setup.exe"
+          if ($manifest.schema_version -ne 1) { throw "Unsupported latest.json schema version." }
+          if ($manifest.version -ne $package.version) { throw "latest.json does not match package.json." }
+          if (-not (Test-Path -LiteralPath $installer)) { throw "The installer named by latest.json is missing." }
+          $downloadUrl = [string]$download.url
+          if ($downloadUrl -notmatch "^https://github.com/m-aliabbas/viberent-releases/releases/download/v$([regex]::Escape($package.version))/VibeRent_$([regex]::Escape($package.version))_x64-setup\.exe$") {
+            throw "latest.json contains an unexpected installer URL."
+          }
+          $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash.ToLowerInvariant()
+          if ($download.sha256 -ne $actualHash) { throw "latest.json checksum does not match the installer." }
+          if ([int64]$download.size -ne (Get-Item -LiteralPath $installer).Length) { throw "latest.json size does not match the installer." }
+
       - name: Upload private diagnostic artifact
         uses: actions/upload-artifact@v7
         with:

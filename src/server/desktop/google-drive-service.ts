@@ -4,7 +4,7 @@ import { createReadStream, createWriteStream } from "node:fs";
 import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
-import { OAuth2Client, type Credentials } from "google-auth-library";
+import { CodeChallengeMethod, OAuth2Client, type Credentials } from "google-auth-library";
 import { drive as createDriveClient } from "googleapis/build/src/apis/drive";
 import {
   EncryptedCredentialError,
@@ -22,7 +22,7 @@ type DriveSession = {
   account?: { displayName?: string | null; email?: string | null };
 };
 
-type OAuthState = { value: string; expiresAt: number };
+type OAuthState = { value: string; expiresAt: number; codeVerifier: string };
 
 export class GoogleDriveBackupError extends DomainError {
   constructor(message: string) {
@@ -31,9 +31,22 @@ export class GoogleDriveBackupError extends DomainError {
   }
 }
 
+export function resolveGoogleDriveRedirectUri(configuredUrl?: string, applicationUrl?: string) {
+  try {
+    const source = configuredUrl?.trim() || applicationUrl?.trim() || "http://127.0.0.1:4322";
+    const url = new URL(source);
+    if (url.protocol !== "http:") throw new Error("Desktop OAuth requires an HTTP loopback URL.");
+    return `http://127.0.0.1${url.port ? `:${url.port}` : ""}`;
+  } catch {
+    throw new GoogleDriveBackupError("The Google Drive redirect URL is invalid.");
+  }
+}
+
 function redirectUri() {
-  return process.env.GOOGLE_DRIVE_REDIRECT_URI?.trim()
-    || `${process.env.BETTER_AUTH_URL || "http://127.0.0.1:4322"}/api/v1/backups/google-drive/callback`;
+  return resolveGoogleDriveRedirectUri(
+    process.env.GOOGLE_DRIVE_REDIRECT_URI,
+    process.env.BETTER_AUTH_URL,
+  );
 }
 
 async function oauthClient() {
@@ -71,9 +84,11 @@ export async function getGoogleDriveStatus() {
 export async function createGoogleDriveAuthorization() {
   const client = await oauthClient();
   const value = crypto.randomUUID();
+  const { codeVerifier, codeChallenge } = await client.generateCodeVerifierAsync();
   await writeEncryptedJson(oauthStatePath(), {
     value,
     expiresAt: Date.now() + 10 * 60 * 1000,
+    codeVerifier,
   } satisfies OAuthState);
   return client.generateAuthUrl({
     access_type: "offline",
@@ -81,6 +96,8 @@ export async function createGoogleDriveAuthorization() {
     scope: [DRIVE_SCOPE],
     state: value,
     include_granted_scopes: true,
+    code_challenge: codeChallenge,
+    code_challenge_method: CodeChallengeMethod.S256,
   });
 }
 
@@ -92,7 +109,7 @@ export async function completeGoogleDriveAuthorization(code: string, state: stri
   }
 
   const client = await oauthClient();
-  const { tokens } = await client.getToken(code);
+  const { tokens } = await client.getToken({ code, codeVerifier: expected.codeVerifier });
   if (!tokens.refresh_token) {
     throw new GoogleDriveBackupError("Google did not return long-term backup access. Disconnect and try again.");
   }

@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use sha2::{Digest, Sha256};
 use tauri::{Manager, RunEvent};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
@@ -17,7 +18,11 @@ struct ServerProcess(Mutex<Option<CommandChild>>);
 const DESKTOP_PORT: u16 = 4322;
 
 #[tauri::command]
-fn save_download(app: tauri::AppHandle, filename: String, bytes: Vec<u8>) -> Result<String, String> {
+fn save_download(
+    app: tauri::AppHandle,
+    filename: String,
+    bytes: Vec<u8>,
+) -> Result<String, String> {
     if bytes.is_empty() {
         return Err("The downloaded file is empty.".into());
     }
@@ -29,14 +34,33 @@ fn save_download(app: tauri::AppHandle, filename: String, bytes: Vec<u8>) -> Res
         .and_then(|value| value.to_str())
         .unwrap_or("viberent-download")
         .chars()
-        .map(|character| if matches!(character, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') { '_' } else { character })
+        .map(|character| {
+            if matches!(
+                character,
+                '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'
+            ) {
+                '_'
+            } else {
+                character
+            }
+        })
         .collect();
     let safe_name = safe_name.trim().trim_matches('.');
-    let safe_name = if safe_name.is_empty() { "viberent-download" } else { safe_name };
-    let directory = app.path().download_dir().map_err(|error| error.to_string())?;
+    let safe_name = if safe_name.is_empty() {
+        "viberent-download"
+    } else {
+        safe_name
+    };
+    let directory = app
+        .path()
+        .download_dir()
+        .map_err(|error| error.to_string())?;
     std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
     let requested = Path::new(safe_name);
-    let stem = requested.file_stem().and_then(|value| value.to_str()).unwrap_or("viberent-download");
+    let stem = requested
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("viberent-download");
     let extension = requested.extension().and_then(|value| value.to_str());
     for index in 0..10_000 {
         let candidate_name = if index == 0 {
@@ -47,7 +71,11 @@ fn save_download(app: tauri::AppHandle, filename: String, bytes: Vec<u8>) -> Res
             format!("{stem} ({index})")
         };
         let candidate = directory.join(candidate_name);
-        match OpenOptions::new().create_new(true).write(true).open(&candidate) {
+        match OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&candidate)
+        {
             Ok(mut file) => {
                 file.write_all(&bytes).map_err(|error| error.to_string())?;
                 return Ok(candidate.to_string_lossy().to_string());
@@ -57,6 +85,137 @@ fn save_download(app: tauri::AppHandle, filename: String, bytes: Vec<u8>) -> Res
         }
     }
     Err("Could not choose an available filename in Downloads.".into())
+}
+
+#[tauri::command]
+async fn download_update(
+    app: tauri::AppHandle,
+    url: String,
+    filename: String,
+    sha256: String,
+) -> Result<String, String> {
+    const MAX_UPDATE_BYTES: u64 = 1024 * 1024 * 1024;
+    let parsed = reqwest::Url::parse(&url).map_err(|_| "The update URL is invalid.".to_string())?;
+    let allowed_path = "/m-aliabbas/viberent-releases/releases/download/";
+    if parsed.scheme() != "https"
+        || parsed.host_str() != Some("github.com")
+        || !parsed.path().starts_with(allowed_path)
+    {
+        return Err("The update URL is not an official VibeRent release.".into());
+    }
+    if filename.is_empty()
+        || !filename.ends_with("_x64-setup.exe")
+        || filename.chars().any(|character| {
+            !character.is_ascii_alphanumeric() && !matches!(character, '.' | '_' | '-')
+        })
+        || parsed.path_segments().and_then(|segments| segments.last()) != Some(filename.as_str())
+    {
+        return Err("The update filename is invalid.".into());
+    }
+    if sha256.len() != 64
+        || !sha256
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        return Err("The update checksum is invalid.".into());
+    }
+
+    let directory = app
+        .path()
+        .download_dir()
+        .map_err(|error| error.to_string())?;
+    std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    let requested = Path::new(&filename);
+    let stem = requested
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("VibeRent-update");
+    let extension = requested
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("exe");
+    let mut destination = None;
+    let mut temporary = None;
+    for index in 0..10_000 {
+        let candidate_name = if index == 0 {
+            filename.clone()
+        } else {
+            format!("{stem} ({index}).{extension}")
+        };
+        let candidate = directory.join(candidate_name);
+        let partial = directory.join(format!(
+            "{}.part",
+            candidate
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or("VibeRent-update.exe")
+        ));
+        if !candidate.exists() && !partial.exists() {
+            destination = Some(candidate);
+            temporary = Some(partial);
+            break;
+        }
+    }
+    let destination = destination.ok_or("Could not choose an available filename in Downloads.")?;
+    let temporary = temporary.ok_or("Could not choose an available temporary filename.")?;
+
+    let result: Result<(), String> = async {
+        let client = reqwest::Client::builder()
+            .user_agent(format!("VibeRent/{}", env!("CARGO_PKG_VERSION")))
+            .timeout(Duration::from_secs(30 * 60))
+            .build()
+            .map_err(|error| error.to_string())?;
+        let mut response = client
+            .get(parsed)
+            .send()
+            .await
+            .map_err(|error| format!("The update download failed: {error}"))?
+            .error_for_status()
+            .map_err(|error| format!("GitHub rejected the update download: {error}"))?;
+        if response
+            .content_length()
+            .is_some_and(|size| size == 0 || size > MAX_UPDATE_BYTES)
+        {
+            return Err("The update file size is invalid.".into());
+        }
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary)
+            .map_err(|error| error.to_string())?;
+        let mut hasher = Sha256::new();
+        let mut downloaded = 0_u64;
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|error| format!("The update download was interrupted: {error}"))?
+        {
+            downloaded = downloaded.saturating_add(chunk.len() as u64);
+            if downloaded > MAX_UPDATE_BYTES {
+                return Err("The update file is too large.".into());
+            }
+            hasher.update(&chunk);
+            file.write_all(&chunk).map_err(|error| error.to_string())?;
+        }
+        file.flush().map_err(|error| error.to_string())?;
+        if downloaded == 0 || format!("{:x}", hasher.finalize()) != sha256.to_ascii_lowercase() {
+            return Err(
+                "The downloaded installer did not match the published SHA-256 checksum.".into(),
+            );
+        }
+        Ok(())
+    }
+    .await;
+
+    if let Err(error) = result {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error);
+    }
+    std::fs::rename(&temporary, &destination).map_err(|error| {
+        let _ = std::fs::remove_file(&temporary);
+        error.to_string()
+    })?;
+    Ok(destination.to_string_lossy().to_string())
 }
 
 fn append_log(path: &Path, message: &str) {
@@ -77,7 +236,10 @@ fn local_lan_ip() -> Option<std::net::IpAddr> {
 }
 
 fn standalone_directory(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let resources = app.path().resource_dir().map_err(|error| error.to_string())?;
+    let resources = app
+        .path()
+        .resource_dir()
+        .map_err(|error| error.to_string())?;
     let candidates = [
         resources.join("_up_").join(".next").join("standalone"),
         resources.join(".next").join("standalone"),
@@ -87,7 +249,10 @@ fn standalone_directory(app: &tauri::AppHandle) -> Result<PathBuf, String> {
             return Ok(candidate);
         }
     }
-    Err(format!("The packaged Next.js server was not found under {}", resources.display()))
+    Err(format!(
+        "The packaged Next.js server was not found under {}",
+        resources.display()
+    ))
 }
 
 fn packaged_environment(app: &tauri::AppHandle) -> HashMap<String, String> {
@@ -121,7 +286,7 @@ fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![save_download])
+        .invoke_handler(tauri::generate_handler![save_download, download_update])
         .manage(ServerProcess(Mutex::new(None)))
         .setup(|app| {
             let handle = app.handle().clone();
@@ -184,7 +349,7 @@ fn main() {
                     .env("GOOGLE_DRIVE_SESSION_PATH", data.join("google-drive-session.enc").to_string_lossy().to_string())
                     .env("VIBERENT_MIGRATIONS_DIR", standalone.join("drizzle").to_string_lossy().to_string())
                     .env("BETTER_AUTH_URL", format!("http://127.0.0.1:{port}"))
-                    .env("GOOGLE_DRIVE_REDIRECT_URI", format!("http://127.0.0.1:{port}/api/v1/backups/google-drive/callback"))
+                    .env("GOOGLE_DRIVE_REDIRECT_URI", format!("http://127.0.0.1:{port}"))
                     .env("BETTER_AUTH_TRUSTED_ORIGINS", trusted_origins.join(","));
 
                 let (mut receiver, child) = command.spawn()?;
@@ -218,7 +383,13 @@ fn main() {
 
     app.run(|handle, event| {
         if matches!(event, RunEvent::Exit | RunEvent::ExitRequested { .. }) {
-            if let Some(child) = handle.state::<ServerProcess>().0.lock().expect("server process lock").take() {
+            if let Some(child) = handle
+                .state::<ServerProcess>()
+                .0
+                .lock()
+                .expect("server process lock")
+                .take()
+            {
                 let _ = child.kill();
             }
         }

@@ -98,6 +98,10 @@ Configure `RELEASE_REPO_TOKEN`, a fine-grained token with **Contents: Read and w
 
 A manual **Windows Release** run creates a private 90-day Actions artifact. It does not publish publicly. A `v*` tag publishes only the installer, `SHA256SUMS.txt`, and `latest.json` to the release-only repository.
 
+The desktop app reads `latest.json` from the newest public release in **Settings → Software update**. When a newer semantic version is available, the app downloads the installer to the current user's Downloads folder and verifies its SHA-256 before revealing it in Explorer. The updater never installs silently, and application data remains outside the installation directory. The browser build opens the same official GitHub asset directly.
+
+The installer is currently unsigned, so Windows can show a security warning. Add Authenticode signing before broad distribution; the manifest checksum protects download integrity but is not a substitute for code signing.
+
 Set and publish a release:
 
 ```bash
@@ -109,4 +113,4 @@ git tag v0.2.0
 git push origin main --tags
 ```
 
-The current installer is unsigned. Add Windows Authenticode signing before broad distribution; keep the certificate and password only in GitHub Actions secrets.
+Keep the Authenticode certificate and password only in GitHub Actions secrets.
