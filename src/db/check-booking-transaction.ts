@@ -47,12 +47,22 @@ const paymentAmount = 10000;
 const updatedWithPayment = recordBookingPayment(context, first.id, {
   amount: paymentAmount,
   method: "Cash",
-  reference: "REC-TEST-001",
+  idempotencyKey: `receipt_check_${first.id}`,
   account: "Lahore cash drawer",
 });
 
 if (updatedWithPayment.paid !== paymentAmount) {
   throw new Error(`Expected paid to be ${paymentAmount}, got ${updatedWithPayment.paid}`);
+}
+if (!updatedWithPayment.paymentReceiptNumber) throw new Error("Payment receipt number was not generated.");
+const retriedPayment = recordBookingPayment(context, first.id, {
+  amount: paymentAmount,
+  method: "Cash",
+  idempotencyKey: `receipt_check_${first.id}`,
+  account: "Lahore cash drawer",
+});
+if (retriedPayment.paymentReceiptNumber !== updatedWithPayment.paymentReceiptNumber) {
+  throw new Error("Idempotent payment retry did not retain its receipt number.");
 }
 
 // Test re-fetching (simulating page refresh)
@@ -114,6 +124,8 @@ console.log(JSON.stringify({
   authoritativeTotal: first.totalAmount,
   overlapRejected: conflictProtected,
   paymentPersisted: true,
+  paymentReceiptNumber: updatedWithPayment.paymentReceiptNumber,
+  paymentReceiptIdempotent: true,
   refreshRetainedPaid: true,
   overpaymentBlocked: true,
   reversalWorked: true,

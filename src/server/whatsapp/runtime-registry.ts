@@ -6,6 +6,8 @@ import { WhatsAppService } from "./whatsapp-service";
 import { parseCnicImageCommand } from "./incoming-image-command";
 import { findActiveDraftByNumber, ingestBookingCnic } from "@/server/services/booking-cnic-service";
 import { runOwnerCommand } from "./owner-command-service";
+import { getWhatsAppDatabasePath } from "@/server/desktop/runtime-paths";
+import { SqliteWhatsAppAuthStore } from "./sqlite-auth-store";
 
 type RuntimeEntry = {
   agencyId: string;
@@ -70,12 +72,18 @@ async function handleIncomingOwnerMessage(entry: RuntimeEntry, message: Incoming
   }
 }
 
-export async function logoutWhatsAppRuntime(agencyId:string) {
+export async function logoutWhatsAppRuntime(agencyId:string, sessionId?:string) {
   const entry=runtimes.get(agencyId);
-  if(!entry) return;
-  await entry.service.logout();
-  await entry.service.close();
-  runtimes.delete(agencyId);
+  if(entry) {
+    try { await entry.service.logout(); }
+    finally { await entry.service.close();runtimes.delete(agencyId); }
+    return;
+  }
+  if(sessionId) {
+    const authStore=new SqliteWhatsAppAuthStore(getWhatsAppDatabasePath());
+    try { authStore.clearSession(sessionId); }
+    finally { authStore.close(); }
+  }
 }
 
 export async function sendWhatsAppDocument(agencyId:string,phoneNumber:string,input:{document:Buffer;mimeType:string;fileName:string;caption?:string}){

@@ -20,6 +20,7 @@ export type CnicOcrInput = {
 /** Exact OCR contract requested by the CNIC consumer. */
 export type CnicOcrResult = {
   name: string | null;
+  father_name: string | null;
   dob: string | null;
   address: string | null;
   expiry: string | null;

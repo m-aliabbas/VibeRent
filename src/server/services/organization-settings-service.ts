@@ -113,10 +113,14 @@ export function updateAgreementDesigner(context: RequestContext, rawInput: unkno
   return config;
 }
 
-export function updateEnglishRentalTerms(context: RequestContext, terms: string) {
+export function updateRentalTerms(context: RequestContext, terms: string, language: "en" | "ur" = "en") {
   const current = getOrganizationSettings(context).agreement;
   const clauses = terms.split(/\n+/).map(item => item.replace(/^\s*(?:[-•]|\d+[.)])\s*/, "").trim()).filter(Boolean);
-  return updateAgreementDesigner(context, { ...current, termsEn: clauses, language: current.language });
+  return updateAgreementDesigner(context, {
+    ...current,
+    termsLanguage: language,
+    ...(language === "ur" ? { termsUr: clauses } : { termsEn: clauses }),
+  });
 }
 
 export function getTermsSnapshotForBooking(context: RequestContext) {

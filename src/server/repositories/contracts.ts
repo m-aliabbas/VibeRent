@@ -11,6 +11,8 @@ export type BookingListItem = {
   publicNumber: number | null;
   customerId: string;
   customer: string;
+  customerCnic?: string;
+  customerPhone?: string;
   rentalMode?: "self_drive"|"with_driver";
   driverId?: string|null;
   driver?: string|null;
@@ -53,6 +55,7 @@ export type BookingInspectionDto = {
 
 export type BookingTransactionDto = {
   id: string;
+  receiptNumber?: number | null;
   bookingId: string;
   customerId: string;
   kind: string;

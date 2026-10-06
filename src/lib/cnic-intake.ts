@@ -1,5 +1,6 @@
 export type CnicExtractedValues = {
   name: string | null;
+  father_name: string | null;
   dob: string | null;
   address: string | null;
   expiry: string | null;
@@ -36,6 +37,7 @@ export function ocrDate(value: string | null) {
 
 type OcrEditableCustomer = {
   name: string;
+  fatherName?: string;
   cnic: string;
   dateOfBirth?: string;
   address?: string;
@@ -49,6 +51,7 @@ export function mergeCnicExtraction<T extends OcrEditableCustomer>(
 ): T {
   const next = {
     name: extracted.name ?? "",
+    fatherName: extracted.father_name ?? "",
     cnic: extracted.cnic_no ?? "",
     dateOfBirth: ocrDate(extracted.dob),
     address: extracted.address ?? "",
@@ -56,6 +59,7 @@ export function mergeCnicExtraction<T extends OcrEditableCustomer>(
   };
   const prior = previous ? {
     name: previous.name ?? "",
+    fatherName: previous.father_name ?? "",
     cnic: previous.cnic_no ?? "",
     dateOfBirth: ocrDate(previous.dob),
     address: previous.address ?? "",
@@ -65,6 +69,7 @@ export function mergeCnicExtraction<T extends OcrEditableCustomer>(
   return {
     ...current,
     name: shouldFill("name") ? next.name : current.name,
+    fatherName: shouldFill("fatherName") ? next.fatherName : current.fatherName,
     cnic: shouldFill("cnic") ? next.cnic : current.cnic,
     dateOfBirth: shouldFill("dateOfBirth") ? next.dateOfBirth : current.dateOfBirth,
     address: shouldFill("address") ? next.address : current.address,

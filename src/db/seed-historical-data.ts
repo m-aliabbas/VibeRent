@@ -37,6 +37,19 @@ import {
 
 function nowStr() { return new Date().toISOString(); }
 
+function paymentReceiptNumber(agencyId: string, transactionId: string) {
+  const existing = sqlite.prepare("SELECT receipt_number AS receiptNumber FROM financial_transactions WHERE agency_id=? AND id=?")
+    .get(agencyId, transactionId) as { receiptNumber: number | null } | undefined;
+  if (existing?.receiptNumber) return existing.receiptNumber;
+  const now = nowStr();
+  sqlite.prepare(`INSERT INTO payment_receipt_counters (agency_id,next_number,created_at,updated_at)
+    VALUES (?,coalesce((SELECT max(receipt_number)+1 FROM financial_transactions WHERE agency_id=?),1),?,?)
+    ON CONFLICT(agency_id) DO NOTHING`).run(agencyId, agencyId, now, now);
+  const counter = mustGet<{ nextNumber: number }>("SELECT next_number AS nextNumber FROM payment_receipt_counters WHERE agency_id=?", agencyId);
+  sqlite.prepare("UPDATE payment_receipt_counters SET next_number=next_number+1,updated_at=? WHERE agency_id=?").run(now, agencyId);
+  return counter.nextNumber;
+}
+
 function mustGet<T>(sql: string, ...params: unknown[]): T {
   const row = sqlite.prepare(sql).get(...params) as T | undefined;
   if (!row) throw new Error(`mustGet failed: ${sql} params=${JSON.stringify(params)}`);
@@ -283,8 +296,9 @@ function seedBooking(ctx: AgencyContext, b: BookingSeed) {
     }
 
     const payWhen = b.status === "completed" ? (b.completedAt ?? b.returnAt) : when;
+    const paymentId = `ft_pay_${realId}`;
     db.insert(financialTransactions).values({
-      id: `ft_pay_${realId}`, agencyId, bookingId: realId, customerId,
+      id: paymentId, agencyId, receiptNumber: paymentReceiptNumber(agencyId, paymentId), bookingId: realId, customerId,
       kind: "payment", amount: b.totalAmount,
       method: b.paymentMethod ?? "Bank Transfer",
       reference: `PAY-${realId.slice(-6).toUpperCase()}`,
@@ -499,7 +513,7 @@ async function main() {
   const vrTodayCust = vr.customerMap["bilal"];
   if (vrTodayCust) {
     db.insert(financialTransactions).values({
-      id: `ft_today_vr`, agencyId: "agy-viberent",
+      id: `ft_today_vr`, agencyId: "agy-viberent", receiptNumber: paymentReceiptNumber("agy-viberent", "ft_today_vr"),
       bookingId: vrTodayBkgId, customerId: vrTodayCust,
       kind: "payment", amount: 18000,
       method: "Cash", reference: "PAY-TODAY-VR",
@@ -589,7 +603,7 @@ async function main() {
   const aliTodayCust = ali.customerMap["bilal"];
   if (aliTodayCust) {
     db.insert(financialTransactions).values({
-      id: "ft_today_ali", agencyId: aliId,
+      id: "ft_today_ali", agencyId: aliId, receiptNumber: paymentReceiptNumber(aliId, "ft_today_ali"),
       bookingId: aliTodayBkgId, customerId: aliTodayCust,
       kind: "payment", amount: 18000,
       method: "Cash", reference: "PAY-TODAY-ALI",

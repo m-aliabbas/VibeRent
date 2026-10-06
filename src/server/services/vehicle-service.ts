@@ -5,6 +5,38 @@ import type { RequestContext } from "@/server/context/request-context";
 import { DomainError } from "@/server/domain/errors";
 import { vehicleRepository } from "@/server/repositories/drizzle/vehicle-repository";
 import { parseVehicleInput } from "@/server/validation/vehicle";
+import { listExpenses, type ExpenseDto } from "@/server/services/expense-service";
+import {
+  listAvailabilityBlocks,
+  listBookings,
+  type AvailabilityBlockDto,
+} from "@/server/services/booking-service";
+import type { BookingListItem } from "@/server/repositories/contracts";
+
+export type VehicleFinancePeriod = { income:number; expenses:number };
+export type VehicleFinanceTransaction = {
+  id: string;
+  bookingId: string;
+  customer: string;
+  kind: string;
+  amount: number;
+  method: string;
+  reference: string;
+  status: string;
+  postedAt: string;
+};
+export type VehicleFinanceSummary = {
+  today: VehicleFinancePeriod;
+  month: VehicleFinancePeriod;
+  total: VehicleFinancePeriod;
+  depositHeld: number;
+  bookingValue: number;
+  outstanding: number;
+  bookings: BookingListItem[];
+  availabilityBlocks: AvailabilityBlockDto[];
+  recentTransactions: VehicleFinanceTransaction[];
+  recentExpenses: ExpenseDto[];
+};
 
 export function listVehicles(context: RequestContext) {
   requireRole(context, ["agency_owner", "fleet_manager", "rental_agent", "accountant"]);
@@ -16,6 +48,81 @@ export function getVehicle(context: RequestContext, id: string) {
   const vehicle = vehicleRepository.getById(context.agencyId, id);
   if (!vehicle) throw new DomainError("NOT_FOUND", "Vehicle not found.", 404);
   return vehicle;
+}
+
+export function getVehicleFinance(context: RequestContext, id: string): VehicleFinanceSummary {
+  requireRole(context, ["agency_owner", "fleet_manager", "rental_agent", "accountant"]);
+  getVehicle(context, id);
+  const localDate = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Karachi", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  const todayStart = new Date(`${localDate}T00:00:00+05:00`).toISOString();
+  const tomorrowStart = new Date(`${localDate}T24:00:00+05:00`).toISOString();
+  const monthDate = `${localDate.slice(0, 7)}-01`;
+  const monthStart = new Date(`${monthDate}T00:00:00+05:00`).toISOString();
+  const income = sqlite.prepare(`
+    SELECT
+      coalesce(sum(CASE WHEN t.posted_at>=? AND t.posted_at<? THEN
+        CASE
+          WHEN lower(t.kind) IN ('payment','deposit_applied','deposit_forfeited') THEN t.amount
+          WHEN lower(t.kind) IN ('refund','reversal') AND lower(coalesce(original.kind,'')) IN ('payment','deposit_applied','deposit_forfeited') THEN -t.amount
+          ELSE 0
+        END ELSE 0 END),0) AS today,
+      coalesce(sum(CASE WHEN t.posted_at>=? AND t.posted_at<? THEN
+        CASE
+          WHEN lower(t.kind) IN ('payment','deposit_applied','deposit_forfeited') THEN t.amount
+          WHEN lower(t.kind) IN ('refund','reversal') AND lower(coalesce(original.kind,'')) IN ('payment','deposit_applied','deposit_forfeited') THEN -t.amount
+          ELSE 0
+        END ELSE 0 END),0) AS month,
+      coalesce(sum(CASE
+        WHEN lower(t.kind) IN ('payment','deposit_applied','deposit_forfeited') THEN t.amount
+        WHEN lower(t.kind) IN ('refund','reversal') AND lower(coalesce(original.kind,'')) IN ('payment','deposit_applied','deposit_forfeited') THEN -t.amount
+        ELSE 0
+      END),0) AS total
+    FROM financial_transactions t
+    JOIN bookings b ON b.id=t.booking_id AND b.agency_id=t.agency_id
+    LEFT JOIN financial_transactions original ON original.id=t.linked_transaction_id AND original.agency_id=t.agency_id
+    WHERE t.agency_id=? AND b.vehicle_id=? AND t.status='posted'
+  `).get(todayStart,tomorrowStart,monthStart,tomorrowStart,context.agencyId,id) as {today:number;month:number;total:number};
+  const expense = sqlite.prepare(`
+    SELECT
+      coalesce(sum(CASE WHEN occurred_on=? THEN amount ELSE 0 END),0) AS today,
+      coalesce(sum(CASE WHEN occurred_on>=? AND occurred_on<=? THEN amount ELSE 0 END),0) AS month,
+      coalesce(sum(amount),0) AS total
+    FROM expenses
+    WHERE agency_id=? AND vehicle_id=? AND status='approved'
+  `).get(localDate,monthDate,localDate,context.agencyId,id) as {today:number;month:number;total:number};
+  const bookings = listBookings(context).filter(item => item.vehicleId === id);
+  const bookingValue = bookings
+    .filter(item => item.status !== "Cancelled" && item.status !== "No Show" && item.status !== "Draft")
+    .reduce((sum, item) => sum + item.dailyRate * item.days + item.mileageRate * item.estimatedKm + item.extras - item.discount, 0);
+  const outstanding = bookings.reduce((sum, item) => {
+    if (["Cancelled", "No Show", "Draft"].includes(item.status)) return sum;
+    const total = item.dailyRate * item.days + item.mileageRate * item.estimatedKm + item.extras - item.discount;
+    return sum + Math.max(0, total - item.paid);
+  }, 0);
+  const depositHeld = bookings.reduce((sum, item) => sum + (item.depositHeld ?? 0), 0);
+  const recentTransactions = sqlite.prepare(`
+    SELECT t.id,t.booking_id AS bookingId,c.name AS customer,t.kind,t.amount,t.method,t.reference,
+      CASE WHEN EXISTS(SELECT 1 FROM financial_transactions reversal WHERE reversal.agency_id=t.agency_id AND reversal.linked_transaction_id=t.id AND reversal.status='posted') THEN 'reversed' ELSE t.status END AS status,
+      t.posted_at AS postedAt
+    FROM financial_transactions t
+    JOIN bookings b ON b.id=t.booking_id AND b.agency_id=t.agency_id
+    JOIN customers c ON c.id=b.customer_id AND c.agency_id=b.agency_id
+    WHERE t.agency_id=? AND b.vehicle_id=?
+    ORDER BY t.posted_at DESC,t.created_at DESC
+    LIMIT 50
+  `).all(context.agencyId,id) as VehicleFinanceTransaction[];
+  return {
+    today: { income: income.today, expenses: expense.today },
+    month: { income: income.month, expenses: expense.month },
+    total: { income: income.total, expenses: expense.total },
+    depositHeld,
+    bookingValue,
+    outstanding,
+    bookings,
+    availabilityBlocks: listAvailabilityBlocks(context).filter(item => item.vehicleId === id),
+    recentTransactions,
+    recentExpenses: listExpenses(context).filter(item => item.vehicleId === id).slice(0, 20),
+  };
 }
 
 export function saveVehicle(context: RequestContext, input: unknown) {

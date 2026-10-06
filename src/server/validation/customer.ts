@@ -2,6 +2,7 @@ import { DomainError } from "@/server/domain/errors";
 
 export type CreateCustomerInput = {
   name: string;
+  fatherName?: string;
   phone: string;
   cnic: string;
   email?: string;
@@ -21,6 +22,7 @@ export function parseCreateCustomerInput(value: unknown): CreateCustomerInput & 
   const phoneNormalized = input.phone?.replace(/\D/g, "") ?? "";
   const cnicNormalized = input.cnic?.replace(/\D/g, "") ?? "";
   if (name.length < 2) errors.name = "Enter the customer's full name.";
+  if (input.fatherName && input.fatherName.trim().length > 120) errors.fatherName = "Father name must be 120 characters or fewer.";
   if (phoneNormalized.length < 10 || phoneNormalized.length > 13) errors.phone = "Enter a valid phone number.";
   if (cnicNormalized.length !== 13) errors.cnic = "CNIC must contain 13 digits.";
   if (input.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input.email.trim())) errors.email = "Enter a valid email address.";
@@ -31,6 +33,7 @@ export function parseCreateCustomerInput(value: unknown): CreateCustomerInput & 
   if (Object.keys(errors).length) throw new DomainError("VALIDATION_FAILED", "Review the customer details.", 400, errors);
   return {
     name,
+    fatherName: input.fatherName?.trim() || undefined,
     phone: input.phone!.trim(),
     phoneNormalized,
     cnic: input.cnic!.trim(),

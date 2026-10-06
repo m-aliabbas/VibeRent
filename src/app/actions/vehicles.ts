@@ -2,7 +2,7 @@
 
 import { getWebRequestContext } from "@/server/auth/session";
 import { asDomainError } from "@/server/domain/errors";
-import { getVehicle, getVehicleFormOptions, listVehicles, saveVehicle } from "@/server/services/vehicle-service";
+import { getVehicle, getVehicleFinance, getVehicleFormOptions, listVehicles, saveVehicle } from "@/server/services/vehicle-service";
 import type { Vehicle } from "@/types/vehicle";
 import type { RepositoryResult } from "@/lib/repositories/repository";
 
@@ -17,6 +17,11 @@ export async function listVehiclesAction(): Promise<RepositoryResult<Vehicle[]>>
 
 export async function getVehicleAction(id: string): Promise<RepositoryResult<Vehicle>> {
   try { return { ok: true, data: getVehicle(await getWebRequestContext(), id) }; } catch (error) { return failure(error); }
+}
+
+export async function getVehicleFinanceAction(id: string) {
+  try { return { ok: true as const, data: getVehicleFinance(await getWebRequestContext(), id) }; }
+  catch (error) { return failure(error); }
 }
 
 export async function saveVehicleAction(vehicle: Vehicle): Promise<RepositoryResult<Vehicle>> {

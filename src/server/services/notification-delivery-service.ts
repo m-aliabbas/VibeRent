@@ -6,6 +6,7 @@ import type { RequestContext } from "@/server/context/request-context";
 import { createTransactionInvoice, type InvoiceLine } from "@/server/documents/transaction-invoice";
 import { ensureWhatsAppRuntimeForDelivery } from "@/server/services/whatsapp-settings-service";
 import { sendWhatsAppDocument, sendWhatsAppText } from "@/server/whatsapp/runtime-registry";
+import { formatPaymentReceiptNumber } from "@/lib/payment-receipt";
 
 export type NotificationDeliveryResult = { status: "sent" | "skipped" | "failed"; message: string };
 
@@ -56,24 +57,28 @@ export async function deliverCheckinInvoice(context: RequestContext, bookingId: 
   });
 }
 
-export async function deliverPaymentInvoice(context: RequestContext, bookingId: string, payment: { amount: number; method: string; reference: string }) {
+export async function deliverPaymentInvoice(context: RequestContext, bookingId: string, payment: { amount: number; method: string; reference?: string; receiptNumber: number | null }) {
   const row = bookingNotice(context.agencyId, bookingId);
   if (!row) return failed("Payment was posted, but its receipt could not be prepared.");
+  if (payment.receiptNumber == null) return failed("Payment was posted, but its receipt number could not be prepared.");
+  const receiptId = formatPaymentReceiptNumber(payment.receiptNumber);
   return deliverBookingPdf(context, bookingId, row, {
     action: "booking.payment_invoice",
     title: "Payment receipt",
-    fileName: `payment-receipt-${row.publicNumber ?? bookingId}-${safeFilePart(payment.reference)}.pdf`,
-    caption: `Payment receipt #${row.publicNumber ?? bookingId} · ${money(payment.amount)}`,
+    fileName: `payment-receipt-${receiptId}.pdf`,
+    caption: `Payment receipt ${receiptId} · ${money(payment.amount)}`,
     issuedAt: new Date().toISOString(),
     lines: [
       { label: "Vehicle", value: `${row.vehicle} · ${row.plate}` },
       { label: "Method", value: payment.method },
-      { label: "Payment reference", value: payment.reference },
+      { label: "Receipt ID", value: receiptId },
+      ...(payment.reference ? [{ label: "External reference", value: payment.reference }] : []),
       { label: "Total paid to date", value: money(row.paid) },
       { label: "Outstanding balance", value: money(Math.max(0, row.totalAmount - row.paid)) },
     ],
     amountLabel: "Payment received",
     amount: payment.amount,
+    reference: receiptId,
   });
 }
 
@@ -112,8 +117,8 @@ export async function deliverOwnerExpenseNotice(context: RequestContext, expense
   }
 }
 
-async function deliverBookingPdf(context: RequestContext, bookingId: string, row: BookingNoticeRow, input: { action:string;title:string;fileName:string;caption:string;issuedAt:string;lines:InvoiceLine[];amountLabel:string;amount:number }) {
-  return deliverPdf(context, row.phone, input.action, bookingId, { agency:row.agency,title:input.title,reference:String(row.publicNumber ?? bookingId),recipient:row.customer,issuedAt:input.issuedAt,fileName:input.fileName,caption:input.caption,lines:input.lines,amountLabel:input.amountLabel,amount:input.amount });
+async function deliverBookingPdf(context: RequestContext, bookingId: string, row: BookingNoticeRow, input: { action:string;title:string;fileName:string;caption:string;issuedAt:string;lines:InvoiceLine[];amountLabel:string;amount:number;reference?:string }) {
+  return deliverPdf(context, row.phone, input.action, bookingId, { agency:row.agency,title:input.title,reference:input.reference??String(row.publicNumber ?? bookingId),recipient:row.customer,issuedAt:input.issuedAt,fileName:input.fileName,caption:input.caption,lines:input.lines,amountLabel:input.amountLabel,amount:input.amount });
 }
 
 async function deliverPdf(context: RequestContext, phone: string, action: string, entityId: string, input: { agency:string;title:string;reference:string;recipient:string;issuedAt:string;fileName:string;caption:string;lines:InvoiceLine[];amountLabel:string;amount:number }) {

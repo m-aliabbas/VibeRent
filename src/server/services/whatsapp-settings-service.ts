@@ -48,7 +48,8 @@ export async function connectWhatsApp(context:RequestContext){
   ensureSettingsRow(context.agencyId,settings.sessionId);
   return startWhatsAppRuntime({agencyId:context.agencyId,sessionId:settings.sessionId,ownerNumber:settings.ownerNumber||null,listeningEnabled:settings.listeningEnabled});
 }
-export async function disconnectWhatsApp(context:RequestContext){requireOwner(context);await logoutWhatsAppRuntime(context.agencyId);return getWhatsAppSettings(context);}
+export async function disconnectWhatsApp(context:RequestContext){requireOwner(context);const settings=getWhatsAppSettings(context);await logoutWhatsAppRuntime(context.agencyId,settings.sessionId);return getWhatsAppSettings(context);}
+export async function resetWhatsApp(context:RequestContext){requireOwner(context);const settings=getWhatsAppSettings(context);await logoutWhatsAppRuntime(context.agencyId,settings.sessionId);return startWhatsAppRuntime({agencyId:context.agencyId,sessionId:settings.sessionId,ownerNumber:settings.ownerNumber||null,listeningEnabled:settings.listeningEnabled});}
 
 export async function startConfiguredWhatsAppRuntimes(){
   const rows=sqlite.prepare("SELECT agency_id AS agencyId,session_id AS sessionId,owner_phone_normalized AS ownerNumber,listening_enabled AS listeningEnabled FROM whatsapp_settings").all() as Array<{agencyId:string;sessionId:string;ownerNumber:string|null;listeningEnabled:number}>;

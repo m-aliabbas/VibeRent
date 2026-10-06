@@ -117,7 +117,7 @@ export function parseCnicOcrResult(outputText: string): CnicOcrResult {
   }
 
   const value = parsed as Record<string, unknown>;
-  const expectedKeys = ["name", "dob", "address", "expiry", "cnic_no"];
+  const expectedKeys = ["name", "father_name", "dob", "address", "expiry", "cnic_no"];
   if (
     Object.keys(value).length !== expectedKeys.length ||
     expectedKeys.some((key) => !(key in value))
@@ -130,6 +130,7 @@ export function parseCnicOcrResult(outputText: string): CnicOcrResult {
 
   return {
     name: requiredNullableString(value, "name"),
+    father_name: requiredNullableString(value, "father_name"),
     dob: requiredNullableString(value, "dob"),
     address: requiredNullableString(value, "address"),
     expiry: requiredNullableString(value, "expiry"),
@@ -140,6 +141,7 @@ export function parseCnicOcrResult(outputText: string): CnicOcrResult {
 export function formatCnicOcrText(result: CnicOcrResult): string {
   return [
     `name: ${result.name ?? ""}`,
+    `father_name: ${result.father_name ?? ""}`,
     `dob: ${result.dob ?? ""}`,
     `address: ${result.address ?? ""}`,
     `expiry: ${result.expiry ?? ""}`,

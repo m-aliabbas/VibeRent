@@ -86,7 +86,7 @@ export async function recordBookingPaymentAction(bookingId: string, input: Recor
   try {
     const context=await getWebRequestContext();
     const data = recordBookingPayment(context, bookingId, input);
-    const notificationDelivery=await deliverPaymentInvoice(context,bookingId,input);
+    const notificationDelivery=await deliverPaymentInvoice(context,bookingId,{...input,receiptNumber:data.paymentReceiptNumber});
     return { ok: true as const, data:{...data,notificationDelivery} };
   } catch (error) {
     const issue = asDomainError(error);

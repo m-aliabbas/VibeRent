@@ -8,12 +8,13 @@ const CNIC_OCR_SCHEMA = {
   type: "object",
   properties: {
     name: { type: ["string", "null"] },
+    father_name: { type: ["string", "null"] },
     dob: { type: ["string", "null"] },
     address: { type: ["string", "null"] },
     expiry: { type: ["string", "null"] },
     cnic_no: { type: ["string", "null"] },
   },
-  required: ["name", "dob", "address", "expiry", "cnic_no"],
+  required: ["name", "father_name", "dob", "address", "expiry", "cnic_no"],
   additionalProperties: false,
 } as const;
 
@@ -51,7 +52,7 @@ export class OpenAiCnicOcrGateway implements CnicOcrGateway {
           content: [
             {
               type: "input_text",
-              text: "From these front and back CNIC images, return strictly these fields when visibly available: name, dob, address, expiry, and cnic_no. Use null for every unavailable field.",
+              text: "From these front and back CNIC images, return strictly these fields when visibly available: name, father_name, dob, address, expiry, and cnic_no. The father_name field may be printed as Father Name or Husband Name. Use null for every unavailable field.",
             },
             { type: "input_text", text: "CNIC front:" },
             {

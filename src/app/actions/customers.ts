@@ -10,6 +10,7 @@ import type { CreateCustomerInput } from "@/server/validation/customer";
 type CustomerDto = {
   id: string;
   name: string;
+  fatherName: string | null;
   phone: string;
   cnic: string;
   email: string | null;

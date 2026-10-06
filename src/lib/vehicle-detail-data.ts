@@ -3,7 +3,8 @@ import type { VehicleStatus } from "@/types/vehicle";
 export type VehicleDetailTab =
   | "overview"
   | "documents"
-  | "bookings"
+  | "calendar"
+  | "income"
   | "expenses"
   | "maintenance"
   | "activity";

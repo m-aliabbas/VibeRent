@@ -3,6 +3,7 @@ import { DomainError } from "@/server/domain/errors";
 export type CreateExpenseInput = {
   vehicleId?: string;
   bookingId?: string;
+  customerId?: string;
   ownerId?: string;
   amount: number;
   category: string;
@@ -25,6 +26,7 @@ export function parseCreateExpenseInput(value: unknown): CreateExpenseInput {
   return {
     vehicleId: input.vehicleId?.trim() || undefined,
     bookingId: input.bookingId?.trim() || undefined,
+    customerId: input.customerId?.trim() || undefined,
     ownerId: input.ownerId?.trim() || undefined,
     amount: input.amount!, category: input.category!.trim(), description: input.description!.trim(), occurredOn: input.occurredOn!,
   };

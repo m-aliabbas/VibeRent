@@ -13,8 +13,10 @@ import {
 import type { BookingListItem, BookingTransactionDto } from "@/server/repositories/contracts";
 import type { DepositAction, PaymentMethod } from "@/server/validation/booking";
 import { formatPkr } from "@/lib/utils";
+import { formatPaymentReceiptNumber } from "@/lib/payment-receipt";
 
 export type BookingDetailData = BookingListItem & {
+  paymentReceiptNumber?: number | null;
   transactions?: BookingTransactionDto[];
   depositHeld?: number;
   inspections?: unknown[];
@@ -153,7 +155,7 @@ function PaymentDialog({
   const valid = Number.isInteger(amount) && amount > 0 && amount <= Math.max(balance, 0);
 
   async function save() {
-    if (!valid || !reference.trim() || pending) return;
+    if (!valid || pending) return;
     setPending(true);
     setError("");
     const result = await recordBookingPaymentAction(bookingId, {
@@ -164,7 +166,10 @@ function PaymentDialog({
     });
     setPending(false);
     if (result.ok) {
-      onSave(result.data, `Payment posted. ${result.data.notificationDelivery.message}`);
+      const receiptId = result.data.paymentReceiptNumber === null
+        ? ""
+        : formatPaymentReceiptNumber(result.data.paymentReceiptNumber);
+      onSave(result.data, `Payment posted${receiptId ? ` as ${receiptId}` : ""}. ${result.data.notificationDelivery.message}`);
     } else {
       setError(result.error.message || "Failed to record payment.");
     }
@@ -173,7 +178,7 @@ function PaymentDialog({
   return (
     <Shell
       title="Record payment"
-      description={`Record payment for ${customer}. Posted payments are immutable and stored in the database.`}
+      description={`Record payment for ${customer}. A unique receipt ID is generated automatically.`}
       onClose={onClose}
     >
       <div className="mt-5 grid gap-4 sm:grid-cols-2">
@@ -190,11 +195,10 @@ function PaymentDialog({
           options={["Cash", "Bank transfer", "Card terminal", "JazzCash", "Easypaisa", "Other wallet"]}
         />
         <FormInput
-          label="Reference / Receipt #"
+          label="External reference (optional)"
           value={reference}
           onChange={(e) => setReference(e.target.value)}
-          placeholder="e.g. IBFT-90418 or Counter"
-          required
+          placeholder="e.g. IBFT-90418"
         />
         <FormSelect
           label="Receiving account"
@@ -220,7 +224,7 @@ function PaymentDialog({
         <Button variant="secondary" disabled={pending} onClick={onClose}>
           Cancel
         </Button>
-        <Button disabled={!valid || !reference.trim() || pending} onClick={() => void save()}>
+        <Button disabled={!valid || pending} onClick={() => void save()}>
           {pending ? "Posting…" : "Post payment"}
         </Button>
       </div>
@@ -379,7 +383,7 @@ function LedgerDialog({
                       </span>
                     </div>
                     <p className="mt-0.5 text-xs text-[#667085]">
-                      {item.id} · {item.method} · {item.reference}
+                      {item.receiptNumber ? `${formatPaymentReceiptNumber(item.receiptNumber)} · ` : ""}{item.method}{item.reference ? ` · ${item.reference}` : ""}
                     </p>
                     <p className="text-[11px] text-[#98A2B3]">
                       {new Intl.DateTimeFormat("en-PK", {

@@ -52,7 +52,7 @@ export type PaymentMethod = (typeof paymentMethods)[number];
 export type RecordPaymentInput = {
   amount: number;
   method: string;
-  reference: string;
+  reference?: string;
   account?: string;
   note?: string;
   idempotencyKey?: string;
@@ -68,14 +68,11 @@ export function parseRecordPaymentInput(value: unknown): RecordPaymentInput {
   if (!input.method?.trim() || !paymentMethods.includes(input.method as PaymentMethod)) {
     errors.method = "Select a valid payment method.";
   }
-  if (!input.reference?.trim()) {
-    errors.reference = "Enter a payment reference or counter receipt number.";
-  }
   if (Object.keys(errors).length) throw new DomainError("VALIDATION_FAILED", "Review the payment details.", 400, errors);
   return {
     amount: input.amount!,
     method: input.method!.trim(),
-    reference: input.reference!.trim(),
+    reference: input.reference?.trim() || "",
     account: input.account?.trim() || undefined,
     note: input.note?.trim() || undefined,
     idempotencyKey: input.idempotencyKey?.trim() || undefined,

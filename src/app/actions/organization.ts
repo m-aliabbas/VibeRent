@@ -12,11 +12,11 @@ import { asDomainError, DomainError } from "@/server/domain/errors";
 import { staffRoles, type StaffRole } from "@/server/context/request-context";
 import {
   updateAgreementDesigner,
-  updateEnglishRentalTerms,
+  updateRentalTerms,
   updateOrganizationProfile,
   type OrganizationSettingsDto,
 } from "@/server/services/organization-settings-service";
-import type { AgreementDesignConfig } from "@/lib/agreement-config";
+import { composeTermsSnapshot, defaultAgreementConfig, type AgreementDesignConfig } from "@/lib/agreement-config";
 
 export type OrganizationActionResult<T = undefined> =
   | { ok: true; data?: T; message?: string }
@@ -47,8 +47,8 @@ export async function updateMyProfileAction(input:{name:string;phone:string}):Pr
   } catch(error){return actionFailure(error);}
 }
 
-export async function updateRentalTermsAction(terms:string):Promise<OrganizationActionResult<{terms:string}>> {
-  try { const context=await getWebRequestContext();const value=terms.trim();if(value.length<40)return {ok:false,message:"Rental terms should contain at least 40 characters.",fieldErrors:{terms:"Add the key renter obligations."}};updateEnglishRentalTerms(context,value);revalidatePath("/settings");return {ok:true,data:{terms:value},message:"English terms updated for future bookings."};} catch(error){return actionFailure(error);}
+export async function updateRentalTermsAction(terms:string,language:"en"|"ur"="en"):Promise<OrganizationActionResult<{terms:string}>> {
+  try { const context=await getWebRequestContext();const value=terms.trim();if(value.length<40)return {ok:false,message:"Rental terms should contain at least 40 characters.",fieldErrors:{terms:"Add the key renter obligations."}};updateRentalTerms(context,value,language);revalidatePath("/settings");return {ok:true,data:{terms:value},message:`${language==="ur"?"Urdu":"English"} terms updated for future bookings and PDFs.`};} catch(error){return actionFailure(error);}
 }
 
 export async function updateOrganizationProfileAction(input:OrganizationSettingsDto["profile"]):Promise<OrganizationActionResult<OrganizationSettingsDto["profile"]>> {
@@ -95,8 +95,8 @@ export async function createAgencyAction(input: { name: string; slug: string; ci
     const now = new Date().toISOString();
 
     sqlite.transaction(() => {
-      sqlite.prepare("INSERT OR IGNORE INTO agencies (id,name,currency,timezone,phone,address,version,created_at,updated_at) VALUES (?,?,'PKR','Asia/Karachi',NULL,?,1,?,?)")
-        .run(agencyId, name, address, now, now);
+      sqlite.prepare("INSERT OR IGNORE INTO agencies (id,name,currency,timezone,phone,address,agreement_header,agreement_locale,agreement_config,rental_terms,version,created_at,updated_at) VALUES (?,?,'PKR','Asia/Karachi',NULL,?,?,?,?,?,1,?,?)")
+        .run(agencyId, name, address, defaultAgreementConfig.titleEn, defaultAgreementConfig.language, JSON.stringify(defaultAgreementConfig), composeTermsSnapshot({ ...defaultAgreementConfig, language: "en" }), now, now);
       const existingBranch = sqlite.prepare("SELECT id FROM branches WHERE agency_id=? ORDER BY created_at LIMIT 1").get(agencyId) as { id: string } | undefined;
       const resolvedBranchId = existingBranch?.id ?? branchId;
       if (!existingBranch) {

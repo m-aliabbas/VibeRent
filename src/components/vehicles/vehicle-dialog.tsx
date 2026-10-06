@@ -1,11 +1,12 @@
 "use client";
 
 import * as Dialog from "@radix-ui/react-dialog";
-import Link from "next/link";
 import { useEffect, useState, type FormEvent } from "react";
 import { CarFront, LoaderCircle, Plus, Trash2, X } from "lucide-react";
+import { saveOwnerAction } from "@/app/actions/owners";
 import { getVehicleFormOptionsAction } from "@/app/actions/vehicles";
 import { Button } from "@/components/ui/button";
+import { FormCombobox } from "@/components/forms/form-combobox";
 import { FormInput, FormSelect } from "@/components/forms/form-controls";
 import type { RepositoryResult } from "@/lib/repositories/repository";
 import type { Vehicle } from "@/types/vehicle";
@@ -47,6 +48,10 @@ export function VehicleDialog({
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [options, setOptions] = useState<{branches:Array<{id:string;name:string;city:string}>;owners:Array<{id:string;name:string;phone:string}>;defaultCity:string}>({branches:[],owners:[],defaultCity:""});
+  const [addingOwner, setAddingOwner] = useState(false);
+  const [ownerForm, setOwnerForm] = useState({ name: "", phone: "", email: "" });
+  const [ownerError, setOwnerError] = useState("");
+  const [savingOwner, setSavingOwner] = useState(false);
   const update = (key: keyof Vehicle, value: string | number) =>
     setForm((current) => ({ ...current, [key]: value }));
   const dirty = JSON.stringify(form) !== initialSnapshot;
@@ -110,6 +115,30 @@ export function VehicleDialog({
       return;
     }
     onOpenChange(false);
+  }
+  async function createOwner() {
+    if (!ownerForm.name.trim() || !ownerForm.phone.trim() || savingOwner) return;
+    setSavingOwner(true);
+    setOwnerError("");
+    const result = await saveOwnerAction(ownerForm);
+    setSavingOwner(false);
+    if (!result.ok) {
+      setOwnerError(result.error.message);
+      return;
+    }
+    const owner = { id: result.data.id, name: result.data.name, phone: result.data.phone };
+    setOptions(current => ({ ...current, owners: [...current.owners, owner].sort((a,b) => a.name.localeCompare(b.name)) }));
+    setForm(current => ({
+      ...current,
+      ownerId: owner.id,
+      owner: owner.name,
+      agreement: {
+        ...(current.agreement ?? { effectiveFrom: new Date().toISOString().slice(0, 10), effectiveTo: "", shareMethod: "Percentage", ownerShare: 70, expenseResponsibility: "Shared", payoutFrequency: "Monthly" }),
+        ownerId: owner.id,
+      },
+    }));
+    setOwnerForm({ name: "", phone: "", email: "" });
+    setAddingOwner(false);
   }
   return (
     <Dialog.Root
@@ -230,12 +259,29 @@ export function VehicleDialog({
               />
               {form.ownership === "Managed" ? (
                 <div>
-                  <label className="block text-sm font-semibold text-[#344054]">Vehicle owner <span className="text-[#D92D20]">*</span></label>
-                  <select className="field mt-1.5" value={form.ownerId ?? ""} onChange={(e) => { const owner=options.owners.find(item=>item.id===e.target.value); setForm(current=>({...current,ownerId:owner?.id,owner:owner?.name,agreement:{...(current.agreement??{effectiveFrom:new Date().toISOString().slice(0,10),effectiveTo:"",shareMethod:"Percentage",ownerShare:70,expenseResponsibility:"Shared",payoutFrequency:"Monthly"}),ownerId:owner?.id??""}})); }} required>
-                    <option value="">Select an owner</option>
-                    {options.owners.map(owner=><option key={owner.id} value={owner.id}>{owner.name} · {owner.phone}</option>)}
-                  </select>
-                  {options.owners.length === 0 ? <Link href="/owners?new=1" className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-[#006FE6]"><Plus size={14}/>No owners yet — add a new owner</Link> : <Link href="/owners?new=1" className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-[#006FE6]"><Plus size={14}/>Add new owner</Link>}
+                  <FormCombobox
+                    label="Vehicle owner"
+                    value={form.ownerId ?? ""}
+                    onValueChange={(ownerId) => {
+                      const owner = options.owners.find(item => item.id === ownerId);
+                      setForm(current => ({
+                        ...current,
+                        ownerId: owner?.id,
+                        owner: owner?.name,
+                        agreement: {
+                          ...(current.agreement ?? { effectiveFrom: new Date().toISOString().slice(0, 10), effectiveTo: "", shareMethod: "Percentage", ownerShare: 70, expenseResponsibility: "Shared", payoutFrequency: "Monthly" }),
+                          ownerId: owner?.id ?? "",
+                        },
+                      }));
+                    }}
+                    options={[
+                      { label: "Select an owner", value: "" },
+                      ...options.owners.map(owner => ({ label: `${owner.name} · ${owner.phone}`, value: owner.id })),
+                    ]}
+                    searchPlaceholder="Search owner name or phone…"
+                    required
+                  />
+                  <button type="button" onClick={() => { setAddingOwner(value => !value); setOwnerError(""); }} className="mt-2 inline-flex min-h-9 items-center gap-1 text-xs font-semibold text-[#006FE6] hover:underline"><Plus size={14}/>{options.owners.length === 0 ? "No owners yet — add one here" : "Add new owner"}</button>
                 </div>
               ) : (
                 <div className="hidden sm:block" />
@@ -359,6 +405,14 @@ export function VehicleDialog({
                     </p>
                   )}
                 </div>
+              )}
+              {form.ownership === "Managed" && addingOwner && (
+                <section className="rounded-xl border border-[#B2DDFF] bg-[#F5FAFF] p-4 sm:col-span-2" aria-label="Add owner inline">
+                  <div className="flex items-start justify-between gap-3"><div><h3 className="text-sm font-bold text-[#175CD3]">Add a new owner</h3><p className="mt-1 text-xs text-[#475467]">The owner will be saved and selected for this vehicle.</p></div><button type="button" aria-label="Close add owner form" onClick={() => setAddingOwner(false)} className="grid h-8 w-8 place-items-center rounded-lg text-[#667085] hover:bg-white"><X size={16}/></button></div>
+                  <div className="mt-4 grid gap-4 sm:grid-cols-3"><FormInput label="Owner / business name" value={ownerForm.name} onChange={event => setOwnerForm(current => ({...current,name:event.target.value}))} required/><FormInput label="Phone" value={ownerForm.phone} onChange={event => setOwnerForm(current => ({...current,phone:event.target.value}))} placeholder="0300 1234567" required/><FormInput label="Email" type="email" value={ownerForm.email} onChange={event => setOwnerForm(current => ({...current,email:event.target.value}))}/></div>
+                  {ownerError && <p role="alert" className="mt-3 text-xs font-medium text-[#B42318]">{ownerError}</p>}
+                  <div className="mt-4 flex justify-end gap-2"><Button type="button" size="sm" variant="secondary" disabled={savingOwner} onClick={() => setAddingOwner(false)}>Cancel</Button><Button type="button" size="sm" disabled={savingOwner || !ownerForm.name.trim() || !ownerForm.phone.trim()} onClick={() => void createOwner()}>{savingOwner && <LoaderCircle className="animate-spin" size={15}/>} {savingOwner ? "Saving…" : "Save and select owner"}</Button></div>
+                </section>
               )}
               <FormInput
                 label="Self-drive rate (PKR)"

@@ -22,6 +22,7 @@ const acceptedTypes = ["image/jpeg", "image/png", "image/webp", "image/gif"];
 
 const fields: Array<{ key: keyof CnicOcrResult; label: string }> = [
   { key: "name", label: "Name" },
+  { key: "father_name", label: "Father / husband name" },
   { key: "dob", label: "Date of birth" },
   { key: "address", label: "Address" },
   { key: "expiry", label: "ID expiry" },

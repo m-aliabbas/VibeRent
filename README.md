@@ -70,7 +70,29 @@ npm install
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+Open [http://rent.local](http://rent.local). The development launcher advertises
+that hostname over mDNS/Bonjour and serves on port 80, so the URL does not need
+a port suffix. On Unix systems, binding port 80 may require a one-time local
+port-forwarding/capability setup; use `VIBERENT_LOCAL_PORT=3000 npm run dev` or
+`npm run dev:standard` when that setup is unavailable. Windows normally allows
+the launcher to bind directly unless port 80 is already reserved by IIS/HTTP.sys.
+
+### Run on the local network
+
+VibeRent's frontend, Server Actions, `/api/v1` backend, and SQLite access run in one Node.js application process. To expose that single instance on trusted devices across the local network:
+
+```bash
+npm run dev:lan
+```
+
+For a built release, run `npm run build` once and then `npm run start:lan`. Both LAN commands bind to `0.0.0.0:4321` and apply database migrations before startup. Configure `.env.local` with the URL clients will use:
+
+```dotenv
+BETTER_AUTH_URL=http://pos.local:4321
+BETTER_AUTH_TRUSTED_ORIGINS=http://pos.local:4321,http://192.168.1.25:4321
+```
+
+Open `http://pos.local:4321` when the server computer advertises the `pos.local` hostname through mDNS/Bonjour. Otherwise use `http://<server-LAN-IP>:4321`. Allow TCP port 4321 only on the private network firewall. Run only one VibeRent application instance against the SQLite database; phones and other computers are clients of that same backend, not additional database writers.
 
 ## Quality commands
 

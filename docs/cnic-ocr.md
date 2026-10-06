@@ -6,6 +6,7 @@ Responses API using `gpt-4o` and returns this typed contract:
 ```ts
 {
   name: string | null;
+  father_name: string | null;
   dob: string | null;
   address: string | null;
   expiry: string | null;
@@ -47,6 +48,7 @@ The output formatter produces:
 
 ```text
 name: AHSAN RAZA
+father_name: RAZA AHMED
 dob: 01.01.1990
 address: HOUSE 12, MODEL TOWN, LAHORE
 expiry: 01.01.2030

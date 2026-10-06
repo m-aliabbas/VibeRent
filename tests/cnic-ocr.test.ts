@@ -13,6 +13,7 @@ import { CnicOcrError } from "../src/server/cnic-ocr/types";
 
 const fictionalResult = {
   name: "AHSAN RAZA",
+  father_name: "RAZA AHMED",
   dob: "01.01.1990",
   address: "HOUSE 12, MODEL TOWN, LAHORE",
   expiry: "01.01.2030",
@@ -68,6 +69,7 @@ test("formats the exact text contract", () => {
     formatCnicOcrText(fictionalResult),
     [
       "name: AHSAN RAZA",
+      "father_name: RAZA AHMED",
       "dob: 01.01.1990",
       "address: HOUSE 12, MODEL TOWN, LAHORE",
       "expiry: 01.01.2030",
@@ -79,7 +81,7 @@ test("formats the exact text contract", () => {
 test("keeps unreadable fields null and renders them as blank text", async () => {
   const service = new CnicOcrService({
     extract: async () =>
-      JSON.stringify({ name: "AHSAN RAZA", dob: null, address: null, expiry: null, cnic_no: null }),
+      JSON.stringify({ name: "AHSAN RAZA", father_name: null, dob: null, address: null, expiry: null, cnic_no: null }),
   });
 
   const result = await service.extract({
@@ -123,7 +125,7 @@ test("rejects malformed or unexpected model output", async () => {
   );
 
   const missingField = new CnicOcrService({
-    extract: async () => JSON.stringify({ name: "AHSAN RAZA", dob: null, address: null, expiry: null }),
+    extract: async () => JSON.stringify({ name: "AHSAN RAZA", father_name: null, dob: null, address: null, expiry: null }),
   });
   await assert.rejects(
     missingField.extract({ front: { imageBytes: Uint8Array.from([1]), mimeType: "image/webp" }, back: { imageBytes: Uint8Array.from([2]), mimeType: "image/webp" } }),

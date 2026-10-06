@@ -3,7 +3,7 @@ import "server-only";
 import fs from "node:fs";
 import PDFDocument from "pdfkit";
 import { sqlite } from "@/db/connection";
-import { normalizeAgreementConfig, type AgreementDesignConfig, type AgreementSectionId } from "@/lib/agreement-config";
+import { composeTermsSnapshot, normalizeAgreementConfig, type AgreementDesignConfig, type AgreementSectionId } from "@/lib/agreement-config";
 import type { RequestContext } from "@/server/context/request-context";
 import { DomainError } from "@/server/domain/errors";
 import { wrapRtlText } from "@/server/documents/rtl-text";
@@ -29,6 +29,7 @@ type AgreementRow = {
   legacyTerms: string;
   logo: string | null;
   customer: string;
+  customerFatherName: string | null;
   customerPhone: string;
   customerCnic: string;
   vehicle: string;
@@ -39,6 +40,7 @@ type AgreementRow = {
   driverPhone: string | null;
   driverCnic: string | null;
   driverLicense: string | null;
+  initialOdometer: number | null;
 };
 
 type PdfFonts = { regular: string; bold: string; urdu?: string };
@@ -53,10 +55,11 @@ export async function createRentalAgreementPdf(context: RequestContext, bookingI
       b.terms_snapshot AS terms,a.name AS agency,a.phone AS agencyPhone,a.public_email AS agencyEmail,
       a.address AS agencyAddress,a.registration_number AS registrationNumber,a.tax_number AS taxNumber,
       a.agreement_config AS agreementConfig,a.rental_terms AS legacyTerms,o.logo,
-      c.name AS customer,c.phone_normalized AS customerPhone,c.cnic_normalized AS customerCnic,
+      c.name AS customer,c.father_name AS customerFatherName,c.phone_normalized AS customerPhone,c.cnic_normalized AS customerCnic,
       v.make||' '||v.model||' '||v.year AS vehicle,v.plate,v.chassis_number AS chassisNumber,
       v.engine_number AS engineNumber,d.name AS driver,d.phone_normalized AS driverPhone,
-      d.cnic_normalized AS driverCnic,d.license_number AS driverLicense
+      d.cnic_normalized AS driverCnic,d.license_number AS driverLicense,
+      (SELECT ri.odometer FROM rental_inspections ri WHERE ri.agency_id=b.agency_id AND ri.booking_id=b.id AND ri.kind='checkout' LIMIT 1) AS initialOdometer
     FROM bookings b
     JOIN agencies a ON a.id=b.agency_id
     LEFT JOIN organization o ON o.id=b.agency_id
@@ -106,40 +109,48 @@ function renderSection(doc: PDFKit.PDFDocument, fonts: PdfFonts, row: AgreementR
   const estimated = id === "terms" ? 125 : id === "signatures" ? 76 : 72;
   ensureSpace(doc, estimated, config);
   const y = doc.y;
-  if (config.language !== "ur") doc.font(fonts.bold).fontSize(9.5).fillColor(config.accentColor).text(titleEn.toUpperCase(), 44, y, { width: 245 });
-  if (config.language !== "en") urduText(doc, fonts, titleUr, 305, y - 4, 246, 11, config.accentColor);
+  const terms = id === "terms" ? resolveTermsSnapshot(row.terms, config) : "";
+  const parsedTerms = splitSnapshot(terms);
+  const showEnglish = id === "terms" ? Boolean(parsedTerms.english) : config.language !== "ur";
+  const showUrdu = id === "terms" ? Boolean(parsedTerms.urdu) : config.language !== "en";
+  if (showEnglish) doc.font(fonts.bold).fontSize(9.5).fillColor(config.accentColor).text(titleEn.toUpperCase(), 44, y, { width: 245 });
+  if (showUrdu) urduText(doc, fonts, titleUr, 305, y - 4, 246, 11, config.accentColor);
   doc.moveTo(44, y + 16).lineTo(551, y + 16).strokeColor(`${config.accentColor}55`).lineWidth(0.6).stroke();
   doc.y = y + 20;
-  if (id === "terms") return renderTerms(doc, fonts, row.terms, config);
+  if (id === "terms") return renderTerms(doc, fonts, terms, config);
   if (id === "signatures") return renderSignatures(doc, fonts, config);
   const fields = detailFields(id, row);
-  const rowHeight = id === "vehicle" ? 27 : config.density === "compact" ? 28 : 31;
+  const columns = 3;
+  const gap = 8;
+  const fieldWidth = (contentWidth - gap * (columns - 1)) / columns;
+  const rowHeight = config.density === "compact" ? 23 : 25;
   const baseY = doc.y;
   fields.forEach((field, index) => {
-    const column = index % 2;
-    const line = Math.floor(index / 2);
-    const x = column ? 307 : 44;
+    const column = index % columns;
+    const line = Math.floor(index / columns);
+    const x = 44 + column * (fieldWidth + gap);
     const top = baseY + line * rowHeight;
-    doc.roundedRect(x, top, 230, rowHeight - 5, 4).fillColor("#F8FAFC").fill();
-    if(config.language==="ur")urduText(doc,fonts,field.ur,x+9,top+2,100,7,"#667085",0);
-    else doc.font(fonts.regular).fontSize(7).fillColor("#667085").text(field.en, x + 9, top + 4, { width: 100 });
-    doc.font(fonts.bold).fontSize(id === "vehicle" ? 8.2 : 8.6).fillColor("#19191F").text(field.value, x + 9, top + 14, { width: 212, ellipsis: true, lineBreak: false });
+    doc.roundedRect(x, top, fieldWidth, rowHeight - 4, 3).fillColor("#F8FAFC").fill();
+    if(config.language==="ur")urduText(doc,fonts,field.ur,x+7,top+1,fieldWidth-14,6.2,"#667085",-1);
+    else doc.font(fonts.regular).fontSize(6.2).fillColor("#667085").text(field.en, x + 7, top + 3, { width: fieldWidth - 14, lineGap: 0 });
+    doc.font(fonts.bold).fontSize(7.4).fillColor("#19191F").text(field.value, x + 7, top + 11, { width: fieldWidth - 14, ellipsis: true, lineBreak: false });
   });
-  doc.y = baseY + Math.ceil(fields.length / 2) * rowHeight + 7;
+  doc.y = baseY + Math.ceil(fields.length / columns) * rowHeight + 5;
 }
 
 function renderTerms(doc: PDFKit.PDFDocument, fonts: PdfFonts, snapshot: string, config: AgreementDesignConfig) {
   const { english, urdu } = splitSnapshot(snapshot);
   const startY = doc.y;
+  const bilingual = Boolean(english && urdu);
   let englishBottom = startY;
-  if (config.language !== "ur" && english) {
-    doc.font(fonts.regular).fontSize(config.density === "compact" ? 7.2 : 7.7).fillColor("#344054").text(english, 44, startY, { width: config.language === "bilingual" ? 242 : contentWidth, lineGap: 1.2 });
+  if (english) {
+    doc.font(fonts.regular).fontSize(config.density === "compact" ? 6.8 : 7.2).fillColor("#344054").text(english, 44, startY, { width: bilingual ? 242 : contentWidth, lineGap: 0.5 });
     englishBottom = doc.y;
   }
   let urduBottom = startY;
-  if (config.language !== "en" && urdu) {
+  if (urdu) {
     const cleanUrdu = urdu.split("\n").map(line => line.replace(/^\s*\d+[.)]\s*/, "")).join("\n");
-    urduText(doc, fonts, cleanUrdu, config.language === "bilingual" ? 309 : 44, startY, config.language === "bilingual" ? 242 : contentWidth, config.density === "compact" ? 8 : 8.5, "#344054", 1.5);
+    urduText(doc, fonts, cleanUrdu, bilingual ? 309 : 44, startY, bilingual ? 242 : contentWidth, config.density === "compact" ? 7.5 : 8, "#344054", 0.5);
     urduBottom = doc.y;
   }
   doc.y = Math.max(englishBottom, urduBottom) + 9;
@@ -177,8 +188,8 @@ function renderFooter(doc: PDFKit.PDFDocument, fonts: PdfFonts, config: Agreemen
 function detailFields(id: Exclude<AgreementSectionId, "terms" | "signatures">, row: AgreementRow) {
   const map = {
     rental: [field("Pickup", "روانگی", date(row.pickupAt)), field("Return", "واپسی", date(row.returnAt)), field("Destination", "منزل", row.destinationCity), field("Rental type", "کرایہ کی قسم", row.rentalMode === "with_driver" ? "With driver" : "Self drive")],
-    renter: row.renterSkipped ? [field("Renter", "کرایہ دار", "With-driver guest details not recorded")] : [field("Name", "نام", row.customer), field("Phone", "فون", row.customerPhone), field("CNIC", "شناختی کارڈ", row.customerCnic), field("Driver", "ڈرائیور", row.driver ? `${row.driver} · ${row.driverLicense ?? ""}` : "Renter")],
-    vehicle: [field("Vehicle", "گاڑی", row.vehicle), field("Registration", "رجسٹریشن", row.plate), field("Chassis number", "چیسز نمبر", row.chassisNumber || "Not recorded"), field("Engine number", "انجن نمبر", row.engineNumber || "Not recorded")],
+    renter: row.renterSkipped ? [field("Renter", "کرایہ دار", "With-driver guest details not recorded")] : [field("Name", "نام", row.customer), field("Father name", "والد کا نام", row.customerFatherName || "Not recorded"), field("CNIC", "شناختی کارڈ", formatCnic(row.customerCnic)), field("Phone", "فون", row.customerPhone)],
+    vehicle: [field("Vehicle", "گاڑی", row.vehicle), field("Registration", "رجسٹریشن", row.plate), field("Initial odometer", "ابتدائی اوڈومیٹر", row.initialOdometer === null ? "Not recorded" : `${row.initialOdometer.toLocaleString("en-PK")} km`), field("Chassis number", "چیسز نمبر", row.chassisNumber || "Not recorded"), field("Engine number", "انجن نمبر", row.engineNumber || "Not recorded")],
     charges: [field("Daily rate", "یومیہ کرایہ", money(row.dailyRate)), field("Deposit", "ضمانت", money(row.depositRequired)), field("Rental total", "کل رقم", money(row.totalAmount)), field("Currency", "کرنسی", "PKR")],
   };
   return map[id];
@@ -220,8 +231,13 @@ function splitSnapshot(value: string) {
   return hasUrdu(value) ? { english: "", urdu: value } : { english: value.replace(/^Terms and conditions\s*/i, "").trim(), urdu: "" };
 }
 
+function resolveTermsSnapshot(snapshot: string, config: AgreementDesignConfig) {
+  return snapshot.trim() || composeTermsSnapshot(config);
+}
+
 function parseConfig(value: string | null) { try { return value ? JSON.parse(value) : undefined; } catch { return undefined; } }
 function field(en: string, ur: string, value: string) { return { en, ur, value }; }
+function formatCnic(value: string) { const digits=value.replace(/\D/g,"");return digits.length===13?`${digits.slice(0,5)}-${digits.slice(5,12)}-${digits.slice(12)}`:value||"Not recorded"; }
 function money(value: number) { return `PKR ${value.toLocaleString("en-PK")}`; }
 function date(value: string) { return new Intl.DateTimeFormat("en-PK", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Karachi" }).format(new Date(value)); }
 function hasUrdu(value: string) { return /[\u0600-\u06ff]/.test(value); }

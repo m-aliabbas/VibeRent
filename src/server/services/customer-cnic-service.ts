@@ -31,7 +31,7 @@ type FileRow = {
 
 const imageTypes = SUPPORTED_CNIC_IMAGE_MIME_TYPES as readonly string[];
 const storageRoot = getPrivateFileRoot();
-const emptyResult: CnicOcrResult = { name: null, dob: null, address: null, expiry: null, cnic_no: null };
+const emptyResult: CnicOcrResult = { name: null, father_name: null, dob: null, address: null, expiry: null, cnic_no: null };
 
 function entityType(target: CustomerCnicTarget) {
   return target.type === "customer" ? "customer" : "customer_draft";
@@ -57,6 +57,7 @@ function parseResult(value: string | null): CnicOcrResult {
     const parsed = JSON.parse(value) as Partial<CnicOcrResult> & { cnic?: string | null; id_expiry?: string | null };
     return {
       name: parsed.name ?? null,
+      father_name: parsed.father_name ?? null,
       dob: parsed.dob ?? null,
       address: parsed.address ?? null,
       expiry: parsed.expiry ?? parsed.id_expiry ?? null,
@@ -89,6 +90,7 @@ function buildIntake(agencyId: string, target: CustomerCnicTarget): BookingCnicI
     back: fileDto(back, "back"),
     extracted: {
       name: frontResult.name ?? backResult.name,
+      father_name: frontResult.father_name ?? backResult.father_name,
       dob: frontResult.dob ?? backResult.dob,
       address: backResult.address ?? frontResult.address,
       expiry: frontResult.expiry ?? backResult.expiry,

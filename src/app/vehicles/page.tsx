@@ -21,7 +21,7 @@ import type { RepositoryResult } from "@/lib/repositories/repository";
 import { formatPkr } from "@/lib/utils";
 import type { Vehicle } from "@/types/vehicle";
 
-const pageSize = 5;
+const pageSize = 20;
 type SortState = { key: string; direction: "asc" | "desc" };
 
 export default function VehiclesPage() {

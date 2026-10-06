@@ -14,6 +14,18 @@ import {
 } from "@/server/validation/booking";
 import { parseCheckInRentalInput, parseRentalInspectionInput, type CheckInRentalInput } from "@/server/validation/rental-operation";
 
+function allocatePaymentReceiptNumber(agencyId: string, now: string) {
+  sqlite.prepare(`INSERT INTO payment_receipt_counters (agency_id,next_number,created_at,updated_at)
+    VALUES (?,coalesce((SELECT max(receipt_number)+1 FROM financial_transactions WHERE agency_id=?),1),?,?)
+    ON CONFLICT(agency_id) DO NOTHING`).run(agencyId, agencyId, now, now);
+  const counter = sqlite.prepare("SELECT next_number AS nextNumber FROM payment_receipt_counters WHERE agency_id=? LIMIT 1")
+    .get(agencyId) as { nextNumber: number } | undefined;
+  if (!counter) throw new DomainError("INTERNAL_ERROR", "Payment receipt number could not be generated.", 500);
+  sqlite.prepare("UPDATE payment_receipt_counters SET next_number=next_number+1,updated_at=? WHERE agency_id=?")
+    .run(now, agencyId);
+  return counter.nextNumber;
+}
+
 type BookingRow = {
   id: string; public_number: number | null; customer_id: string; customer: string; vehicle_id: string; make: string; model: string; year: number; plate: string; city: string;
   rental_mode:"self_drive"|"with_driver";renter_skipped:number;driver_id:string|null;driver:string|null;
@@ -126,16 +138,20 @@ export function startBooking(context: RequestContext, existingDraftId?: string):
 export function getBooking(context: RequestContext, id: string) {
   const booking = listBookings(context).find((item) => item.id === id);
   if (!booking) throw new DomainError("NOT_FOUND", "Booking not found.", 404);
+  const renter = sqlite.prepare(`SELECT c.cnic_normalized AS customerCnic,c.phone_normalized AS customerPhone
+    FROM customers c
+    JOIN bookings b ON b.customer_id=c.id AND b.agency_id=c.agency_id
+    WHERE b.agency_id=? AND b.id=? LIMIT 1`).get(context.agencyId, id) as { customerCnic: string; customerPhone: string } | undefined;
   const inspections = sqlite.prepare(`SELECT kind, odometer, fuel_level AS fuelLevel, condition_notes AS conditionNotes, occurred_at AS occurredAt FROM rental_inspections WHERE agency_id=? AND booking_id=? ORDER BY occurred_at`).all(context.agencyId, id) as BookingInspectionDto[];
   const transactions = sqlite.prepare(`
-    SELECT ft.id, ft.booking_id AS bookingId, ft.customer_id AS customerId, ft.kind, ft.amount, ft.method, ft.reference, ft.linked_transaction_id AS linkedTransactionId,
+    SELECT ft.id, ft.receipt_number AS receiptNumber, ft.booking_id AS bookingId, ft.customer_id AS customerId, ft.kind, ft.amount, ft.method, ft.reference, ft.linked_transaction_id AS linkedTransactionId,
       CASE WHEN EXISTS(SELECT 1 FROM financial_transactions rev WHERE rev.agency_id=ft.agency_id AND rev.linked_transaction_id=ft.id) THEN 'reversed' ELSE ft.status END AS status,
       ft.posted_at AS postedAt, ft.created_at AS createdAt
     FROM financial_transactions ft
     WHERE ft.agency_id=? AND ft.booking_id=?
     ORDER BY ft.posted_at DESC, ft.created_at DESC
   `).all(context.agencyId, id) as BookingTransactionDto[];
-  return { ...booking, inspections, transactions };
+  return { ...booking, ...renter, inspections, transactions };
 }
 
 export function listAvailabilityBlocks(context: RequestContext): AvailabilityBlockDto[] {
@@ -209,10 +225,11 @@ function transitionRental(context: RequestContext, bookingId: string, kind: "che
         const existing = sqlite.prepare("SELECT id FROM financial_transactions WHERE agency_id=? AND idempotency_key=?").get(context.agencyId, idempotencyKey);
         if (!existing) {
           const transactionId = `TXN-${randomUUID().slice(0, 8).toUpperCase()}`;
-          sqlite.prepare(`INSERT INTO financial_transactions (id,agency_id,booking_id,customer_id,kind,amount,method,reference,idempotency_key,status,actor_id,posted_at,created_at,updated_at) VALUES (?,?,?,?, 'payment',?,?,?,?, 'posted',?,?,?,?)`)
-            .run(transactionId, context.agencyId, bookingId, booking.customerId, payment.amount, payment.method, payment.reference, idempotencyKey, context.userId, now, now, now);
+          const receiptNumber = allocatePaymentReceiptNumber(context.agencyId, now);
+          sqlite.prepare(`INSERT INTO financial_transactions (id,agency_id,receipt_number,booking_id,customer_id,kind,amount,method,reference,idempotency_key,status,actor_id,posted_at,created_at,updated_at) VALUES (?,?,?,?,?, 'payment',?,?,?,?, 'posted',?,?,?,?)`)
+            .run(transactionId, context.agencyId, receiptNumber, bookingId, booking.customerId, payment.amount, payment.method, payment.reference ?? "", idempotencyKey, context.userId, now, now, now);
           sqlite.prepare(`INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)`)
-            .run(randomUUID(), context.agencyId, context.userId, "booking.payment_posted", "booking", bookingId, JSON.stringify({ transactionId, amount: payment.amount, method: payment.method, reference: payment.reference, source: "checkin" }), now);
+            .run(randomUUID(), context.agencyId, context.userId, "booking.payment_posted", "booking", bookingId, JSON.stringify({ transactionId, receiptNumber, amount: payment.amount, method: payment.method, reference: payment.reference, source: "checkin" }), now);
         }
       }
     }
@@ -320,6 +337,16 @@ export function recordBookingPayment(context: RequestContext, bookingId: string,
       throw new DomainError("INVALID_STATUS_TRANSITION", `Cannot post payment to a ${booking.status} booking.`, 409);
     }
 
+    const idempotencyKey = input.idempotencyKey || `pay_${randomUUID()}`;
+    const existing = sqlite.prepare("SELECT booking_id AS bookingId, amount, method, reference, receipt_number AS receiptNumber FROM financial_transactions WHERE agency_id=? AND idempotency_key=?")
+      .get(context.agencyId, idempotencyKey) as {bookingId:string|null;amount:number;method:string;reference:string;receiptNumber:number|null}|undefined;
+    if (existing) {
+      if (existing.bookingId !== bookingId || existing.amount !== input.amount || existing.method !== input.method || existing.reference !== (input.reference ?? "")) {
+        throw new DomainError("VERSION_CONFLICT", "This payment request key was already used with different details.", 409);
+      }
+      return { ...getBooking(context, bookingId), paymentReceiptNumber: existing.receiptNumber };
+    }
+
     const balance = booking.totalAmount - booking.paid;
     if (input.amount > balance) {
       throw new DomainError("VALIDATION_FAILED", "Overpayment is blocked; customer-credit policy is not enabled.", 400, {
@@ -327,25 +354,23 @@ export function recordBookingPayment(context: RequestContext, bookingId: string,
       });
     }
 
-    const idempotencyKey = input.idempotencyKey || `pay_${randomUUID()}`;
-    const existing = sqlite.prepare("SELECT id FROM financial_transactions WHERE agency_id=? AND idempotency_key=?").get(context.agencyId, idempotencyKey);
-    if (existing) return getBooking(context, bookingId);
-
     const id = `TXN-${randomUUID().slice(0, 8).toUpperCase()}`;
     const now = new Date().toISOString();
+    const receiptNumber = allocatePaymentReceiptNumber(context.agencyId, now);
 
     sqlite.prepare(`
       INSERT INTO financial_transactions (
-        id, agency_id, booking_id, customer_id, kind, amount, method, reference, idempotency_key, status, actor_id, posted_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, 'payment', ?, ?, ?, ?, 'posted', ?, ?, ?, ?)
+        id, agency_id, receipt_number, booking_id, customer_id, kind, amount, method, reference, idempotency_key, status, actor_id, posted_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, 'payment', ?, ?, ?, ?, 'posted', ?, ?, ?, ?)
     `).run(
       id,
       context.agencyId,
+      receiptNumber,
       bookingId,
       booking.customerId,
       input.amount,
       input.method,
-      input.reference,
+      input.reference ?? "",
       idempotencyKey,
       context.userId,
       now,
@@ -362,11 +387,11 @@ export function recordBookingPayment(context: RequestContext, bookingId: string,
       context.agencyId,
       context.userId,
       bookingId,
-      JSON.stringify({ transactionId: id, amount: input.amount, method: input.method, reference: input.reference, account: input.account, note: input.note }),
+      JSON.stringify({ transactionId: id, receiptNumber, amount: input.amount, method: input.method, reference: input.reference, account: input.account, note: input.note }),
       now
     );
 
-    return getBooking(context, bookingId);
+    return { ...getBooking(context, bookingId), paymentReceiptNumber: receiptNumber };
   }).immediate();
 }
 

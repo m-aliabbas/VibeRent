@@ -12,6 +12,7 @@ import { createAgencyCityAction, listAgencyCitiesAction } from "@/app/actions/ca
 import { getBookingCnicAction, uploadBookingCnicAction } from "@/app/actions/booking-cnic";
 import { listDriversAction } from "@/app/actions/drivers";
 import { CnicDocumentDrawer } from "@/components/customers/cnic-document-drawer";
+import { FormCombobox } from "@/components/forms/form-combobox";
 import { FormInput, FormSelect } from "@/components/forms/form-controls";
 import { Button } from "@/components/ui/button";
 import { cnicExtractionKey, mergeCnicExtraction, type CnicExtractedValues, type CnicIntake } from "@/lib/cnic-intake";
@@ -25,6 +26,7 @@ import type { CreateCustomerInput } from "@/server/validation/customer";
 type CustomerDto = {
   id: string;
   name: string;
+  fatherName: string | null;
   phone: string;
   cnic: string;
   email: string | null;
@@ -378,7 +380,7 @@ function ScheduleStep({ draft, setDraft, cities, drivers, onCityCreated }: { dra
   return (
     <div className="grid gap-4 sm:grid-cols-2">
       <FormSelect label="Rental type" value={draft.rentalMode} onChange={e=>setDraft({...draft,rentalMode:e.target.value as Draft["rentalMode"],driverId:e.target.value==="self_drive"?"":draft.driverId,renterSkipped:e.target.value==="self_drive"?false:draft.renterSkipped,vehicleId:"",dailyRate:0})} options={[{label:"Self drive",value:"self_drive"},{label:"With driver",value:"with_driver"}]}/>
-      {draft.rentalMode==="with_driver"?<FormSelect label="Driver" value={draft.driverId} onChange={e=>setDraft({...draft,driverId:e.target.value})} options={[{label:"Select a driver",value:""},...drivers.map(driver=>({label:`${driver.name} · ${driver.phone}`,value:driver.id}))]}/>:<div/>}
+      {draft.rentalMode==="with_driver"?<FormCombobox label="Driver" value={draft.driverId} onValueChange={driverId=>setDraft({...draft,driverId})} options={[{label:"Select a driver",value:""},...drivers.map(driver=>({label:`${driver.name} · ${driver.phone}`,value:driver.id}))]} searchPlaceholder="Search driver name or phone…"/>:<div/>}
       <div>
         <label className="block">
           <span className="mb-1.5 block text-sm font-semibold text-[#344054]">Going to city</span>
@@ -460,7 +462,7 @@ function CustomerStep({ draft, setDraft, customers, bookingReference, onCustomer
 }) {
   const [customerSearch, setCustomerSearch] = useState("");
   const [showNewForm, setShowNewForm] = useState(false);
-  const [newForm, setNewForm] = useState<CreateCustomerInput>({ name: "", phone: "", cnic: "", email: "", dateOfBirth:"", address:"", cnicExpiresAt:"", licenseNumber: "", licenseExpiresAt: "" });
+  const [newForm, setNewForm] = useState<CreateCustomerInput>({ name: "", fatherName: "", phone: "", cnic: "", email: "", dateOfBirth:"", address:"", cnicExpiresAt:"", licenseNumber: "", licenseExpiresAt: "" });
   const [formErrors, setFormErrors] = useState<NewCustomerFormErrors>({});
   const [formSubmitting, setFormSubmitting] = useState(false);
   const [formSubmitError, setFormSubmitError] = useState("");
@@ -519,6 +521,7 @@ function CustomerStep({ draft, setDraft, customers, bookingReference, onCustomer
     setFormSubmitError("");
     const result = await createCustomerAction({
       name: newForm.name,
+      fatherName: newForm.fatherName || undefined,
       phone: newForm.phone,
       cnic: newForm.cnic,
       email: newForm.email || undefined,
@@ -545,7 +548,7 @@ function CustomerStep({ draft, setDraft, customers, bookingReference, onCustomer
     onCustomerCreated(result.data);
     setDraft({ ...draft, customerId: result.data.id });
     setShowNewForm(false);
-    setNewForm({ name: "", phone: "", cnic: "", email: "", dateOfBirth:"", address:"", cnicExpiresAt:"", licenseNumber: "", licenseExpiresAt: "" });
+    setNewForm({ name: "", fatherName: "", phone: "", cnic: "", email: "", dateOfBirth:"", address:"", cnicExpiresAt:"", licenseNumber: "", licenseExpiresAt: "" });
   }
 
   return (
@@ -600,6 +603,7 @@ function CustomerStep({ draft, setDraft, customers, bookingReference, onCustomer
             {formSubmitError && <p className="mb-3 rounded-lg border border-[#FDA29B] bg-[#FEF3F2] p-2 text-xs text-[#B42318]">{formSubmitError}</p>}
             <div className="grid gap-3 sm:grid-cols-2">
               <FormInput autoFocus label="Full name" required value={newForm.name} onChange={(e) => setNewForm({ ...newForm, name: e.target.value })} error={formErrors.name} />
+              <FormInput label="Father / husband name" value={newForm.fatherName ?? ""} onChange={(e) => setNewForm({ ...newForm, fatherName: e.target.value })} error={formErrors.fatherName} />
               <FormInput label="Phone" required type="tel" placeholder="03001234567" value={newForm.phone} onChange={(e) => setNewForm({ ...newForm, phone: e.target.value })} error={formErrors.phone} />
               <FormInput label="CNIC" required placeholder="3520212345679" value={newForm.cnic} onChange={(e) => setNewForm({ ...newForm, cnic: e.target.value })} error={formErrors.cnic} />
               <FormInput label="Email" type="email" placeholder="optional" value={newForm.email ?? ""} onChange={(e) => setNewForm({ ...newForm, email: e.target.value })} error={formErrors.email} />

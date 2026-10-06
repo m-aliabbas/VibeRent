@@ -16,6 +16,49 @@ struct ServerProcess(Mutex<Option<CommandChild>>);
 
 const DESKTOP_PORT: u16 = 4322;
 
+#[tauri::command]
+fn save_download(app: tauri::AppHandle, filename: String, bytes: Vec<u8>) -> Result<String, String> {
+    if bytes.is_empty() {
+        return Err("The downloaded file is empty.".into());
+    }
+    if bytes.len() > 1024 * 1024 * 1024 {
+        return Err("The downloaded file is too large.".into());
+    }
+    let safe_name: String = Path::new(&filename)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("viberent-download")
+        .chars()
+        .map(|character| if matches!(character, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') { '_' } else { character })
+        .collect();
+    let safe_name = safe_name.trim().trim_matches('.');
+    let safe_name = if safe_name.is_empty() { "viberent-download" } else { safe_name };
+    let directory = app.path().download_dir().map_err(|error| error.to_string())?;
+    std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    let requested = Path::new(safe_name);
+    let stem = requested.file_stem().and_then(|value| value.to_str()).unwrap_or("viberent-download");
+    let extension = requested.extension().and_then(|value| value.to_str());
+    for index in 0..10_000 {
+        let candidate_name = if index == 0 {
+            safe_name.to_string()
+        } else if let Some(extension) = extension {
+            format!("{stem} ({index}).{extension}")
+        } else {
+            format!("{stem} ({index})")
+        };
+        let candidate = directory.join(candidate_name);
+        match OpenOptions::new().create_new(true).write(true).open(&candidate) {
+            Ok(mut file) => {
+                file.write_all(&bytes).map_err(|error| error.to_string())?;
+                return Ok(candidate.to_string_lossy().to_string());
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Err("Could not choose an available filename in Downloads.".into())
+}
+
 fn append_log(path: &Path, message: &str) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -78,6 +121,7 @@ fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
+        .invoke_handler(tauri::generate_handler![save_download])
         .manage(ServerProcess(Mutex::new(None)))
         .setup(|app| {
             let handle = app.handle().clone();

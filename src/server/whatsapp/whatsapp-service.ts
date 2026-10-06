@@ -113,11 +113,14 @@ export class WhatsAppService extends EventEmitter {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
     this.stopLeaseHeartbeat();
-    if (this.socket) await this.socket.logout("VibeRent WhatsApp session logged out");
-    this.socket = undefined;
-    this.authStore.clearSession(this.options.sessionId);
-    this.authStore.releaseSessionLease(this.options.sessionId, this.leaseHolderId);
-    this.setStatus("logged_out");
+    try {
+      if (this.socket) await this.socket.logout("VibeRent WhatsApp session logged out");
+    } finally {
+      this.socket = undefined;
+      this.authStore.clearSession(this.options.sessionId);
+      this.authStore.releaseSessionLease(this.options.sessionId, this.leaseHolderId);
+      this.setStatus("logged_out");
+    }
   }
 
   async requestPairingCode(phoneNumber: string): Promise<string> {
