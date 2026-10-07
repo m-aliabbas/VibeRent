@@ -20,3 +20,18 @@ export async function uploadBookingCnicAction(formData:FormData){
     return {ok:true as const,data:await uploadBookingCnic(await getWebRequestContext(),bookingDraftId,side as CnicSide,image)};
   }catch(error){return failure(error);}
 }
+
+export async function getGuarantorCnicAction(bookingDraftId:string){
+  try{return {ok:true as const,data:getBookingCnicIntake(await getWebRequestContext(),bookingDraftId,"guarantor")};}
+  catch(error){return failure(error);}
+}
+
+export async function uploadGuarantorCnicAction(formData:FormData){
+  try{
+    const bookingDraftId=formData.get("bookingDraftId");
+    const side=formData.get("side");
+    const image=formData.get("image");
+    if(typeof bookingDraftId!=="string"||(side!=="front"&&side!=="back")||!(image instanceof File)) throw new Error("Invalid guarantor CNIC upload payload.");
+    return {ok:true as const,data:await uploadBookingCnic(await getWebRequestContext(),bookingDraftId,side as CnicSide,image,"guarantor")};
+  }catch(error){return failure(error);}
+}

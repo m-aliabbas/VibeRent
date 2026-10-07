@@ -1,6 +1,6 @@
 [package]
 name = "viberent"
-version = "1.0.8"
+version = "1.0.9"
 description = "VibeRent desktop rental operations"
 authors = ["vibe.exe"]
 edition = "2021"
@@ -10,6 +10,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 dotenvy = "0.15"
+mdns-sd = "0.21.5"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"

@@ -7,6 +7,7 @@ export type ConfirmBookingInput = {
   rentalMode: "self_drive" | "with_driver";
   driverId?: string;
   renterSkipped?: boolean;
+  guarantor?: GuarantorInput;
   destinationCity: string;
   pickupAt: string;
   returnAt: string;
@@ -20,10 +21,41 @@ export type ConfirmBookingInput = {
   overrideReason?: string;
 };
 
+export type GuarantorInput = {
+  name: string;
+  parentage: string;
+  cnic: string;
+  phone: string;
+  address: string;
+  carAmount: number;
+};
+
+function normalizeCnic(value: string) { return value.replace(/\D/g, ""); }
+function normalizePhone(value: string) { return value.replace(/\D/g, ""); }
+
+function parseGuarantor(value: unknown, errors: Record<string, string>): GuarantorInput | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "object") { errors.guarantor = "Enter valid guarantor details."; return undefined; }
+  const input = value as Partial<GuarantorInput>;
+  const name = input.name?.trim() ?? "";
+  const parentage = input.parentage?.trim() ?? "";
+  const cnic = normalizeCnic(input.cnic ?? "");
+  const phone = normalizePhone(input.phone ?? "");
+  const address = input.address?.trim() ?? "";
+  if (!name) errors["guarantor.name"] = "Enter the guarantor name.";
+  if (!parentage) errors["guarantor.parentage"] = "Enter the guarantor parentage.";
+  if (!/^\d{13}$/.test(cnic)) errors["guarantor.cnic"] = "Enter a valid 13-digit CNIC.";
+  if (!/^(?:92|0)?3\d{9}$/.test(phone)) errors["guarantor.phone"] = "Enter a valid Pakistani mobile number.";
+  if (!address) errors["guarantor.address"] = "Enter the guarantor address.";
+  if (!Number.isInteger(input.carAmount) || (input.carAmount ?? 0) <= 0) errors["guarantor.carAmount"] = "Enter a positive whole PKR amount.";
+  return { name, parentage, cnic, phone, address, carAmount: input.carAmount ?? 0 };
+}
+
 export function parseConfirmBookingInput(value: unknown): ConfirmBookingInput {
   const input = value as Partial<ConfirmBookingInput> | null;
   const errors: Record<string, string> = {};
   if (!input || typeof input !== "object") throw new DomainError("VALIDATION_FAILED", "Invalid booking payload.", 400);
+  const guarantor = parseGuarantor(input.guarantor, errors);
   const rentalMode=input.rentalMode??"self_drive";
   if (!input.vehicleId) errors.vehicleId = "Select a vehicle.";
   if (!input.customerId && !(rentalMode === "with_driver" && input.renterSkipped)) errors.customerId = "Select an existing customer.";
@@ -41,7 +73,7 @@ export function parseConfirmBookingInput(value: unknown): ConfirmBookingInput {
   if (input.dailyRateOverride !== undefined && !input.overrideReason?.trim()) errors.overrideReason = "Explain why the destination rate is being changed.";
   if (Object.keys(errors).length) throw new DomainError("VALIDATION_FAILED", "Review the booking details.", 400, errors);
   return {
-    bookingDraftId: input.bookingDraftId?.trim() || undefined, vehicleId: input.vehicleId!, customerId: input.customerId?.trim() || "", rentalMode, driverId:input.driverId?.trim()||undefined, renterSkipped:Boolean(input.renterSkipped), destinationCity: input.destinationCity?.trim() || "Local", pickupAt: new Date(pickup).toISOString(), returnAt: new Date(returned).toISOString(),
+    bookingDraftId: input.bookingDraftId?.trim() || undefined, vehicleId: input.vehicleId!, customerId: input.customerId?.trim() || "", rentalMode, driverId:input.driverId?.trim()||undefined, renterSkipped:Boolean(input.renterSkipped), guarantor, destinationCity: input.destinationCity?.trim() || "Local", pickupAt: new Date(pickup).toISOString(), returnAt: new Date(returned).toISOString(),
     extras: input.extras!, discount: input.discount!, depositRequired: input.depositRequired!, source: input.source?.trim() || "counter", notes: input.notes?.trim() || undefined, estimatedKm: input.estimatedKm ?? 0, dailyRateOverride: input.dailyRateOverride, overrideReason: input.overrideReason?.trim() || undefined,
   };
 }

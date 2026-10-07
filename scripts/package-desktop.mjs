@@ -12,6 +12,22 @@ async function requirePath(target, message) {
 }
 
 await requirePath(path.join(standalone, "server.js"), "Run `npm run build` before packaging the desktop server.");
+await requirePath(
+  path.join(standalone, "node_modules", "pdfkit", "package.json"),
+  "The standalone server is missing PDFKit. Rebuild after confirming `pdfkit` is listed in `serverExternalPackages`.",
+);
+await requirePath(
+  path.join(standalone, "node_modules", "pdfkit", "js", "pdfkit.node.mjs"),
+  "The standalone server is missing PDFKit's Node.js runtime. PDF generation would fail at runtime.",
+);
+await requirePath(
+  path.join(standalone, "node_modules", "pdfkit", "js", "standard-fonts", "Helvetica.cjs"),
+  "The standalone server is missing PDFKit's standard fonts. PDF downloads and WhatsApp attachments would fail at runtime.",
+);
+await requirePath(
+  path.join(standalone, "node_modules", "pdfkit", "js", "standard-fonts", "HelveticaBold.cjs"),
+  "The standalone server is missing PDFKit's bold standard font. PDF downloads and WhatsApp attachments would fail at runtime.",
+);
 await mkdir(binDirectory, { recursive: true });
 
 for (const [source, destination] of [
@@ -47,7 +63,6 @@ try {
 } catch {
   await writeFile(packagedEnv, [
     "VIBERENT_DESKTOP=1",
-    "VIBERENT_LAN_ENABLED=false",
     "LICENSE_ENFORCEMENT=true",
     "LICENSE_APPLICATION_ID=viberent",
     "FIREBASE_LICENSE_COLLECTION=viberent_licenses",

@@ -2,7 +2,14 @@ export type AgreementLanguage = "en" | "ur" | "bilingual";
 export type AgreementTemplate = "classic" | "modern" | "minimal";
 export type AgreementDensity = "compact" | "comfortable";
 export type AgreementTermsLanguage = "en" | "ur";
+export type AgreementTermsSource = "text" | "image";
 export type AgreementSectionId = "rental" | "renter" | "vehicle" | "charges" | "terms" | "signatures";
+
+export type AgreementTermsImage = {
+  id: string;
+  name: string;
+  url: string;
+};
 
 export type AgreementSection = {
   id: AgreementSectionId;
@@ -14,6 +21,8 @@ export type AgreementSection = {
 export type AgreementDesignConfig = {
   language: AgreementLanguage;
   termsLanguage: AgreementTermsLanguage;
+  termsSource: AgreementTermsSource;
+  termsImage: AgreementTermsImage | null;
   template: AgreementTemplate;
   accentColor: string;
   density: AgreementDensity;
@@ -72,6 +81,8 @@ export const defaultTermsUr = [
 export const defaultAgreementConfig: AgreementDesignConfig = {
   language: "bilingual",
   termsLanguage: "en",
+  termsSource: "text",
+  termsImage: null,
   template: "modern",
   accentColor: "#006FE6",
   density: "comfortable",
@@ -108,9 +119,12 @@ export function normalizeAgreementConfig(value: unknown, legacyTerms?: string | 
   const legacyClauses = legacyTerms && legacyTerms.trim() !== legacyDefault
     ? legacyTerms.split(/\n+/).map(item => item.replace(/^\s*(?:[-•]|\d+[.)])\s*/, "").trim()).filter(Boolean)
     : undefined;
+  const termsImage = cleanTermsImage(input.termsImage);
   return {
     language: ["en", "ur", "bilingual"].includes(input.language ?? "") ? input.language as AgreementLanguage : defaultAgreementConfig.language,
     termsLanguage: input.termsLanguage === "ur" ? "ur" : "en",
+    termsSource: input.termsSource === "image" && termsImage ? "image" : "text",
+    termsImage,
     template: ["classic", "modern", "minimal"].includes(input.template ?? "") ? input.template as AgreementTemplate : defaultAgreementConfig.template,
     accentColor: /^#[0-9A-F]{6}$/i.test(input.accentColor ?? "") ? input.accentColor!.toUpperCase() : defaultAgreementConfig.accentColor,
     density: input.density === "compact" ? "compact" : "comfortable",
@@ -133,9 +147,21 @@ export function normalizeAgreementConfig(value: unknown, legacyTerms?: string | 
 }
 
 export function composeTermsSnapshot(config: AgreementDesignConfig) {
+  if (config.termsSource === "image" && config.termsImage) return composeTermsImageSnapshot(config.termsImage.id);
   const english = config.termsEn.map((term, index) => `${index + 1}. ${term}`).join("\n");
   const urdu = config.termsUr.map((term, index) => `${index + 1}. ${term}`).join("\n");
   return config.termsLanguage === "ur" ? urdu : english;
+}
+
+const termsImageSnapshotPrefix = "viberent:terms-image:";
+
+export function composeTermsImageSnapshot(fileId: string) {
+  return `${termsImageSnapshotPrefix}${fileId}`;
+}
+
+export function parseTermsImageSnapshot(value: string) {
+  const fileId = value.startsWith(termsImageSnapshotPrefix) ? value.slice(termsImageSnapshotPrefix.length) : "";
+  return /^file_[0-9a-f-]{36}$/i.test(fileId) ? fileId : null;
 }
 
 function cleanClauses(value: unknown, fallback: string[]) {
@@ -146,4 +172,12 @@ function cleanClauses(value: unknown, fallback: string[]) {
 
 function cleanText(value: unknown, fallback: string, max: number) {
   return typeof value === "string" && value.trim() ? value.trim().slice(0, max) : fallback;
+}
+
+function cleanTermsImage(value: unknown): AgreementTermsImage | null {
+  if (!value || typeof value !== "object") return null;
+  const image = value as Partial<AgreementTermsImage>;
+  if (typeof image.id !== "string" || !/^file_[0-9a-f-]{36}$/i.test(image.id)) return null;
+  const name = typeof image.name === "string" ? image.name.trim().slice(0, 120) : "Terms and conditions image";
+  return { id: image.id, name: name || "Terms and conditions image", url: `/api/v1/files/${image.id}` };
 }

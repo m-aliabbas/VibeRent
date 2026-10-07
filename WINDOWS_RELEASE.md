@@ -4,7 +4,7 @@ VibeRent is packaged as a Tauri v2 application. The installer contains the stand
 
 ## Runtime data
 
-The Tauri shell starts one local server on port `4322`, separate from VibePOS on `4321`. It binds only to `127.0.0.1` by default and refuses to open another application's server if the port is occupied. Set `VIBERENT_LAN_ENABLED=true` in the protected desktop environment only when other trusted devices must connect, and restrict port `4322` to the private network in Windows Firewall. Runtime state is stored outside the installation directory under the current user's Tauri local-data directory (`com.vibeexe.viberent`):
+The Tauri shell starts one server on TCP port `80`, binds it to `0.0.0.0`, and advertises `rent.local` as an HTTP service through mDNS. The desktop window and trusted LAN clients use `http://rent.local`; `http://127.0.0.1` and `http://localhost` remain loopback fallbacks. The application refuses to start if port 80 is already occupied, including by IIS or an HTTP.sys reservation. Permit inbound TCP 80 and UDP 5353 only on private networks in Windows Firewall; do not expose the service to public networks or the internet. Runtime state is stored outside the installation directory under the current user's Tauri local-data directory (`com.vibeexe.viberent`):
 
 - `data/viberent.db` — SQLite database
 - `data/private-files/` — vehicle photos and documents
@@ -58,7 +58,7 @@ Successful checks are cached for offline use for no more than 30 days and never 
      --output g1.json.enc
    ```
 
-5. Keep the runtime redirect URI as `http://127.0.0.1:4322/api/v1/backups/google-drive/callback`.
+5. Keep the runtime redirect URI as `http://127.0.0.1`. Google returns to the loopback root and the application proxy rewrites the OAuth response to `/api/v1/backups/google-drive/callback`.
 
 VibeRent requests only `https://www.googleapis.com/auth/drive.file`. The refresh token is encrypted with a random key created on the customer PC. A backup contains a SQLite online snapshot, a manifest and checksum, and private attachments. Automatic backups run daily and retain seven days locally by default; connected installations also upload them to the `VibeRent Backups` Drive folder.
 

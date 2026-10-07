@@ -2,8 +2,8 @@
 
 import { useMemo, useState } from "react";
 import Image from "next/image";
-import { ArrowDown, ArrowUp, Check, ChevronDown, ChevronUp, Eye, FileText, GripVertical, Languages, LayoutTemplate, LoaderCircle, Monitor, Palette, Plus, Save, Settings2, Smartphone, Trash2 } from "lucide-react";
-import { updateAgreementDesignerAction } from "@/app/actions/organization";
+import { ArrowDown, ArrowUp, Check, ChevronDown, ChevronUp, Eye, FileImage, FileText, GripVertical, Languages, LayoutTemplate, LoaderCircle, Monitor, Palette, Plus, Save, Settings2, Smartphone, Trash2, Upload } from "lucide-react";
+import { updateAgreementDesignerAction, uploadAgreementTermsImageAction } from "@/app/actions/organization";
 import { Button } from "@/components/ui/button";
 import { type AgreementDesignConfig, type AgreementSection } from "@/lib/agreement-config";
 import type { OrganizationSettingsDto } from "@/server/services/organization-settings-service";
@@ -88,16 +88,36 @@ function ContentPanel({ design, change }: DesignerProps) {
 
 function TermsPanel({ design, change }: DesignerProps) {
   const [language, setLanguage] = useState<"en" | "ur">(design.termsLanguage);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState("");
   const terms = language === "en" ? design.termsEn : design.termsUr;
   const key = language === "en" ? "termsEn" : "termsUr";
   function setTerms(next: string[]) { change({ ...design, [key]: next }); }
   function move(index: number, direction: -1 | 1) { const next = [...terms]; const target = index + direction; if (target < 0 || target >= next.length) return; [next[index], next[target]] = [next[target], next[index]]; setTerms(next); }
+  async function uploadImage(file: File | undefined) {
+    if (!file) return;
+    setUploading(true);
+    setUploadError("");
+    const formData = new FormData();
+    formData.set("file", file);
+    const result = await uploadAgreementTermsImageAction(formData);
+    setUploading(false);
+    if (!result.ok || !result.data) { setUploadError(result.message ?? "The image could not be uploaded."); return; }
+    change({ ...design, termsSource: "image", termsImage: result.data });
+  }
   return <div className="space-y-5">
-    <ControlSection title="Printed terms language" description="Each renter agreement prints the terms in one language only."><div className="grid grid-cols-2 gap-2">{([ ["en", "English"], ["ur", "اردو"] ] as const).map(([value, label]) => <button key={value} onClick={() => change({ ...design, termsLanguage: value })} className={`rounded-lg border px-3 py-2 text-xs font-semibold ${design.termsLanguage === value ? "border-[#006FE6] bg-[#EFF8FF] text-[#175CD3]" : "hover:bg-[#F8FAFC]"}`}>{label}</button>)}</div></ControlSection>
-    <div className="grid grid-cols-2 rounded-lg bg-[#F2F4F7] p-1"><button onClick={() => setLanguage("en")} className={`rounded-md px-3 py-2 text-xs font-semibold ${language === "en" ? "bg-white text-[#006FE6] shadow-sm" : "text-[#667085]"}`}>English clauses</button><button onClick={() => setLanguage("ur")} className={`rounded-md px-3 py-2 text-xs font-semibold ${language === "ur" ? "bg-white text-[#006FE6] shadow-sm" : "text-[#667085]"}`}>اردو شرائط</button></div>
-    <p className="text-xs leading-5 text-[#667085]">Each item becomes a numbered clause. Reorder them to control the final agreement.</p>
-    <div className="space-y-3">{terms.map((term, index) => <div key={`${language}-${index}`} className="rounded-xl border p-3"><div className="mb-2 flex items-center justify-between"><span className="grid h-6 w-6 place-items-center rounded-full bg-[#EFF8FF] text-xs font-bold text-[#175CD3]">{index + 1}</span><div className="flex"><IconButton label="Move clause up" disabled={index === 0} onClick={() => move(index, -1)}><ArrowUp size={14}/></IconButton><IconButton label="Move clause down" disabled={index === terms.length - 1} onClick={() => move(index, 1)}><ArrowDown size={14}/></IconButton><IconButton label="Delete clause" disabled={terms.length === 1} danger onClick={() => setTerms(terms.filter((_, itemIndex) => itemIndex !== index))}><Trash2 size={14}/></IconButton></div></div><textarea dir={language === "ur" ? "rtl" : "ltr"} aria-label={`${language === "ur" ? "Urdu" : "English"} clause ${index + 1}`} className="min-h-24 w-full resize-y rounded-lg border border-[#D0D5DD] p-3 text-sm leading-6 outline-none focus:border-[#006FE6] focus:ring-2 focus:ring-[#006FE6]/10" value={term} onChange={event => setTerms(terms.map((item, itemIndex) => itemIndex === index ? event.target.value : item))}/></div>)}</div>
-    <Button variant="secondary" className="w-full" onClick={() => setTerms([...terms, language === "ur" ? "نئی شرط یہاں لکھیں۔" : "Enter a new rental condition."])}><Plus size={15}/>Add {language === "ur" ? "Urdu" : "English"} clause</Button>
+    <ControlSection title="Terms format" description="Use editable written clauses or upload a clear photo of terms prepared elsewhere."><div className="grid grid-cols-2 gap-2">{([ ["text", FileText, "Written terms"], ["image", FileImage, "Terms image"] ] as const).map(([value, Icon, label]) => <button key={value} type="button" onClick={() => change({ ...design, termsSource: value })} className={`flex min-h-20 flex-col items-center justify-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold ${design.termsSource === value ? "border-[#006FE6] bg-[#EFF8FF] text-[#175CD3]" : "hover:bg-[#F8FAFC]"}`}><Icon size={19}/>{label}</button>)}</div></ControlSection>
+    {design.termsSource === "image" ? <div className="space-y-4">
+      <div className="rounded-xl border border-[#B2DDFF] bg-[#EFF8FF] p-4 text-xs leading-5 text-[#175CD3]">The uploaded image replaces both English and Urdu clauses. It is placed inside the same Terms section and scaled across the available document width.</div>
+      {design.termsImage ? <div className="overflow-hidden rounded-xl border bg-[#F8FAFC]"><Image unoptimized src={design.termsImage.url} alt="Uploaded terms and conditions" width={720} height={360} className="max-h-64 w-full object-contain"/><div className="flex items-center justify-between gap-3 border-t bg-white p-3"><div className="min-w-0"><p className="truncate text-xs font-semibold">{design.termsImage.name}</p><p className="mt-0.5 text-[11px] text-[#667085]">Private agreement image</p></div><label className="inline-flex min-h-10 cursor-pointer items-center gap-2 rounded-lg border px-3 text-xs font-semibold text-[#344054] hover:bg-[#F8FAFC]"><Upload size={14}/>{uploading ? "Uploading…" : "Replace"}<input type="file" accept="image/jpeg,image/png" className="sr-only" disabled={uploading} onChange={event => void uploadImage(event.target.files?.[0])}/></label></div></div> : <label className="flex min-h-44 cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-[#B2DDFF] bg-[#F8FAFC] p-5 text-center hover:bg-[#EFF8FF]"><Upload size={24} className="text-[#006FE6]"/><span className="mt-3 text-sm font-bold">Upload terms image</span><span className="mt-1 text-xs text-[#667085]">JPG or PNG, up to 8 MB. A sharp landscape image fits one page best.</span><input type="file" accept="image/jpeg,image/png" className="sr-only" disabled={uploading} onChange={event => void uploadImage(event.target.files?.[0])}/>{uploading && <span className="mt-3 inline-flex items-center gap-2 text-xs text-[#175CD3]"><LoaderCircle size={14} className="animate-spin"/>Uploading…</span>}</label>}
+      {uploadError && <p role="alert" className="rounded-lg border border-[#FECDCA] bg-[#FEF3F2] p-3 text-xs text-[#B42318]">{uploadError}</p>}
+    </div> : <>
+      <ControlSection title="Printed terms language" description="Each renter agreement prints the written terms in one language only."><div className="grid grid-cols-2 gap-2">{([ ["en", "English"], ["ur", "اردو"] ] as const).map(([value, label]) => <button key={value} type="button" onClick={() => change({ ...design, termsLanguage: value })} className={`rounded-lg border px-3 py-2 text-xs font-semibold ${design.termsLanguage === value ? "border-[#006FE6] bg-[#EFF8FF] text-[#175CD3]" : "hover:bg-[#F8FAFC]"}`}>{label}</button>)}</div></ControlSection>
+      <div className="grid grid-cols-2 rounded-lg bg-[#F2F4F7] p-1"><button type="button" onClick={() => setLanguage("en")} className={`rounded-md px-3 py-2 text-xs font-semibold ${language === "en" ? "bg-white text-[#006FE6] shadow-sm" : "text-[#667085]"}`}>English clauses</button><button type="button" onClick={() => setLanguage("ur")} className={`rounded-md px-3 py-2 text-xs font-semibold ${language === "ur" ? "bg-white text-[#006FE6] shadow-sm" : "text-[#667085]"}`}>اردو شرائط</button></div>
+      <p className="text-xs leading-5 text-[#667085]">Each item becomes a numbered clause. Reorder them to control the final agreement.</p>
+      <div className="space-y-3">{terms.map((term, index) => <div key={`${language}-${index}`} className="rounded-xl border p-3"><div className="mb-2 flex items-center justify-between"><span className="grid h-6 w-6 place-items-center rounded-full bg-[#EFF8FF] text-xs font-bold text-[#175CD3]">{index + 1}</span><div className="flex"><IconButton label="Move clause up" disabled={index === 0} onClick={() => move(index, -1)}><ArrowUp size={14}/></IconButton><IconButton label="Move clause down" disabled={index === terms.length - 1} onClick={() => move(index, 1)}><ArrowDown size={14}/></IconButton><IconButton label="Delete clause" disabled={terms.length === 1} danger onClick={() => setTerms(terms.filter((_, itemIndex) => itemIndex !== index))}><Trash2 size={14}/></IconButton></div></div><textarea dir={language === "ur" ? "rtl" : "ltr"} aria-label={`${language === "ur" ? "Urdu" : "English"} clause ${index + 1}`} className="min-h-24 w-full resize-y rounded-lg border border-[#D0D5DD] p-3 text-sm leading-6 outline-none focus:border-[#006FE6] focus:ring-2 focus:ring-[#006FE6]/10" value={term} onChange={event => setTerms(terms.map((item, itemIndex) => itemIndex === index ? event.target.value : item))}/></div>)}</div>
+      <Button variant="secondary" className="w-full" onClick={() => setTerms([...terms, language === "ur" ? "نئی شرط یہاں لکھیں۔" : "Enter a new rental condition."])}><Plus size={15}/>Add {language === "ur" ? "Urdu" : "English"} clause</Button>
+    </>}
   </div>;
 }
 
@@ -129,13 +149,16 @@ function AgreementPreview({ design, profile }: { design: AgreementDesignConfig; 
 
 function PreviewSection({ section, design }: { section: AgreementSection; design: AgreementDesignConfig }) {
   const bilingual = design.language === "bilingual"; const showEnglish = design.language !== "ur"; const showUrdu = design.language !== "en";
-  const sectionEnglish = section.id === "terms" ? design.termsLanguage === "en" : showEnglish;
-  const sectionUrdu = section.id === "terms" ? design.termsLanguage === "ur" : showUrdu;
+  const sectionEnglish = section.id === "terms" && design.termsSource === "text" ? design.termsLanguage === "en" : showEnglish;
+  const sectionUrdu = section.id === "terms" && design.termsSource === "text" ? design.termsLanguage === "ur" : showUrdu;
   return <section><div className={`mb-2 flex items-center gap-2 ${bilingual ? "justify-between" : ""}`}><>{sectionEnglish && <h3 className="font-extrabold uppercase tracking-wide" style={{ color: design.accentColor }}>{section.titleEn}</h3>}</><span className="h-px flex-1" style={{ backgroundColor: `${design.accentColor}35` }}/>{sectionUrdu && <h3 dir="rtl" className="text-xs font-bold" style={{ color: design.accentColor, fontFamily: '"Noto Nastaliq Urdu", serif' }}>{section.titleUr}</h3>}</div><PreviewSectionBody id={section.id} design={design}/></section>;
 }
 
 function PreviewSectionBody({ id, design }: { id: AgreementSection["id"]; design: AgreementDesignConfig }) {
-  if (id === "terms") return design.termsLanguage === "ur" ? <ol dir="rtl" className="space-y-1 pr-4 text-right text-[8px] leading-4" style={{ fontFamily: '"Noto Nastaliq Urdu", serif' }}>{design.termsUr.slice(0, 8).map((term, index) => <li key={index} className="list-decimal">{term}</li>)}</ol> : <ol className="space-y-1 pl-4 text-[8px] leading-3">{design.termsEn.slice(0, 8).map((term, index) => <li key={index} className="list-decimal">{term}</li>)}</ol>;
+  if (id === "terms") {
+    if (design.termsSource === "image" && design.termsImage) return <div className="overflow-hidden rounded border bg-[#F8FAFC]"><Image unoptimized src={design.termsImage.url} alt="Terms and conditions" width={720} height={320} className="max-h-52 w-full object-contain"/></div>;
+    return design.termsLanguage === "ur" ? <ol dir="rtl" className="space-y-1 pr-4 text-right text-[8px] leading-4" style={{ fontFamily: '"Noto Nastaliq Urdu", serif' }}>{design.termsUr.slice(0, 8).map((term, index) => <li key={index} className="list-decimal">{term}</li>)}</ol> : <ol className="space-y-1 pl-4 text-[8px] leading-3">{design.termsEn.slice(0, 8).map((term, index) => <li key={index} className="list-decimal">{term}</li>)}</ol>;
+  }
   if (id === "signatures") { const labels = [design.signatures.customer && ["Customer / Renter", "کرایہ دار"], design.signatures.representative && ["Agency representative", "ادارے کا نمائندہ"], design.signatures.witness && ["Witness", "گواہ"]].filter(Boolean) as string[][]; return <div className={`grid gap-5 pt-5 ${labels.length === 3 ? "grid-cols-3" : "grid-cols-2"}`}>{labels.map(([en, ur]) => <div key={en} className="border-t border-[#98A2B3] pt-2"><span>{design.language !== "ur" && en}</span>{design.language === "bilingual" && " / "}<span dir="rtl" style={{ fontFamily: '"Noto Nastaliq Urdu", serif' }}>{design.language !== "en" && ur}</span><p className="mt-1 text-[7px] text-[#98A2B3]">Date / تاریخ: __________</p></div>)}</div>; }
   const data: Record<Exclude<AgreementSection["id"], "terms" | "signatures">, Array<[string, string, string]>> = {
     rental: [["Pickup", "06 Oct 2026, 10:00", "روانگی"], ["Return", "09 Oct 2026, 10:00", "واپسی"], ["Destination", "Islamabad", "منزل"], ["Rental type", "Self drive", "کرایہ کی قسم"]],

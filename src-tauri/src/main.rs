@@ -8,14 +8,17 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use mdns_sd::{ServiceDaemon, ServiceInfo};
 use sha2::{Digest, Sha256};
 use tauri::{Manager, RunEvent};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
 struct ServerProcess(Mutex<Option<CommandChild>>);
+struct MdnsResponder(Mutex<Option<ServiceDaemon>>);
 
-const DESKTOP_PORT: u16 = 4322;
+const DESKTOP_PORT: u16 = 80;
+const DESKTOP_HOSTNAME: &str = "rent.local";
 
 #[tauri::command]
 fn save_download(
@@ -235,6 +238,32 @@ fn local_lan_ip() -> Option<std::net::IpAddr> {
     Some(socket.local_addr().ok()?.ip())
 }
 
+fn http_origin(host: &str, port: u16) -> String {
+    if port == 80 {
+        format!("http://{host}")
+    } else {
+        format!("http://{host}:{port}")
+    }
+}
+
+fn start_mdns(port: u16) -> Result<ServiceDaemon, String> {
+    let responder = ServiceDaemon::new().map_err(|error| error.to_string())?;
+    let service = ServiceInfo::new(
+        "_http._tcp.local.",
+        "VibeRent",
+        "rent.local.",
+        (),
+        port,
+        &[("application", "viberent"), ("path", "/")][..],
+    )
+    .map_err(|error| error.to_string())?
+    .enable_addr_auto();
+    responder
+        .register(service)
+        .map_err(|error| error.to_string())?;
+    Ok(responder)
+}
+
 fn standalone_directory(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let resources = app
         .path()
@@ -288,6 +317,7 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![save_download, download_update])
         .manage(ServerProcess(Mutex::new(None)))
+        .manage(MdnsResponder(Mutex::new(None)))
         .setup(|app| {
             let handle = app.handle().clone();
             let window = app.get_webview_window("main").ok_or("Main window not found")?;
@@ -306,8 +336,8 @@ fn main() {
 
                 let port = DESKTOP_PORT;
                 if TcpStream::connect(("127.0.0.1", port)).is_ok() {
-                    append_log(&log_path, &format!("Startup blocked because port {port} is already in use."));
-                    let _ = window.eval(&format!("document.body.innerHTML='<main style=\"font-family:system-ui;padding:48px\"><h2>VibeRent could not start</h2><p>Local port {port} is already in use. Close the other application and start VibeRent again.</p></main>'"));
+                    append_log(&log_path, "Startup blocked because port 80 is already in use.");
+                    let _ = window.eval("document.body.innerHTML='<main style=\"font-family:system-ui;padding:48px\"><h2>VibeRent could not start</h2><p>Port 80 is already in use. Close the other application, IIS, or HTTP.sys reservation and start VibeRent again.</p></main>'");
                     return Ok(());
                 }
 
@@ -318,25 +348,22 @@ fn main() {
                     .current_dir(&standalone)
                     .arg("server.js");
                 let environment = packaged_environment(&handle);
-                let lan_enabled = environment
-                    .get("VIBERENT_LAN_ENABLED")
-                    .map(|value| value.eq_ignore_ascii_case("true"))
-                    .unwrap_or(false);
                 for (key, value) in environment {
                     command = command.env(key, value);
                 }
                 let mut trusted_origins = vec![
-                    format!("http://127.0.0.1:{port}"),
-                    format!("http://localhost:{port}"),
+                    http_origin(DESKTOP_HOSTNAME, port),
+                    http_origin("127.0.0.1", port),
+                    http_origin("localhost", port),
                 ];
-                if lan_enabled {
-                    if let Some(ip) = local_lan_ip() {
-                        trusted_origins.push(format!("http://{ip}:{port}"));
-                    }
+                if let Some(ip) = local_lan_ip() {
+                    trusted_origins.push(http_origin(&ip.to_string(), port));
                 }
+                let application_origin = http_origin(DESKTOP_HOSTNAME, port);
+                let loopback_origin = http_origin("127.0.0.1", port);
                 command = command
                     .env("PORT", port.to_string())
-                    .env("HOSTNAME", if lan_enabled { "0.0.0.0" } else { "127.0.0.1" })
+                    .env("HOSTNAME", "0.0.0.0")
                     .env("NODE_ENV", "production")
                     .env("NEXT_TELEMETRY_DISABLED", "1")
                     .env("VIBERENT_DESKTOP", "1")
@@ -348,8 +375,8 @@ fn main() {
                     .env("LICENSE_CACHE_PATH", data.join("license-cache.enc").to_string_lossy().to_string())
                     .env("GOOGLE_DRIVE_SESSION_PATH", data.join("google-drive-session.enc").to_string_lossy().to_string())
                     .env("VIBERENT_MIGRATIONS_DIR", standalone.join("drizzle").to_string_lossy().to_string())
-                    .env("BETTER_AUTH_URL", format!("http://127.0.0.1:{port}"))
-                    .env("GOOGLE_DRIVE_REDIRECT_URI", format!("http://127.0.0.1:{port}"))
+                    .env("BETTER_AUTH_URL", &application_origin)
+                    .env("GOOGLE_DRIVE_REDIRECT_URI", &loopback_origin)
                     .env("BETTER_AUTH_TRUSTED_ORIGINS", trusted_origins.join(","));
 
                 let (mut receiver, child) = command.spawn()?;
@@ -367,9 +394,31 @@ fn main() {
                     }
                 });
 
+                let handle_for_ready = handle.clone();
+                let log_for_ready = log_path.clone();
                 tauri::async_runtime::spawn(async move {
                     if wait_for_server(port, Duration::from_secs(60)).await {
-                        let _ = window.eval(&format!("window.location.replace('http://127.0.0.1:{port}')"));
+                        let navigation_origin = match start_mdns(port) {
+                            Ok(responder) => {
+                                append_log(&log_for_ready, "VibeRent advertised at http://rent.local via mDNS.");
+                                *handle_for_ready
+                                    .state::<MdnsResponder>()
+                                    .0
+                                    .lock()
+                                    .expect("mDNS responder lock") = Some(responder);
+                                application_origin
+                            }
+                            Err(error) => {
+                                append_log(
+                                    &log_for_ready,
+                                    &format!("MDNS_ERROR: Could not advertise rent.local: {error}"),
+                                );
+                                loopback_origin
+                            }
+                        };
+                        let _ = window.eval(&format!(
+                            "window.location.replace('{navigation_origin}')"
+                        ));
                     } else {
                         let _ = window.eval("document.body.innerHTML='<main style=\"font-family:system-ui;padding:48px\"><h2>VibeRent could not start</h2><p>Open the startup log in the VibeRent application-data folder.</p></main>'");
                     }
@@ -383,6 +432,15 @@ fn main() {
 
     app.run(|handle, event| {
         if matches!(event, RunEvent::Exit | RunEvent::ExitRequested { .. }) {
+            if let Some(responder) = handle
+                .state::<MdnsResponder>()
+                .0
+                .lock()
+                .expect("mDNS responder lock")
+                .take()
+            {
+                let _ = responder.shutdown();
+            }
             if let Some(child) = handle
                 .state::<ServerProcess>()
                 .0

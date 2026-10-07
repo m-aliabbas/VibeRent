@@ -17,9 +17,10 @@ type Props = {
   onUpload: (side: "front" | "back", file: File | undefined) => void;
   commandHint?: { bookingNumber: number };
   label?: string;
+  subjectLabel?: string;
 };
 
-export function CnicDocumentDrawer({ intake, loading, uploading, error, onRefresh, onUpload, commandHint, label = "CNIC documents" }: Props) {
+export function CnicDocumentDrawer({ intake, loading, uploading, error, onRefresh, onUpload, commandHint, label = "CNIC documents", subjectLabel = "customer" }: Props) {
   const received = Number(Boolean(intake?.front)) + Number(Boolean(intake?.back));
   const hasExtraction = Boolean(intake && Object.values(intake.extracted).some(Boolean));
   return (
@@ -35,7 +36,7 @@ export function CnicDocumentDrawer({ intake, loading, uploading, error, onRefres
         <Dialog.Overlay className="fixed inset-0 z-50 bg-[#101828]/45"/>
         <Dialog.Content className="fixed inset-x-0 bottom-0 z-50 flex max-h-[94dvh] flex-col rounded-t-2xl bg-white shadow-2xl sm:inset-y-0 sm:left-auto sm:right-0 sm:w-[min(520px,92vw)] sm:max-h-none sm:rounded-none sm:rounded-l-2xl">
           <header className="flex items-start justify-between gap-3 border-b border-[#EAECF0] p-5">
-            <div><Dialog.Title className="text-lg font-bold text-[#19191F]">CNIC front & back</Dialog.Title><Dialog.Description className="mt-1 text-xs leading-5 text-[#667085]">Images are read automatically. Check each image against the editable customer fields before saving.</Dialog.Description></div>
+            <div><Dialog.Title className="text-lg font-bold text-[#19191F]">CNIC front & back</Dialog.Title><Dialog.Description className="mt-1 text-xs leading-5 text-[#667085]">Images are read automatically. Check each image against the editable {subjectLabel} fields before saving.</Dialog.Description></div>
             <Dialog.Close className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-[#667085] hover:bg-[#F2F4F7]"><X size={18}/><span className="sr-only">Close CNIC documents</span></Dialog.Close>
           </header>
           <div className="flex-1 overflow-y-auto p-5">

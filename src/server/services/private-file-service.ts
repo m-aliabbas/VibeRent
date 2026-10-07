@@ -8,6 +8,7 @@ import { requireRole } from "@/server/auth/authorize";
 import type { RequestContext } from "@/server/context/request-context";
 import { DomainError } from "@/server/domain/errors";
 import { getPrivateFileRoot } from "@/server/desktop/runtime-paths";
+import { readImageDimensions } from "@/server/files/image-dimensions";
 
 export type PrivateFileDto = {
   id: string;
@@ -16,7 +17,7 @@ export type PrivateFileDto = {
   originalName: string;
   mimeType: string;
   size: number;
-  classification: "vehicle_photo" | "vehicle_document" | "customer_cnic_front" | "customer_cnic_back";
+  classification: "vehicle_photo" | "vehicle_document" | "customer_cnic_front" | "customer_cnic_back" | "guarantor_cnic_front" | "guarantor_cnic_back" | "agreement_terms_image";
   createdAt: string;
   downloadUrl: string;
 };
@@ -27,6 +28,7 @@ const storageRoot = getPrivateFileRoot();
 const allowed = {
   vehicle_photo: { max: 8 * 1024 * 1024, mime: ["image/jpeg", "image/png", "image/webp"] },
   vehicle_document: { max: 12 * 1024 * 1024, mime: ["application/pdf", "image/jpeg", "image/png", "image/webp"] },
+  agreement_terms_image: { max: 8 * 1024 * 1024, mime: ["image/jpeg", "image/png"] },
 } as const;
 
 function safeName(value: string) {
@@ -46,6 +48,11 @@ function assertBookingDraft(context: RequestContext, entityId: string) {
 function assertCustomer(context: RequestContext, entityId: string) {
   const row = sqlite.prepare(`SELECT id FROM customers WHERE agency_id=? AND id=? AND archived_at IS NULL LIMIT 1`).get(context.agencyId, entityId);
   if (!row) throw new DomainError("NOT_FOUND", "Customer not found.", 404);
+}
+
+function assertBooking(context: RequestContext, entityId: string) {
+  const row = sqlite.prepare(`SELECT id FROM bookings WHERE agency_id=? AND id=? LIMIT 1`).get(context.agencyId, entityId);
+  if (!row) throw new DomainError("NOT_FOUND", "Booking not found.", 404);
 }
 
 function toDto(row: PrivateFileRow): PrivateFileDto {
@@ -101,6 +108,36 @@ export async function uploadVehicleFile(context: RequestContext, vehicleId: stri
   return { id, entityType: "vehicle", entityId: vehicleId, originalName: safeName(file.name), mimeType: file.type, size: file.size, classification: classification as PrivateFileDto["classification"], createdAt: now, downloadUrl: `/api/v1/files/${id}` };
 }
 
+export async function uploadAgreementTermsImage(context: RequestContext, file: File): Promise<PrivateFileDto> {
+  requireRole(context, ["agency_owner", "fleet_manager"]);
+  const rule = allowed.agreement_terms_image;
+  if (!rule.mime.includes(file.type as never)) throw new DomainError("VALIDATION_FAILED", "This image type is not supported.", 415, { file: "Use a JPG or PNG image." });
+  if (file.size <= 0 || file.size > rule.max) throw new DomainError("VALIDATION_FAILED", "Image must be smaller than 8 MB.", 413, { file: "Choose a smaller image." });
+
+  const bytes = Buffer.from(await file.arrayBuffer());
+  readImageDimensions(bytes);
+  const id = `file_${randomUUID()}`;
+  const storageKey = `${context.agencyId}/${randomUUID()}`;
+  const absolutePath = path.join(storageRoot, storageKey);
+  const temporaryPath = `${absolutePath}.uploading`;
+  await mkdir(path.dirname(absolutePath), { recursive: true });
+  await writeFile(temporaryPath, bytes, { flag: "wx", mode: 0o600 });
+  await rename(temporaryPath, absolutePath);
+  const now = new Date().toISOString();
+  try {
+    sqlite.transaction(() => {
+      sqlite.prepare(`INSERT INTO private_files (id,agency_id,entity_type,entity_id,storage_key,original_name,mime_type,size,classification,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,'ready',?,?)`)
+        .run(id, context.agencyId, "agency", context.agencyId, storageKey, safeName(file.name), file.type, file.size, "agreement_terms_image", now, now);
+      sqlite.prepare(`INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)`)
+        .run(randomUUID(), context.agencyId, context.userId, "agreement.terms_image_uploaded", "agency", context.agencyId, JSON.stringify({ fileId: id, mimeType: file.type, size: file.size }), now);
+    })();
+  } catch (error) {
+    await unlink(absolutePath).catch(() => undefined);
+    throw error;
+  }
+  return { id, entityType: "agency", entityId: context.agencyId, originalName: safeName(file.name), mimeType: file.type, size: file.size, classification: "agreement_terms_image", createdAt: now, downloadUrl: `/api/v1/files/${id}` };
+}
+
 export async function readPrivateFile(context: RequestContext, id: string) {
   requireRole(context, ["agency_owner", "fleet_manager", "rental_agent", "accountant"]);
   const row = sqlite.prepare(`SELECT id,entity_type AS entityType,entity_id AS entityId,storage_key AS storageKey,original_name AS originalName,mime_type AS mimeType,size,classification,created_at AS createdAt FROM private_files WHERE agency_id=? AND id=? AND status='ready' LIMIT 1`)
@@ -109,6 +146,8 @@ export async function readPrivateFile(context: RequestContext, id: string) {
   if (row.entityType === "vehicle") assertVehicle(context, row.entityId);
   if (row.entityType === "booking_draft") assertBookingDraft(context, row.entityId);
   if (row.entityType === "customer") assertCustomer(context, row.entityId);
+  if (row.entityType === "booking") assertBooking(context, row.entityId);
+  if (row.entityType === "agency" && row.entityId !== context.agencyId) throw new DomainError("NOT_FOUND", "File not found.", 404);
   const absolutePath = path.resolve(storageRoot, row.storageKey);
   if (!absolutePath.startsWith(`${storageRoot}${path.sep}`)) throw new DomainError("INTERNAL_ERROR", "File storage path is invalid.", 500);
   try { return { file: toDto(row), bytes: await readFile(absolutePath) }; }

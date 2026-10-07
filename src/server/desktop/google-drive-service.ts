@@ -33,7 +33,7 @@ export class GoogleDriveBackupError extends DomainError {
 
 export function resolveGoogleDriveRedirectUri(configuredUrl?: string, applicationUrl?: string) {
   try {
-    const source = configuredUrl?.trim() || applicationUrl?.trim() || "http://127.0.0.1:4322";
+    const source = configuredUrl?.trim() || applicationUrl?.trim() || "http://127.0.0.1";
     const url = new URL(source);
     if (url.protocol !== "http:") throw new Error("Desktop OAuth requires an HTTP loopback URL.");
     return `http://127.0.0.1${url.port ? `:${url.port}` : ""}`;

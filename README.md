@@ -2,7 +2,7 @@
 
 ## Windows desktop pilot
 
-VibeRent now includes a Tauri v2 desktop shell, Firebase-backed signed device licensing, SQLite-safe local and Google Drive backups, restart-only restore, and GitHub Actions workflows for quality checks and Windows NSIS releases. The desktop build launches the existing standalone Next.js modular monolith; there is no separate Python backend.
+VibeRent now includes a Tauri v2 desktop shell, Firebase-backed signed device licensing, SQLite-safe local and Google Drive backups, restart-only restore, and GitHub Actions workflows for quality checks and Windows NSIS releases. The desktop build launches the existing standalone Next.js modular monolith on port 80 and advertises `http://rent.local` over mDNS; there is no separate Python backend.
 
 See [`WINDOWS_RELEASE.md`](./WINDOWS_RELEASE.md) for Firebase, Google OAuth, installer, runtime-data, backup/restore, and release setup.
 

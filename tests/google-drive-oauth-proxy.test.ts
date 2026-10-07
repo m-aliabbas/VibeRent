@@ -4,7 +4,7 @@ import { NextRequest } from "next/server";
 import { proxy } from "../src/proxy";
 
 test("rewrites a Google desktop OAuth loopback response to the callback route", () => {
-  const request = new NextRequest("http://127.0.0.1:4322/?code=authorization-code&state=oauth-state");
+  const request = new NextRequest("http://127.0.0.1/?code=authorization-code&state=oauth-state");
 
   const response = proxy(request);
   const rewritten = new URL(response.headers.get("x-middleware-rewrite")!);
@@ -15,7 +15,7 @@ test("rewrites a Google desktop OAuth loopback response to the callback route", 
 });
 
 test("does not rewrite unrelated root requests", () => {
-  const request = new NextRequest("http://127.0.0.1:4322/?code=ordinary-filter");
+  const request = new NextRequest("http://127.0.0.1/?code=ordinary-filter");
 
   const response = proxy(request);
 

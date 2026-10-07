@@ -17,6 +17,14 @@ export type BookingListItem = {
   driverId?: string|null;
   driver?: string|null;
   renterSkipped?: boolean;
+  guarantor?: {
+    name: string;
+    parentage: string;
+    cnic: string;
+    phone: string;
+    address: string;
+    carAmount: number;
+  };
   vehicleId: string;
   vehicle: string;
   plate: string;

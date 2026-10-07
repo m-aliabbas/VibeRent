@@ -97,18 +97,23 @@ export function updateOrganizationProfile(context: RequestContext, rawInput: unk
 export function updateAgreementDesigner(context: RequestContext, rawInput: unknown): AgreementDesignConfig {
   requireRole(context, ["agency_owner", "fleet_manager"]);
   const config = normalizeAgreementConfig(rawInput);
-  if (config.termsEn.some(item => item.length < 8) || config.termsUr.some(item => item.length < 8)) {
+  if (config.termsSource === "text" && (config.termsEn.some(item => item.length < 8) || config.termsUr.some(item => item.length < 8))) {
     throw new DomainError("VALIDATION_FAILED", "Each agreement clause must contain at least 8 characters.", 400, { terms: "Complete or remove short clauses." });
   }
   if (!config.sections.some(section => section.enabled && section.id === "terms")) {
     throw new DomainError("VALIDATION_FAILED", "Keep the terms section enabled for rental agreements.", 400, { sections: "Terms and conditions are required." });
   }
-  const legacyTerms = composeTermsSnapshot({ ...config, language: "en" });
+  if (config.termsSource === "image") {
+    const image = sqlite.prepare(`SELECT id FROM private_files WHERE agency_id=? AND id=? AND entity_type='agency' AND entity_id=? AND classification='agreement_terms_image' AND status='ready' LIMIT 1`)
+      .get(context.agencyId, config.termsImage?.id, context.agencyId);
+    if (!image) throw new DomainError("VALIDATION_FAILED", "Upload a valid terms and conditions image.", 400, { termsImage: "Choose a JPG or PNG image." });
+  }
+  const legacyTerms = composeTermsSnapshot({ ...config, termsSource: "text", language: "en" });
   const now = new Date().toISOString();
   sqlite.transaction(() => {
     sqlite.prepare(`UPDATE agencies SET agreement_header=?,agreement_locale=?,agreement_config=?,rental_terms=?,version=version+1,updated_at=? WHERE id=?`)
       .run(config.titleEn, config.language, JSON.stringify(config), legacyTerms, now, context.agencyId);
-    audit(context, "agreement.design_updated", { language: config.language, template: config.template, sections: config.sections.filter(item => item.enabled).map(item => item.id) });
+    audit(context, "agreement.design_updated", { language: config.language, template: config.template, termsSource: config.termsSource, termsImageId: config.termsImage?.id, sections: config.sections.filter(item => item.enabled).map(item => item.id) });
   })();
   return config;
 }

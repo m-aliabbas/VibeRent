@@ -9,12 +9,12 @@ test("normalizes the rent.local development URL to a Google-compatible loopback 
   );
 });
 
-test("keeps the active desktop port and removes a legacy callback path", () => {
+test("uses the default HTTP port and removes a legacy callback path", () => {
   assert.equal(
     resolveGoogleDriveRedirectUri(
-      "http://127.0.0.1:4322/api/v1/backups/google-drive/callback",
+      "http://127.0.0.1/api/v1/backups/google-drive/callback",
       "http://rent.local",
     ),
-    "http://127.0.0.1:4322",
+    "http://127.0.0.1",
   );
 });

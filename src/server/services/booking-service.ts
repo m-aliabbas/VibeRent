@@ -29,6 +29,7 @@ function allocatePaymentReceiptNumber(agencyId: string, now: string) {
 type BookingRow = {
   id: string; public_number: number | null; customer_id: string; customer: string; vehicle_id: string; make: string; model: string; year: number; plate: string; city: string;
   rental_mode:"self_drive"|"with_driver";renter_skipped:number;driver_id:string|null;driver:string|null;
+  guarantor_name:string|null;guarantor_parentage:string|null;guarantor_cnic:string|null;guarantor_phone:string|null;guarantor_address:string|null;guarantor_car_amount:number|null;
   destination_city: string; pickup_at: string; return_at: string; daily_rate: number; pricing_mode:string; estimated_km:number; mileage_rate:number; rate_override_reason:string|null; terms_snapshot:string; extras: number; discount: number; total_amount: number; deposit_required: number; paid: number; deposit_held: number; status: string; source: string; notes: string | null; version:number;
 };
 
@@ -138,10 +139,12 @@ export function startBooking(context: RequestContext, existingDraftId?: string):
 export function getBooking(context: RequestContext, id: string) {
   const booking = listBookings(context).find((item) => item.id === id);
   if (!booking) throw new DomainError("NOT_FOUND", "Booking not found.", 404);
-  const renter = sqlite.prepare(`SELECT c.cnic_normalized AS customerCnic,c.phone_normalized AS customerPhone
+  const renter = sqlite.prepare(`SELECT c.cnic_normalized AS customerCnic,c.phone_normalized AS customerPhone,
+      b.guarantor_name AS guarantorName,b.guarantor_parentage AS guarantorParentage,b.guarantor_cnic AS guarantorCnic,
+      b.guarantor_phone AS guarantorPhone,b.guarantor_address AS guarantorAddress,b.guarantor_car_amount AS guarantorCarAmount
     FROM customers c
     JOIN bookings b ON b.customer_id=c.id AND b.agency_id=c.agency_id
-    WHERE b.agency_id=? AND b.id=? LIMIT 1`).get(context.agencyId, id) as { customerCnic: string; customerPhone: string } | undefined;
+    WHERE b.agency_id=? AND b.id=? LIMIT 1`).get(context.agencyId, id) as { customerCnic: string; customerPhone: string; guarantorName:string|null;guarantorParentage:string|null;guarantorCnic:string|null;guarantorPhone:string|null;guarantorAddress:string|null;guarantorCarAmount:number|null } | undefined;
   const inspections = sqlite.prepare(`SELECT kind, odometer, fuel_level AS fuelLevel, condition_notes AS conditionNotes, occurred_at AS occurredAt FROM rental_inspections WHERE agency_id=? AND booking_id=? ORDER BY occurred_at`).all(context.agencyId, id) as BookingInspectionDto[];
   const transactions = sqlite.prepare(`
     SELECT ft.id, ft.receipt_number AS receiptNumber, ft.booking_id AS bookingId, ft.customer_id AS customerId, ft.kind, ft.amount, ft.method, ft.reference, ft.linked_transaction_id AS linkedTransactionId,
@@ -151,7 +154,10 @@ export function getBooking(context: RequestContext, id: string) {
     WHERE ft.agency_id=? AND ft.booking_id=?
     ORDER BY ft.posted_at DESC, ft.created_at DESC
   `).all(context.agencyId, id) as BookingTransactionDto[];
-  return { ...booking, ...renter, inspections, transactions };
+  const guarantor=renter?.guarantorName&&renter.guarantorParentage&&renter.guarantorCnic&&renter.guarantorPhone&&renter.guarantorAddress&&renter.guarantorCarAmount?{
+    name:renter.guarantorName,parentage:renter.guarantorParentage,cnic:renter.guarantorCnic,phone:renter.guarantorPhone,address:renter.guarantorAddress,carAmount:renter.guarantorCarAmount,
+  }:undefined;
+  return { ...booking, customerCnic:renter?.customerCnic, customerPhone:renter?.customerPhone, guarantor, inspections, transactions };
 }
 
 export function listAvailabilityBlocks(context: RequestContext): AvailabilityBlockDto[] {
@@ -280,12 +286,37 @@ export function confirmBooking(context: RequestContext, rawInput: unknown) {
     const id = `BKG-${randomUUID().slice(0, 8).toUpperCase()}`;
     const now = new Date().toISOString();
     const termsSnapshot = getTermsSnapshotForBooking(context);
-    sqlite.prepare(`INSERT INTO bookings (id,agency_id,public_number,branch_id,vehicle_id,customer_id,driver_id,rental_mode,renter_skipped,destination_city,pickup_at,return_at,status,daily_rate,pricing_mode,estimated_km,mileage_rate,rate_override_reason,terms_snapshot,extras,discount,total_amount,deposit_required,source,notes,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'confirmed',?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, context.agencyId, bookingDraft.publicNumber, vehicle.branch_id, input.vehicleId, customerId, input.driverId??null,input.rentalMode,input.renterSkipped?1:0, input.destinationCity, input.pickupAt, input.returnAt, dailyRate, pricingMode, input.estimatedKm, mileageRate, input.overrideReason ?? null, termsSnapshot, input.extras, input.discount, totalAmount, input.depositRequired, input.source, input.notes ?? null, now, now);
+    sqlite.prepare(`INSERT INTO bookings (
+      id,agency_id,public_number,branch_id,vehicle_id,customer_id,driver_id,rental_mode,renter_skipped,
+      guarantor_name,guarantor_parentage,guarantor_cnic,guarantor_phone,guarantor_address,guarantor_car_amount,
+      destination_city,pickup_at,return_at,status,daily_rate,pricing_mode,estimated_km,mileage_rate,rate_override_reason,
+      terms_snapshot,extras,discount,total_amount,deposit_required,source,notes,created_at,updated_at
+    ) VALUES (
+      @id,@agencyId,@publicNumber,@branchId,@vehicleId,@customerId,@driverId,@rentalMode,@renterSkipped,
+      @guarantorName,@guarantorParentage,@guarantorCnic,@guarantorPhone,@guarantorAddress,@guarantorCarAmount,
+      @destinationCity,@pickupAt,@returnAt,'confirmed',@dailyRate,@pricingMode,@estimatedKm,@mileageRate,@rateOverrideReason,
+      @termsSnapshot,@extras,@discount,@totalAmount,@depositRequired,@source,@notes,@createdAt,@updatedAt
+    )`).run({
+      id,agencyId:context.agencyId,publicNumber:bookingDraft.publicNumber,branchId:vehicle.branch_id,vehicleId:input.vehicleId,customerId,
+      driverId:input.driverId??null,rentalMode:input.rentalMode,renterSkipped:input.renterSkipped?1:0,
+      guarantorName:input.guarantor?.name??null,guarantorParentage:input.guarantor?.parentage??null,guarantorCnic:input.guarantor?.cnic??null,
+      guarantorPhone:input.guarantor?.phone??null,guarantorAddress:input.guarantor?.address??null,guarantorCarAmount:input.guarantor?.carAmount??null,
+      destinationCity:input.destinationCity,pickupAt:input.pickupAt,returnAt:input.returnAt,dailyRate,pricingMode,estimatedKm:input.estimatedKm,
+      mileageRate,rateOverrideReason:input.overrideReason??null,termsSnapshot,extras:input.extras,discount:input.discount,totalAmount,
+      depositRequired:input.depositRequired,source:input.source,notes:input.notes??null,createdAt:now,updatedAt:now,
+    });
     sqlite.prepare("UPDATE booking_drafts SET status='consumed',consumed_at=?,updated_at=? WHERE agency_id=? AND id=? AND status='active'")
       .run(now, now, context.agencyId, bookingDraft.id);
     sqlite.prepare(`UPDATE private_files SET entity_type='customer',entity_id=?,updated_at=? WHERE agency_id=? AND entity_type='booking_draft' AND entity_id=? AND classification IN ('customer_cnic_front','customer_cnic_back') AND status='ready'`)
       .run(customerId,now,context.agencyId,bookingDraft.id);
-    sqlite.prepare(`INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)`).run(randomUUID(), context.agencyId, context.userId, "booking.confirmed", "booking", id, JSON.stringify({ vehicleId: input.vehicleId, destinationCity:input.destinationCity, pickupAt: input.pickupAt, returnAt: input.returnAt, dailyRate, mileageRate, totalAmount, pricingMode }), now);
+    if(input.guarantor){
+      sqlite.prepare(`UPDATE private_files SET entity_type='booking',entity_id=?,updated_at=? WHERE agency_id=? AND entity_type='booking_draft' AND entity_id=? AND classification IN ('guarantor_cnic_front','guarantor_cnic_back') AND status='ready'`)
+        .run(id,now,context.agencyId,bookingDraft.id);
+    }else{
+      sqlite.prepare(`UPDATE private_files SET status='replaced',updated_at=? WHERE agency_id=? AND entity_type='booking_draft' AND entity_id=? AND classification IN ('guarantor_cnic_front','guarantor_cnic_back') AND status='ready'`)
+        .run(now,context.agencyId,bookingDraft.id);
+    }
+    sqlite.prepare(`INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)`).run(randomUUID(), context.agencyId, context.userId, "booking.confirmed", "booking", id, JSON.stringify({ vehicleId: input.vehicleId, destinationCity:input.destinationCity, pickupAt: input.pickupAt, returnAt: input.returnAt, dailyRate, mileageRate, totalAmount, pricingMode, guarantorRecorded:Boolean(input.guarantor) }), now);
     return { id, publicNumber: bookingDraft.publicNumber, status: "confirmed" as const, dailyRate, mileageRate, totalAmount, currency: "PKR" as const };
   }).immediate();
 }

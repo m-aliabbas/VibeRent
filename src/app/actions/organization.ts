@@ -17,6 +17,7 @@ import {
   type OrganizationSettingsDto,
 } from "@/server/services/organization-settings-service";
 import { composeTermsSnapshot, defaultAgreementConfig, type AgreementDesignConfig } from "@/lib/agreement-config";
+import { uploadAgreementTermsImage } from "@/server/services/private-file-service";
 
 export type OrganizationActionResult<T = undefined> =
   | { ok: true; data?: T; message?: string }
@@ -57,6 +58,15 @@ export async function updateOrganizationProfileAction(input:OrganizationSettings
 
 export async function updateAgreementDesignerAction(input:AgreementDesignConfig):Promise<OrganizationActionResult<AgreementDesignConfig>> {
   try{const data=updateAgreementDesigner(await getWebRequestContext(),input);revalidatePath("/settings");return {ok:true,data,message:"Agreement design saved for future rentals."}}catch(error){return actionFailure(error)}
+}
+
+export async function uploadAgreementTermsImageAction(formData: FormData): Promise<OrganizationActionResult<NonNullable<AgreementDesignConfig["termsImage"]>>> {
+  try {
+    const file = formData.get("file");
+    if (!(file instanceof File)) return { ok: false, message: "Choose a JPG or PNG image." };
+    const saved = await uploadAgreementTermsImage(await getWebRequestContext(), file);
+    return { ok: true, data: { id: saved.id, name: saved.originalName, url: saved.downloadUrl }, message: "Terms image uploaded. Save the agreement design to use it for future rentals." };
+  } catch (error) { return actionFailure(error); }
 }
 
 export async function createAgencyAction(input: { name: string; slug: string; city: string; branchName: string; address: string }): Promise<OrganizationActionResult<{ agencyId: string }>> {

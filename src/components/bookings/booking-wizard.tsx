@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
 import { ArrowLeft, Check, Loader2, MessageCircle, Plus, ShieldAlert, X } from "lucide-react";
 
 import { clearBookingAction, confirmBookingAction, startBookingAction } from "@/app/actions/bookings";
@@ -9,7 +9,7 @@ import { listCustomersAction, createCustomerAction } from "@/app/actions/custome
 import { listVehiclesAction } from "@/app/actions/vehicles";
 import { listBookingsAction } from "@/app/actions/bookings";
 import { createAgencyCityAction, listAgencyCitiesAction } from "@/app/actions/catalogs";
-import { getBookingCnicAction, uploadBookingCnicAction } from "@/app/actions/booking-cnic";
+import { getBookingCnicAction, getGuarantorCnicAction, uploadBookingCnicAction, uploadGuarantorCnicAction } from "@/app/actions/booking-cnic";
 import { listDriversAction } from "@/app/actions/drivers";
 import { CnicDocumentDrawer } from "@/components/customers/cnic-document-drawer";
 import { FormCombobox } from "@/components/forms/form-combobox";
@@ -19,6 +19,7 @@ import { cnicExtractionKey, mergeCnicExtraction, type CnicExtractedValues, type 
 import { formatPkr } from "@/lib/utils";
 import type { Vehicle } from "@/types/vehicle";
 import type { BookingListItem } from "@/server/repositories/contracts";
+import type { GuarantorInput } from "@/server/validation/booking";
 import type { CreateCustomerInput } from "@/server/validation/customer";
 
 // ─── Domain types derived from server ───────────────────────────────────────
@@ -52,6 +53,11 @@ type FleetOption = {
 type DriverOption={id:string;name:string;phone:string};
 
 type ConflictInfo = { bookingId: string; reason: string };
+type GuarantorDraft = GuarantorInput;
+
+function isGuarantorComplete(value: GuarantorDraft) {
+  return Boolean(value.name.trim() && value.parentage.trim() && /^\d{13}$/.test(value.cnic.replace(/\D/g,"")) && /^(?:92|0)?3\d{9}$/.test(value.phone.replace(/\D/g,"")) && value.address.trim() && Number.isInteger(value.carAmount) && value.carAmount > 0);
+}
 
 // ─── Draft ──────────────────────────────────────────────────────────────────
 
@@ -64,6 +70,7 @@ type Draft = {
   to: string;
   vehicleId: string;
   customerId: string;
+  guarantor: GuarantorDraft | null;
   dailyRate: number;
   extras: number;
   discount: number;
@@ -90,6 +97,7 @@ function defaultDraft(): Draft {
   to: local(returned),
   vehicleId: "",
   customerId: "",
+  guarantor:null,
   dailyRate: 0,
   extras: 0,
   discount: 0,
@@ -220,7 +228,7 @@ export function BookingWizard() {
   const canContinue = [
     Boolean(draft.from && draft.to && new Date(draft.to) > new Date(draft.from) && (draft.rentalMode==="self_drive"||draft.driverId)),
     Boolean(vehicle && getConflicts(vehicle.id, draft.from, draft.to, bookings).length === 0),
-    Boolean(draft.customerId || (draft.rentalMode==="with_driver"&&draft.renterSkipped)),
+    Boolean((draft.customerId || (draft.rentalMode==="with_driver"&&draft.renterSkipped)) && (!draft.guarantor || isGuarantorComplete(draft.guarantor))),
     draft.dailyRate > 0 && days >= (vehicle?.minimumDays??1) && draft.discount <= draft.dailyRate * days + draft.extras && (draft.dailyRate === (vehicle?.rate??draft.dailyRate) || Boolean(draft.overrideReason.trim())),
     true,
   ][step];
@@ -237,6 +245,7 @@ export function BookingWizard() {
       rentalMode:draft.rentalMode,
       driverId:draft.driverId||undefined,
       renterSkipped:draft.renterSkipped,
+      guarantor:draft.guarantor??undefined,
       destinationCity: draft.city,
       pickupAt: draft.from,
       returnAt: draft.to,
@@ -455,7 +464,7 @@ type NewCustomerFormErrors = Partial<Record<keyof CreateCustomerInput, string>>;
 
 function CustomerStep({ draft, setDraft, customers, bookingReference, onCustomerCreated }: {
   draft: Draft;
-  setDraft: (value: Draft) => void;
+  setDraft: Dispatch<SetStateAction<Draft>>;
   customers: CustomerDto[];
   bookingReference?: {id:string;publicNumber:number};
   onCustomerCreated: (c: CustomerDto) => void;
@@ -622,9 +631,85 @@ function CustomerStep({ draft, setDraft, customers, bookingReference, onCustomer
             </div>
           </div>
         )}
+        <GuarantorSection draft={draft} setDraft={setDraft} bookingReference={bookingReference}/>
       </div>
     </div>
   );
+}
+
+function GuarantorSection({draft,setDraft,bookingReference}:{draft:Draft;setDraft:Dispatch<SetStateAction<Draft>>;bookingReference?:{id:string;publicNumber:number}}) {
+  const guarantor=draft.guarantor;
+  const [intake,setIntake]=useState<CnicIntake>();
+  const [loading,setLoading]=useState(false);
+  const [uploading,setUploading]=useState<"front"|"back"|null>(null);
+  const [error,setError]=useState("");
+  const lastExtraction=useRef<CnicExtractedValues|undefined>(undefined);
+  const lastExtractionKey=useRef("");
+
+  function update(values:Partial<GuarantorDraft>){
+    setDraft(current=>current.guarantor?{...current,guarantor:{...current.guarantor,...values}}:current);
+  }
+
+  function applyExtracted(next:CnicIntake){
+    const key=cnicExtractionKey(next.extracted);
+    if(key===lastExtractionKey.current)return;
+    const previous=lastExtraction.current;
+    setDraft(current=>{
+      if(!current.guarantor)return current;
+      const values:Partial<GuarantorDraft>={};
+      if(next.extracted.name&&(!current.guarantor.name||current.guarantor.name===previous?.name))values.name=next.extracted.name;
+      if(next.extracted.father_name&&(!current.guarantor.parentage||current.guarantor.parentage===previous?.father_name))values.parentage=next.extracted.father_name;
+      if(next.extracted.cnic_no&&(!current.guarantor.cnic||current.guarantor.cnic===previous?.cnic_no))values.cnic=next.extracted.cnic_no;
+      if(next.extracted.address&&(!current.guarantor.address||current.guarantor.address===previous?.address))values.address=next.extracted.address;
+      return Object.keys(values).length?{...current,guarantor:{...current.guarantor,...values}}:current;
+    });
+    lastExtraction.current=next.extracted;
+    lastExtractionKey.current=key;
+  }
+
+  async function refresh(silent=false){
+    if(!bookingReference||loading)return;
+    if(!silent)setLoading(true);
+    const result=await getGuarantorCnicAction(bookingReference.id);
+    if(!silent)setLoading(false);
+    if(!result.ok){if(!silent)setError(result.error.message);return;}
+    const next=result.data as CnicIntake;setIntake(next);applyExtracted(next);
+  }
+
+  useEffect(()=>{
+    if(!bookingReference||!guarantor)return;
+    const initial=window.setTimeout(()=>void refresh(),0);
+    const timer=window.setInterval(()=>void refresh(true),7000);
+    return()=>{window.clearTimeout(initial);window.clearInterval(timer);};
+    // The booking reference and guarantor toggle control this polling lifecycle.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[bookingReference?.id,Boolean(guarantor)]);
+
+  async function upload(side:"front"|"back",file:File|undefined){
+    if(!file||!bookingReference||uploading)return;
+    setUploading(side);setError("");
+    const formData=new FormData();formData.set("bookingDraftId",bookingReference.id);formData.set("side",side);formData.set("image",file);
+    const result=await uploadGuarantorCnicAction(formData);
+    setUploading(null);
+    if(!result.ok){setError(result.error.message);return;}
+    const next=result.data as CnicIntake;setIntake(next);applyExtracted(next);
+  }
+
+  if(!guarantor)return <section className="rounded-xl border border-dashed border-[#98A2B3] bg-white p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><h3 className="text-sm font-bold text-[#1D2939]">Guarantor</h3><p className="mt-1 text-xs text-[#667085]">Add a guarantor with CNIC OCR or enter the details manually.</p></div><Button type="button" size="sm" variant="secondary" onClick={()=>setDraft({...draft,guarantor:{name:"",parentage:"",cnic:"",phone:"",address:"",carAmount:0}})}><Plus size={15}/>Add guarantor</Button></div></section>;
+
+  return <section className="rounded-xl border border-[#B2DDFF] bg-[#F5FAFF] p-4">
+    <div className="flex items-start justify-between gap-3"><div><h3 className="text-sm font-bold text-[#1D2939]">Guarantor details</h3><p className="mt-1 text-xs text-[#667085]">Upload the guarantor CNIC to fill identity fields, then review every value.</p></div><button type="button" onClick={()=>setDraft({...draft,guarantor:null})} className="grid h-8 w-8 place-items-center rounded-lg text-[#667085] hover:bg-white" aria-label="Remove guarantor"><X size={16}/></button></div>
+    {bookingReference&&<div className="mt-4"><CnicDocumentDrawer label="Guarantor CNIC" subjectLabel="guarantor" intake={intake} loading={loading} uploading={uploading} error={error} onRefresh={()=>void refresh()} onUpload={(side,file)=>void upload(side,file)}/></div>}
+    <div className="mt-4 grid gap-3 sm:grid-cols-2">
+      <FormInput label="Name" required value={guarantor.name} onChange={e=>update({name:e.target.value})}/>
+      <FormInput label="Parentage" required value={guarantor.parentage} onChange={e=>update({parentage:e.target.value})}/>
+      <FormInput label="CNIC" required placeholder="35202-1234567-1" value={guarantor.cnic} onChange={e=>update({cnic:e.target.value})}/>
+      <FormInput label="Phone" required type="tel" placeholder="03001234567" value={guarantor.phone} onChange={e=>update({phone:e.target.value})}/>
+      <FormInput label="Amount of car (PKR)" required type="number" min={1} value={guarantor.carAmount||""} onChange={e=>update({carAmount:Number(e.target.value)})}/>
+      <label className="text-sm font-semibold text-[#344054] sm:col-span-2">Address *<textarea required className="mt-1.5 min-h-20 w-full rounded-[9px] border border-[#D0D5DD] bg-white px-3 py-2 text-sm font-normal outline-none focus:border-[#006FE6] focus:ring-2 focus:ring-[#006FE6]/10" value={guarantor.address} onChange={e=>update({address:e.target.value})} placeholder="Address printed on CNIC"/></label>
+    </div>
+    {!isGuarantorComplete(guarantor)&&<p className="mt-3 text-xs text-[#B54708]">Complete all six guarantor fields to continue.</p>}
+  </section>;
 }
 
 // ─── Pricing step ────────────────────────────────────────────────────────────
@@ -662,6 +747,8 @@ function Review({ draft, days, total, vehicle, customers }: {
     ["Going to", draft.city],
     ["Vehicle", vehicle ? `${vehicle.label} · ${vehicle.plate}` : "—"],
     ["Customer", customer ? `${customer.name} · ${customer.phone}` : "—"],
+    ["Guarantor", draft.guarantor ? `${draft.guarantor.name} · ${draft.guarantor.phone}` : "Not added"],
+    ["Car amount", draft.guarantor ? formatPkr(draft.guarantor.carAmount) : "—"],
     ["Price", `${formatPkr(total)} · ${days} days`],
     ["Deposit", draft.deposit?formatPkr(draft.deposit):"Not required"],
     ["Final availability", "Checked transactionally on confirmation"],

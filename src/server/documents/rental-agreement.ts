@@ -3,10 +3,13 @@ import "server-only";
 import fs from "node:fs";
 import PDFDocument from "pdfkit";
 import { sqlite } from "@/db/connection";
-import { composeTermsSnapshot, normalizeAgreementConfig, type AgreementDesignConfig, type AgreementSectionId } from "@/lib/agreement-config";
+import { composeTermsSnapshot, normalizeAgreementConfig, parseTermsImageSnapshot, type AgreementDesignConfig, type AgreementSectionId } from "@/lib/agreement-config";
+import { guarantorFields } from "@/lib/agreement-guarantor";
 import type { RequestContext } from "@/server/context/request-context";
 import { DomainError } from "@/server/domain/errors";
 import { wrapRtlText } from "@/server/documents/rtl-text";
+import { readPrivateFile } from "@/server/services/private-file-service";
+import { readImageDimensions } from "@/server/files/image-dimensions";
 
 type AgreementRow = {
   publicNumber: number | null;
@@ -18,6 +21,12 @@ type AgreementRow = {
   destinationCity: string;
   rentalMode: string;
   renterSkipped: number;
+  guarantorName:string|null;
+  guarantorParentage:string|null;
+  guarantorCnic:string|null;
+  guarantorPhone:string|null;
+  guarantorAddress:string|null;
+  guarantorCarAmount:number|null;
   terms: string;
   agency: string;
   agencyPhone: string | null;
@@ -46,12 +55,16 @@ type AgreementRow = {
 type PdfFonts = { regular: string; bold: string; urdu?: string };
 const pageWidth = 595.28;
 const contentWidth = 507;
+const pageContentBottom = 758;
+const minimumTermsImageHeight = 110;
 
 export async function createRentalAgreementPdf(context: RequestContext, bookingId: string): Promise<{ bytes: Buffer; fileName: string; customerPhone: string }> {
   const row = sqlite.prepare(`
     SELECT b.public_number AS publicNumber,b.pickup_at AS pickupAt,b.return_at AS returnAt,
       b.daily_rate AS dailyRate,b.total_amount AS totalAmount,b.deposit_required AS depositRequired,
       b.destination_city AS destinationCity,b.rental_mode AS rentalMode,b.renter_skipped AS renterSkipped,
+      b.guarantor_name AS guarantorName,b.guarantor_parentage AS guarantorParentage,b.guarantor_cnic AS guarantorCnic,
+      b.guarantor_phone AS guarantorPhone,b.guarantor_address AS guarantorAddress,b.guarantor_car_amount AS guarantorCarAmount,
       b.terms_snapshot AS terms,a.name AS agency,a.phone AS agencyPhone,a.public_email AS agencyEmail,
       a.address AS agencyAddress,a.registration_number AS registrationNumber,a.tax_number AS taxNumber,
       a.agreement_config AS agreementConfig,a.rental_terms AS legacyTerms,o.logo,
@@ -71,22 +84,35 @@ export async function createRentalAgreementPdf(context: RequestContext, bookingI
   if (!row) throw new DomainError("NOT_FOUND", "Booking not found.", 404);
 
   const config = normalizeAgreementConfig(parseConfig(row.agreementConfig), row.legacyTerms);
+  const termsImageId = parseTermsImageSnapshot(row.terms);
+  let termsImage: Buffer | undefined;
+  if (termsImageId) {
+    const stored = await readPrivateFile(context, termsImageId);
+    if (stored.file.classification !== "agreement_terms_image" || stored.file.entityType !== "agency" || stored.file.entityId !== context.agencyId) {
+      throw new DomainError("NOT_FOUND", "The terms and conditions image is unavailable.", 404);
+    }
+    termsImage = stored.bytes;
+  }
   const doc = new PDFDocument({ size: "A4", margin: 44, bufferPages: true, info: { Title: `${config.titleEn} #${row.publicNumber ?? bookingId}`, Author: row.agency } });
   const fonts = registerFonts(doc);
   const chunks: Buffer[] = [];
   doc.on("data", chunk => chunks.push(Buffer.from(chunk)));
   const completed = new Promise<Buffer>((resolve, reject) => { doc.on("end", () => resolve(Buffer.concat(chunks))); doc.on("error", reject); });
 
-  renderHeader(doc, fonts, row, config);
-  for (const section of config.sections.filter(item => item.enabled)) {
-    renderSection(doc, fonts, row, config, section.id, section.titleEn, section.titleUr);
+  const compactImageLayout = Boolean(termsImage);
+  renderHeader(doc, fonts, row, config, compactImageLayout);
+  const sections = config.sections.filter(item => item.enabled);
+  for (const [index, section] of sections.entries()) {
+    const remainingHeight = sections.slice(index + 1).reduce((total, item) => total + estimatedRenderedSectionHeight(item.id, compactImageLayout, hasGuarantor(row)), 0);
+    renderSection(doc, fonts, row, config, section.id, section.titleEn, section.titleUr, termsImage, remainingHeight, compactImageLayout);
+    if (section.id === "renter" && hasGuarantor(row)) renderGuarantorSection(doc, fonts, row, config, compactImageLayout);
   }
   renderFooter(doc, fonts, config);
   doc.end();
   return { bytes: await completed, fileName: `rental-agreement-${row.publicNumber ?? bookingId}.pdf`, customerPhone: row.customerPhone };
 }
 
-function renderHeader(doc: PDFKit.PDFDocument, fonts: PdfFonts, row: AgreementRow, config: AgreementDesignConfig) {
+function renderHeader(doc: PDFKit.PDFDocument, fonts: PdfFonts, row: AgreementRow, config: AgreementDesignConfig, compactImageLayout: boolean) {
   const accent = config.accentColor;
   if (config.showPageBorder) doc.rect(24, 24, pageWidth - 48, 793.89).lineWidth(1.5).strokeColor(accent).stroke();
   let textX = 44;
@@ -102,28 +128,31 @@ function renderHeader(doc: PDFKit.PDFDocument, fonts: PdfFonts, row: AgreementRo
   if (config.language !== "ur") doc.font(fonts.bold).fontSize(16).fillColor(accent).text(config.titleEn, 44, 116, { width: bilingual ? 250 : 360 });
   if (config.language !== "en") urduText(doc, fonts, config.titleUr, bilingual ? 305 : 44, 112, bilingual ? 246 : contentWidth, 17, accent);
   doc.font(fonts.bold).fontSize(9).fillColor("#344054").text(`Booking #${row.publicNumber ?? "—"}`, 420, 142, { width: 131, align: "right" });
-  doc.y = 168;
+  doc.y = compactImageLayout ? 154 : 168;
 }
 
-function renderSection(doc: PDFKit.PDFDocument, fonts: PdfFonts, row: AgreementRow, config: AgreementDesignConfig, id: AgreementSectionId, titleEn: string, titleUr: string) {
-  const estimated = id === "terms" ? 125 : id === "signatures" ? 76 : 72;
+function renderSection(doc: PDFKit.PDFDocument, fonts: PdfFonts, row: AgreementRow, config: AgreementDesignConfig, id: AgreementSectionId, titleEn: string, titleUr: string, termsImage?: Buffer, remainingHeight = 0, compactImageLayout = false) {
+  const sectionHeaderHeight = compactImageLayout ? 17 : 20;
+  const estimated = id === "terms" && termsImage
+    ? sectionHeaderHeight + minimumTermsImageHeight + 9 + remainingHeight
+    : estimatedSectionHeight(id, compactImageLayout);
   ensureSpace(doc, estimated, config);
   const y = doc.y;
   const terms = id === "terms" ? resolveTermsSnapshot(row.terms, config) : "";
   const parsedTerms = splitSnapshot(terms);
-  const showEnglish = id === "terms" ? Boolean(parsedTerms.english) : config.language !== "ur";
-  const showUrdu = id === "terms" ? Boolean(parsedTerms.urdu) : config.language !== "en";
+  const showEnglish = id === "terms" && !termsImage ? Boolean(parsedTerms.english) : config.language !== "ur";
+  const showUrdu = id === "terms" && !termsImage ? Boolean(parsedTerms.urdu) : config.language !== "en";
   if (showEnglish) doc.font(fonts.bold).fontSize(9.5).fillColor(config.accentColor).text(titleEn.toUpperCase(), 44, y, { width: 245 });
   if (showUrdu) urduText(doc, fonts, titleUr, 305, y - 4, 246, 11, config.accentColor);
   doc.moveTo(44, y + 16).lineTo(551, y + 16).strokeColor(`${config.accentColor}55`).lineWidth(0.6).stroke();
-  doc.y = y + 20;
-  if (id === "terms") return renderTerms(doc, fonts, terms, config);
-  if (id === "signatures") return renderSignatures(doc, fonts, config);
+  doc.y = y + sectionHeaderHeight;
+  if (id === "terms") return termsImage ? renderTermsImage(doc, termsImage, remainingHeight) : renderTerms(doc, fonts, terms, config);
+  if (id === "signatures") return renderSignatures(doc, fonts, config, compactImageLayout);
   const fields = detailFields(id, row);
   const columns = 3;
   const gap = 8;
   const fieldWidth = (contentWidth - gap * (columns - 1)) / columns;
-  const rowHeight = config.density === "compact" ? 23 : 25;
+  const rowHeight = compactImageLayout ? 21 : config.density === "compact" ? 23 : 25;
   const baseY = doc.y;
   fields.forEach((field, index) => {
     const column = index % columns;
@@ -135,7 +164,28 @@ function renderSection(doc: PDFKit.PDFDocument, fonts: PdfFonts, row: AgreementR
     else doc.font(fonts.regular).fontSize(6.2).fillColor("#667085").text(field.en, x + 7, top + 3, { width: fieldWidth - 14, lineGap: 0 });
     doc.font(fonts.bold).fontSize(7.4).fillColor("#19191F").text(field.value, x + 7, top + 11, { width: fieldWidth - 14, ellipsis: true, lineBreak: false });
   });
-  doc.y = baseY + Math.ceil(fields.length / columns) * rowHeight + 5;
+  doc.y = baseY + Math.ceil(fields.length / columns) * rowHeight + (compactImageLayout ? 3 : 5);
+}
+
+function renderTermsImage(doc: PDFKit.PDFDocument, image: Buffer, remainingHeight: number) {
+  const dimensions = readImageDimensions(image);
+  const availableHeight = Math.max(minimumTermsImageHeight, pageContentBottom - doc.y - remainingHeight - 9);
+  const scale = Math.min(contentWidth / dimensions.width, availableHeight / dimensions.height);
+  const width = dimensions.width * scale;
+  const height = dimensions.height * scale;
+  const x = 44 + (contentWidth - width) / 2;
+  doc.image(image, x, doc.y, { width, height });
+  doc.y += height + 9;
+}
+
+function estimatedSectionHeight(id: AgreementSectionId, compactImageLayout = false) {
+  if (id === "terms") return 125;
+  if (id === "signatures") return compactImageLayout ? 72 : 88;
+  return compactImageLayout ? 62 : 75;
+}
+
+function estimatedRenderedSectionHeight(id: AgreementSectionId, compactImageLayout: boolean, includesGuarantor: boolean) {
+  return estimatedSectionHeight(id, compactImageLayout) + (id === "renter" && includesGuarantor ? estimatedSectionHeight("renter", compactImageLayout) : 0);
 }
 
 function renderTerms(doc: PDFKit.PDFDocument, fonts: PdfFonts, snapshot: string, config: AgreementDesignConfig) {
@@ -156,7 +206,33 @@ function renderTerms(doc: PDFKit.PDFDocument, fonts: PdfFonts, snapshot: string,
   doc.y = Math.max(englishBottom, urduBottom) + 9;
 }
 
-function renderSignatures(doc: PDFKit.PDFDocument, fonts: PdfFonts, config: AgreementDesignConfig) {
+function renderGuarantorSection(doc: PDFKit.PDFDocument, fonts: PdfFonts, row:AgreementRow, config: AgreementDesignConfig, compactImageLayout: boolean) {
+  ensureSpace(doc, estimatedSectionHeight("renter", compactImageLayout), config);
+  const y = doc.y;
+  if (config.language !== "ur") doc.font(fonts.bold).fontSize(9.5).fillColor(config.accentColor).text("GUARANTOR INFORMATION", 44, y, { width: 245 });
+  if (config.language !== "en") urduText(doc, fonts, "ضامن کی معلومات", 305, y - 4, 246, 11, config.accentColor);
+  doc.moveTo(44, y + 16).lineTo(551, y + 16).strokeColor(`${config.accentColor}55`).lineWidth(0.6).stroke();
+
+  const columns = 3;
+  const gap = 8;
+  const fieldWidth = (contentWidth - gap * (columns - 1)) / columns;
+  const rowHeight = compactImageLayout ? 21 : config.density === "compact" ? 23 : 25;
+  const baseY = y + (compactImageLayout ? 17 : 20);
+  const fields=guarantorFields({name:row.guarantorName!,parentage:row.guarantorParentage!,cnic:row.guarantorCnic!,phone:row.guarantorPhone!,address:row.guarantorAddress!,carAmount:row.guarantorCarAmount!});
+  fields.forEach((item, index) => {
+    const column = index % columns;
+    const line = Math.floor(index / columns);
+    const x = 44 + column * (fieldWidth + gap);
+    const top = baseY + line * rowHeight;
+    doc.roundedRect(x, top, fieldWidth, rowHeight - 4, 3).fillColor("#F8FAFC").fill();
+    if (config.language === "ur") urduText(doc, fonts, item.ur, x + 7, top + 1, fieldWidth - 14, 6.2, "#667085", -1);
+    else doc.font(fonts.regular).fontSize(6.2).fillColor("#667085").text(item.en, x + 7, top + 3, { width: fieldWidth - 14, lineGap: 0 });
+    doc.font(fonts.bold).fontSize(7.4).fillColor("#19191F").text(item.value, x + 7, top + 11, { width: fieldWidth - 14, lineBreak: false });
+  });
+  doc.y = baseY + Math.ceil(fields.length / columns) * rowHeight + (compactImageLayout ? 3 : 5);
+}
+
+function renderSignatures(doc: PDFKit.PDFDocument, fonts: PdfFonts, config: AgreementDesignConfig, compactImageLayout: boolean) {
   const labels = [
     config.signatures.customer && ["Customer / Renter", "کرایہ دار"],
     config.signatures.representative && ["Agency representative", "ادارے کا نمائندہ"],
@@ -167,12 +243,13 @@ function renderSignatures(doc: PDFKit.PDFDocument, fonts: PdfFonts, config: Agre
   const baseY = doc.y;
   labels.forEach(([en, ur], index) => {
     const x = 44 + index * (width + gap);
-    doc.moveTo(x, baseY + 35).lineTo(x + width, baseY + 35).strokeColor("#98A2B3").lineWidth(0.7).stroke();
-    if(config.language==="ur")urduText(doc,fonts,ur,x,baseY+38,width,8,"#475467",0);
-    else doc.font(fonts.regular).fontSize(8).fillColor("#475467").text(en, x, baseY + 40, { width, lineBreak:false });
-    doc.fontSize(7).fillColor("#98A2B3").text("Date: __________", x, baseY + 54, { width, lineBreak:false });
+    const lineY = baseY + (compactImageLayout ? 27 : 35);
+    doc.moveTo(x, lineY).lineTo(x + width, lineY).strokeColor("#98A2B3").lineWidth(0.7).stroke();
+    if(config.language==="ur")urduText(doc,fonts,ur,x,baseY+(compactImageLayout ? 30 : 38),width,8,"#475467",0);
+    else doc.font(fonts.regular).fontSize(8).fillColor("#475467").text(en, x, baseY + (compactImageLayout ? 32 : 40), { width, lineBreak:false });
+    doc.fontSize(7).fillColor("#98A2B3").text("Date: __________", x, baseY + (compactImageLayout ? 46 : 54), { width, lineBreak:false });
   });
-  doc.y = baseY + 68;
+  doc.y = baseY + (compactImageLayout ? 55 : 68);
 }
 
 function renderFooter(doc: PDFKit.PDFDocument, fonts: PdfFonts, config: AgreementDesignConfig) {
@@ -196,7 +273,7 @@ function detailFields(id: Exclude<AgreementSectionId, "terms" | "signatures">, r
 }
 
 function ensureSpace(doc: PDFKit.PDFDocument, height: number, config: AgreementDesignConfig) {
-  if (doc.y + height < 770) return;
+  if (doc.y + height <= pageContentBottom) return;
   doc.addPage();
   if (config.showPageBorder) doc.rect(24, 24, pageWidth - 48, 793.89).lineWidth(1.5).strokeColor(config.accentColor).stroke();
   doc.y = 48;
@@ -236,6 +313,7 @@ function resolveTermsSnapshot(snapshot: string, config: AgreementDesignConfig) {
 }
 
 function parseConfig(value: string | null) { try { return value ? JSON.parse(value) : undefined; } catch { return undefined; } }
+function hasGuarantor(row:AgreementRow) { return Boolean(row.guarantorName&&row.guarantorParentage&&row.guarantorCnic&&row.guarantorPhone&&row.guarantorAddress&&row.guarantorCarAmount); }
 function field(en: string, ur: string, value: string) { return { en, ur, value }; }
 function formatCnic(value: string) { const digits=value.replace(/\D/g,"");return digits.length===13?`${digits.slice(0,5)}-${digits.slice(5,12)}-${digits.slice(12)}`:value||"Not recorded"; }
 function money(value: number) { return `PKR ${value.toLocaleString("en-PK")}`; }
