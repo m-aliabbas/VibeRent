@@ -15,6 +15,7 @@ import { loadFirebaseCredentials } from "@/server/desktop/encrypted-credentials"
 import {
   defaultLicenseExpiry,
   evaluateLicenseDocument,
+  getLicenseDaysRemaining,
   resolveLicenseExpiry,
 } from "@/server/desktop/license-policy";
 import { readEncryptedJson, writeEncryptedJson } from "@/server/desktop/local-crypto";
@@ -44,6 +45,7 @@ export type DesktopLicenseStatus = {
   message: string;
   checkedAt: string;
   expiresAt?: string;
+  daysRemaining?: number;
   offlineUntil?: string;
   device: DeviceFingerprintPayload;
 };
@@ -213,7 +215,13 @@ export function getDesktopLicenseStatus(): DesktopLicenseStatus {
     } catch {}
   }
   if (status && (!enforced || statusIsActive(status, fingerprint) || status.state !== "active")) {
-    return { ...status, device: status.device ?? device };
+    const expiresAt = status.expiresAt ? new Date(status.expiresAt) : null;
+    const daysRemaining = expiresAt ? getLicenseDaysRemaining(expiresAt) : null;
+    return {
+      ...status,
+      ...(daysRemaining === null ? {} : { daysRemaining }),
+      device: status.device ?? device,
+    };
   }
   return {
     enforced,

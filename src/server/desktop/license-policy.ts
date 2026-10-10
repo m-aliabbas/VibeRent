@@ -26,6 +26,12 @@ export function defaultLicenseExpiry(now = new Date()) {
   return new Date(now.getTime() + DEFAULT_LICENSE_TERM_DAYS * 24 * 60 * 60 * 1000);
 }
 
+export function getLicenseDaysRemaining(expiresAt: Date, now = new Date()) {
+  const remainingMilliseconds = expiresAt.getTime() - now.getTime();
+  if (!Number.isFinite(remainingMilliseconds)) return null;
+  return Math.max(0, Math.floor(remainingMilliseconds / 86_400_000));
+}
+
 export function resolveLicenseExpiry(license: LicenseDocument, now = new Date()) {
   const raw = license.expireDate ?? license.expire_date;
   if (raw === undefined || raw === null) {

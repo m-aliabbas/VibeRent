@@ -20,7 +20,7 @@ type BackupFile = { filename: string; size: number; createdAt: string; kind: str
 type DriveFile = { fileId: string; filename: string; size: number; createdAt: string | null };
 type DesktopStatus = {
   desktop: boolean;
-  license: { enforced: boolean; state: string; fingerprint: string; message: string; expiresAt?: string };
+  license: { enforced: boolean; state: string; fingerprint: string; message: string; expiresAt?: string; daysRemaining?: number };
   backup: { databasePath: string; databaseSize: number; backupSuffix: string; backups: BackupFile[] };
   scheduler: { running: boolean; nextRun: string | null; lastSuccess: string | null; lastError: string | null; hour: number; retentionDays: number };
   googleDrive: { configured: boolean; connected: boolean; account: { displayName?: string | null; email?: string | null } | null; folderName: string };
@@ -154,6 +154,7 @@ export function DesktopOperations({ onNotice }: { onNotice: (message: string) =>
     <div className="grid gap-5 xl:grid-cols-2">
       <Card icon={<ShieldCheck size={19}/>} title="Desktop license" description="Firebase-backed device approval with a signed offline license.">
         <div className="flex flex-wrap items-center justify-between gap-3"><div><StatusBadge status={status.license.enforced ? status.license.state : "Development"}/><p className="mt-2 text-sm text-[#475467]">{status.license.message}</p></div><Button size="sm" variant="secondary" disabled={busy !== null} onClick={() => void run("license", async () => { await api("/api/v1/desktop/license/refresh", { method: "POST" }); await load(); onNotice("License status refreshed."); })}><RefreshCw size={15}/>Refresh</Button></div>
+        {status.license.enforced && status.license.daysRemaining !== undefined && <div className="mt-4 rounded-xl border border-[#B2DDFF] bg-[#EFF8FF] p-4"><p className="text-xs font-semibold uppercase tracking-wide text-[#175CD3]">License time remaining</p><p className="mt-1 text-2xl font-extrabold tracking-tight text-[#1849A9]">{status.license.daysRemaining} {status.license.daysRemaining === 1 ? "day" : "days"}</p></div>}
         <div className="mt-4 rounded-lg bg-[#F8FAFC] p-3"><p className="text-xs font-semibold uppercase tracking-wide text-[#667085]">Device fingerprint</p><code className="mt-1 block break-all text-xs text-[#344054]">{status.license.fingerprint}</code>{status.license.expiresAt && <p className="mt-2 text-xs text-[#667085]">Expires {date(status.license.expiresAt)}</p>}</div>
       </Card>
 

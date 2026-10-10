@@ -1,6 +1,6 @@
 {
   "name": "viberent",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "private": true,
   "scripts": {
     "predev": "npm run db:migrate",

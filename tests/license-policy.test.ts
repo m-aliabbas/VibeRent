@@ -4,6 +4,7 @@ import { getDeviceFingerprint, getDeviceFingerprintPayload } from "../src/server
 import {
   DEFAULT_LICENSE_TERM_DAYS,
   evaluateLicenseDocument,
+  getLicenseDaysRemaining,
   resolveLicenseExpiry,
 } from "../src/server/desktop/license-policy";
 
@@ -42,6 +43,12 @@ test("an invalid configured expiry is blocked instead of silently renewed", () =
   const resolved = resolveLicenseExpiry(license, now);
   assert.equal(resolved.needsBackfill, false);
   assert.equal(evaluateLicenseDocument(license, resolved.expiresAt, now), "expired");
+});
+
+test("license days remaining uses full local 24-hour periods", () => {
+  assert.equal(getLicenseDaysRemaining(new Date("2026-10-07T11:59:59.999Z"), now), 2);
+  assert.equal(getLicenseDaysRemaining(new Date("2026-10-05T11:59:59.999Z"), now), 0);
+  assert.equal(getLicenseDaysRemaining(new Date("2026-10-04T11:59:59.999Z"), now), 0);
 });
 
 test("Node device identity includes the same diagnostic fields as VibePOS", () => {
