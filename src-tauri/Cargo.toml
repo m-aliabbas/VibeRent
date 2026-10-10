@@ -1,6 +1,6 @@
 [package]
 name = "viberent"
-version = "1.0.10"
+version = "1.0.11"
 description = "VibeRent desktop rental operations"
 authors = ["vibe.exe"]
 edition = "2021"
