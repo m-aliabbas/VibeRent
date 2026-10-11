@@ -1,4 +1,5 @@
 import "server-only";
+import { randomUUID } from "node:crypto";
 import { sqlite } from "@/db/connection";
 import { requireRole } from "@/server/auth/authorize";
 import type { RequestContext } from "@/server/context/request-context";
@@ -12,6 +13,23 @@ import {
   type AvailabilityBlockDto,
 } from "@/server/services/booking-service";
 import type { BookingListItem } from "@/server/repositories/contracts";
+import type { VehicleStatus } from "@/types/vehicle";
+
+const vehicleStatusValues: Record<VehicleStatus, string> = {
+  Available: "available",
+  Booked: "booked",
+  Maintenance: "maintenance",
+  "Out of Service": "out_of_service",
+  Archived: "archived",
+};
+
+const allowedVehicleStatusTransitions: Record<VehicleStatus, VehicleStatus[]> = {
+  Available: ["Booked", "Maintenance", "Out of Service"],
+  Booked: ["Available", "Maintenance", "Out of Service"],
+  Maintenance: ["Available", "Out of Service"],
+  "Out of Service": ["Available", "Maintenance"],
+  Archived: [],
+};
 
 export type VehicleFinancePeriod = { income:number; expenses:number };
 export type VehicleFinanceTransaction = {
@@ -130,6 +148,60 @@ export function saveVehicle(context: RequestContext, input: unknown) {
   return vehicleRepository.save(context.agencyId, context.userId, parseVehicleInput(input));
 }
 
+export function transitionVehicleStatus(context: RequestContext, id: string, input: { to: VehicleStatus; reason: string; notes?: string; effectiveAt: string }) {
+  requireRole(context, ["agency_owner", "fleet_manager"]);
+  const reason = input.reason?.trim();
+  const notes = input.notes?.trim() ?? "";
+  const effectiveAt = new Date(input.effectiveAt);
+  if (!reason || !Number.isFinite(effectiveAt.getTime())) {
+    throw new DomainError("VALIDATION_FAILED", "Choose a reason and a valid effective time.", 400);
+  }
+  if (!(input.to in vehicleStatusValues) || input.to === "Archived") {
+    throw new DomainError("INVALID_STATUS_TRANSITION", "Choose a valid operational vehicle status.", 409);
+  }
+
+  return sqlite.transaction(() => {
+    const current = getVehicle(context, id);
+    if (!allowedVehicleStatusTransitions[current.status].includes(input.to)) {
+      throw new DomainError("INVALID_STATUS_TRANSITION", `${current.status} cannot be changed to ${input.to}.`, 409);
+    }
+    if (current.status === "Booked" && input.to !== "Booked") {
+      const activeBooking = sqlite.prepare("SELECT id FROM bookings WHERE agency_id=? AND vehicle_id=? AND archived_at IS NULL AND status IN ('confirmed','checked_out') LIMIT 1")
+        .get(context.agencyId, id);
+      if (activeBooking) {
+        throw new DomainError("INVALID_STATUS_TRANSITION", "Cancel, reassign, or complete the active booking before changing this vehicle's status.", 409);
+      }
+    }
+
+    const now = new Date().toISOString();
+    sqlite.prepare("UPDATE vehicles SET status=?,version=version+1,updated_at=? WHERE agency_id=? AND id=? AND archived_at IS NULL")
+      .run(vehicleStatusValues[input.to], now, context.agencyId, id);
+    sqlite.prepare("INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)")
+      .run(randomUUID(), context.agencyId, context.userId, "vehicle.status_changed", "vehicle", id, JSON.stringify({ from: current.status, to: input.to, reason, notes: notes || undefined, effectiveAt: effectiveAt.toISOString() }), now);
+    return getVehicle(context, id);
+  }).immediate();
+}
+
+export function setVehicleArchived(context:RequestContext,id:string,archived:boolean) {
+  requireRole(context,["agency_owner","fleet_manager"]);
+  return sqlite.transaction(()=>{
+    const vehicle=sqlite.prepare("SELECT id,status FROM vehicles WHERE agency_id=? AND id=? LIMIT 1")
+      .get(context.agencyId,id) as {id:string;status:string}|undefined;
+    if(!vehicle) throw new DomainError("NOT_FOUND","Vehicle not found.",404);
+    if(archived){
+      const activeBooking=sqlite.prepare("SELECT id FROM bookings WHERE agency_id=? AND vehicle_id=? AND archived_at IS NULL AND status IN ('confirmed','checked_out') LIMIT 1")
+        .get(context.agencyId,id);
+      if(activeBooking) throw new DomainError("INVALID_STATUS_TRANSITION","Cancel or complete the vehicle's active booking before deleting it.",409);
+    }
+    const now=new Date().toISOString();
+    sqlite.prepare("UPDATE vehicles SET status=?,archived_at=?,version=version+1,updated_at=? WHERE agency_id=? AND id=?")
+      .run(archived?"archived":"available",archived?now:null,now,context.agencyId,id);
+    sqlite.prepare("INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)")
+      .run(randomUUID(),context.agencyId,context.userId,archived?"vehicle.archived":"vehicle.restored","vehicle",id,JSON.stringify({previousStatus:vehicle.status}),now);
+    return getVehicle(context,id);
+  }).immediate();
+}
+
 export function getVehicleFormOptions(context: RequestContext) {
   requireRole(context, ["agency_owner", "fleet_manager", "rental_agent"]);
   const branches = sqlite.prepare("SELECT id,name,city FROM branches WHERE agency_id=? AND active=1 ORDER BY name").all(context.agencyId) as Array<{id:string;name:string;city:string}>;
@@ -150,7 +222,7 @@ export function listAvailableVehicles(context: RequestContext, pickupAt: string,
       b.id AS branchId, b.name AS branch, b.city, v.updated_at AS updatedAt
     FROM vehicles v
     JOIN branches b ON b.id=v.branch_id AND b.agency_id=v.agency_id
-    WHERE v.agency_id=? AND v.archived_at IS NULL AND v.status NOT IN ('maintenance','out_of_service','archived')
+    WHERE v.agency_id=? AND v.archived_at IS NULL AND v.status='available'
       AND NOT EXISTS (SELECT 1 FROM bookings bk WHERE bk.agency_id=v.agency_id AND bk.vehicle_id=v.id AND bk.status IN ('confirmed','checked_out') AND bk.pickup_at < ? AND bk.return_at > ?)
       AND NOT EXISTS (SELECT 1 FROM availability_blocks ab WHERE ab.agency_id=v.agency_id AND ab.vehicle_id=v.id AND ab.archived_at IS NULL AND ab.start_at < ? AND ab.end_at > ?)
     ORDER BY b.city, v.daily_rate, v.plate

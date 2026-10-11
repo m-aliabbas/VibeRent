@@ -124,7 +124,7 @@ export function AppShell({ children, viewer }: { children: React.ReactNode; view
   }, []);
   return (
     <div className="min-h-screen bg-[#F8FAFC]">
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-[224px] flex-col border-r border-[#E6EAF0] bg-white px-3 py-5 lg:flex">
+      <aside data-app-chrome className="fixed inset-y-0 left-0 z-30 hidden w-[224px] flex-col border-r border-[#E6EAF0] bg-white px-3 py-5 lg:flex">
         <div className="px-2.5">
           <Brand />
         </div>
@@ -150,8 +150,8 @@ export function AppShell({ children, viewer }: { children: React.ReactNode; view
         </button>
       </aside>
 
-      <div className="lg:pl-[224px]">
-        <header className="sticky top-0 z-20 flex h-[72px] items-center border-b border-[#E6EAF0] bg-white/95 px-4 backdrop-blur sm:px-6 lg:px-7">
+      <div data-app-content-wrapper className="lg:pl-[224px]">
+        <header data-app-chrome className="sticky top-0 z-20 flex h-[72px] items-center border-b border-[#E6EAF0] bg-white/95 px-4 backdrop-blur sm:px-6 lg:px-7">
           <button
             onClick={() => setOpen(true)}
             className="mr-3 grid h-10 w-10 place-items-center rounded-lg text-[#475467] hover:bg-[#F2F4F7] lg:hidden"
@@ -191,7 +191,7 @@ export function AppShell({ children, viewer }: { children: React.ReactNode; view
             </DropdownMenu.Root>
           </div>
         </header>
-        <main className="mx-auto max-w-[1480px] px-4 py-6 sm:px-6 lg:px-7 lg:py-6">
+        <main data-app-content className="mx-auto max-w-[1480px] px-4 py-6 sm:px-6 lg:px-7 lg:py-6">
           {children}
         </main>
       </div>

@@ -93,3 +93,21 @@ export function updateCustomer(context: RequestContext, id: string, rawInput: un
     return getCustomerRow(context, id)!;
   })();
 }
+
+export function archiveCustomer(context:RequestContext,id:string) {
+  requireRole(context,["agency_owner","fleet_manager"]);
+  return sqlite.transaction(()=>{
+    const customer=sqlite.prepare("SELECT id,name FROM customers WHERE agency_id=? AND id=? AND archived_at IS NULL LIMIT 1")
+      .get(context.agencyId,id) as {id:string;name:string}|undefined;
+    if(!customer) throw new DomainError("NOT_FOUND","Customer not found.",404);
+    const activeBooking=sqlite.prepare("SELECT id FROM bookings WHERE agency_id=? AND customer_id=? AND archived_at IS NULL AND status IN ('confirmed','checked_out') LIMIT 1")
+      .get(context.agencyId,id);
+    if(activeBooking) throw new DomainError("INVALID_STATUS_TRANSITION","Cancel or complete the customer's active booking before deleting this customer.",409);
+    const now=new Date().toISOString();
+    sqlite.prepare("UPDATE customers SET status='archived',archived_at=?,version=version+1,updated_at=? WHERE agency_id=? AND id=?")
+      .run(now,now,context.agencyId,id);
+    sqlite.prepare("INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)")
+      .run(randomUUID(),context.agencyId,context.userId,"customer.archived","customer",id,JSON.stringify({name:customer.name}),now);
+    return {id};
+  }).immediate();
+}

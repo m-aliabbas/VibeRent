@@ -3,6 +3,7 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import Link from "next/link";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
 import { useEffect, useState, type FormEvent } from "react";
 import {
   ArrowLeft,
@@ -20,13 +21,14 @@ import {
   Repeat2,
   ShieldAlert,
   ShieldCheck,
+  Trash2,
   UserRound,
   Wrench,
   X,
 } from "lucide-react";
 import { createAvailabilityBlockAction } from "@/app/actions/bookings";
 import { getExpenseWorkspaceAction } from "@/app/actions/expenses";
-import { getVehicleFinanceAction } from "@/app/actions/vehicles";
+import { getVehicleFinanceAction, setVehicleArchivedAction, transitionVehicleStatusAction } from "@/app/actions/vehicles";
 import {
   AvailabilityCalendar,
   type CalendarSelection,
@@ -38,6 +40,7 @@ import { StatusBadge } from "@/components/shared/status-badge";
 import { InlineError } from "@/components/shared/inline-error";
 import { LoadingState } from "@/components/shared/loading-state";
 import { Toast } from "@/components/shared/toast";
+import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import {
   DetailPanel as Panel,
   Timeline,
@@ -79,6 +82,7 @@ const tabs: { id: VehicleDetailTab; label: string }[] = [
 ];
 
 export function VehicleWorkspace({ vehicleId }: { vehicleId: string }) {
+  const router = useRouter();
   const [vehicle, setVehicle] = useState<Vehicle>();
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -88,6 +92,8 @@ export function VehicleWorkspace({ vehicleId }: { vehicleId: string }) {
     () => vehicleStatusHistory[vehicleId] ?? [],
   );
   const [notice, setNotice] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const [deletePending, setDeletePending] = useState(false);
   const [operation, setOperation] = useState<VehicleOperation>();
   const [tab, setTab] = useState<VehicleDetailTab>("overview");
   const [finance, setFinance] = useState<VehicleFinanceSummary>();
@@ -136,10 +142,7 @@ export function VehicleWorkspace({ vehicleId }: { vehicleId: string }) {
   const changeStatus = async (input: StatusTransitionInput) => {
     if (!vehicle) return false;
     const previousStatus = vehicle.status;
-    const result = await vehicleRepository.save({
-      ...vehicle,
-      status: input.to,
-    });
+    const result = await transitionVehicleStatusAction(vehicle.id, input);
     if (!result.ok) {
       setError(result.error.message);
       return false;
@@ -209,6 +212,7 @@ export function VehicleWorkspace({ vehicleId }: { vehicleId: string }) {
     setTab("expenses");
     setNotice(`${item.id} submitted for approval and linked to ${vehicle.plate}.`);
   };
+  const removeVehicle=async()=>{if(!vehicle)return;setDeletePending(true);const result=await setVehicleArchivedAction(vehicle.id,true);setDeletePending(false);if(result.ok){router.push("/vehicles");router.refresh()}else{setNotice(result.error.message);setDeleting(false)}};
 
   return (
     <div className="space-y-6">
@@ -280,6 +284,10 @@ export function VehicleWorkspace({ vehicleId }: { vehicleId: string }) {
             <Pencil size={17} />
             Edit vehicle
           </Button>
+          <Button variant="danger" onClick={()=>setDeleting(true)}>
+            <Trash2 size={17}/>
+            Delete vehicle
+          </Button>
         </div>
       </section>
       <div className="overflow-x-auto border-b border-[#DDE3EA]">
@@ -302,6 +310,7 @@ export function VehicleWorkspace({ vehicleId }: { vehicleId: string }) {
         </div>
       </div>
 
+      <ConfirmDialog open={deleting} onOpenChange={setDeleting} title={`Delete ${vehicle.plate}?`} description="The vehicle will leave active fleet views while its rental, expense, and audit history remains preserved. Active bookings must be cancelled or completed first." onConfirm={()=>void removeVehicle()} pending={deletePending} confirmLabel="Delete vehicle" pendingLabel="Deleting…"/>
       {tab === "overview" && (
         <div className="space-y-5">
           <section className="grid gap-3 md:grid-cols-2">

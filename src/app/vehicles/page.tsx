@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { CarFront, CirclePlus, Plus, Wrench } from "lucide-react";
+import { CarFront, CirclePlus, Plus, Trash2, Wrench } from "lucide-react";
 import { PageHeader } from "@/components/shared/page-header";
 import { FilterBar, FilterSelect } from "@/components/shared/filter-bar";
 import { DataTable, type DataColumn } from "@/components/shared/data-table";
@@ -20,6 +20,7 @@ import { vehicleRepository } from "@/lib/repositories/vehicle-repository";
 import type { RepositoryResult } from "@/lib/repositories/repository";
 import { formatPkr } from "@/lib/utils";
 import type { Vehicle } from "@/types/vehicle";
+import { setVehicleArchivedAction } from "@/app/actions/vehicles";
 
 const pageSize = 20;
 type SortState = { key: string; direction: "asc" | "desc" };
@@ -232,10 +233,7 @@ export default function VehiclesPage() {
     if (!removing) return;
     setRemovingPending(true);
     const restoring = removing.status === "Archived";
-    const result = await vehicleRepository.save({
-      ...removing,
-      status: restoring ? "Available" : "Archived",
-    });
+    const result = await setVehicleArchivedAction(removing.id,!restoring);
     setRemovingPending(false);
     if (!result.ok) {
       setNotice(result.error.message);
@@ -308,15 +306,18 @@ export default function VehiclesPage() {
       header: "",
       className: "w-12",
       cell: (v) => (
-        <ActionMenu
-          onView={() => router.push(`/vehicles/${v.id}`)}
-          onEdit={() => {
-            setEditing(v);
-            setFormOpen(true);
-          }}
-          onDelete={() => setRemoving(v)}
-          archived={v.status === "Archived"}
-        />
+        <div className="flex items-center justify-end gap-1">
+          {v.status!=="Archived"&&<Button size="sm" variant="danger" onClick={event=>{event.stopPropagation();setRemoving(v)}}><Trash2 size={15}/>Delete</Button>}
+          <ActionMenu
+            onView={() => router.push(`/vehicles/${v.id}`)}
+            onEdit={() => {
+              setEditing(v);
+              setFormOpen(true);
+            }}
+            onDelete={() => setRemoving(v)}
+            archived={v.status === "Archived"}
+          />
+        </div>
       ),
     },
   ];
@@ -521,6 +522,7 @@ export default function VehiclesPage() {
                   onDelete={() => setRemoving(v)}
                   archived={v.status === "Archived"}
                 />
+                {v.status!=="Archived"&&<Button size="sm" variant="danger" onClick={()=>setRemoving(v)}><Trash2 size={15}/>Delete</Button>}
               </div>
               <div className="mt-4 flex items-center justify-between border-t border-[#EAECF0] pt-3">
                 <div className="flex gap-2">
@@ -550,21 +552,21 @@ export default function VehiclesPage() {
       <ConfirmDialog
         open={Boolean(removing)}
         onOpenChange={(open) => !open && setRemoving(undefined)}
-        title={`${removing?.status === "Archived" ? "Restore" : "Archive"} ${removing?.plate ?? "vehicle"}?`}
+        title={`${removing?.status === "Archived" ? "Restore" : "Delete"} ${removing?.plate ?? "vehicle"}?`}
         description={
           removing?.status === "Archived"
             ? "The vehicle will return to the active fleet as Available."
-            : "The vehicle will leave active fleet views while its operational history remains available."
+            : "The vehicle will leave active fleet views while its operational history remains available. Active bookings must be cancelled or completed first."
         }
         onConfirm={() => void remove()}
         pending={removingPending}
         confirmLabel={
           removing?.status === "Archived"
             ? "Restore vehicle"
-            : "Archive vehicle"
+            : "Delete vehicle"
         }
         pendingLabel={
-          removing?.status === "Archived" ? "Restoring…" : "Archiving…"
+          removing?.status === "Archived" ? "Restoring…" : "Deleting…"
         }
       />
     </div>

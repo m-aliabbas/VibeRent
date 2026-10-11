@@ -3,8 +3,8 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { Pencil, Plus, UserRound, X } from "lucide-react";
-import { createCustomerAction, getCustomerCnicAction, listCustomersAction, startCustomerCnicDraftAction, updateCustomerAction, uploadCustomerCnicAction } from "@/app/actions/customers";
+import { Pencil, Plus, Trash2, UserRound, X } from "lucide-react";
+import { archiveCustomerAction, createCustomerAction, getCustomerCnicAction, listCustomersAction, startCustomerCnicDraftAction, updateCustomerAction, uploadCustomerCnicAction } from "@/app/actions/customers";
 import { CnicDocumentDrawer } from "@/components/customers/cnic-document-drawer";
 import { FormInput, FormSelect } from "@/components/forms/form-controls";
 import { EmptyState } from "@/components/shared/empty-state";
@@ -14,6 +14,7 @@ import { LoadingState } from "@/components/shared/loading-state";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Toast } from "@/components/shared/toast";
+import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { Button } from "@/components/ui/button";
 import { cnicExtractionKey, mergeCnicExtraction, type CnicExtractedValues, type CnicIntake } from "@/lib/cnic-intake";
 import type { CustomerCnicTarget } from "@/server/services/customer-cnic-service";
@@ -37,6 +38,8 @@ export function CustomersModule() {
   const [editing, setEditing] = useState<CustomerRecord>();
   const [open, setOpen] = useState(false);
   const [notice, setNotice] = useState("");
+  const [removing, setRemoving] = useState<CustomerRecord>();
+  const [removingPending, setRemovingPending] = useState(false);
   const [now] = useState(() => Date.now());
 
   async function load() {
@@ -71,17 +74,29 @@ export function CustomersModule() {
     ["Updated recently", String(items.filter(item => now - Date.parse(item.updatedAt) < 30 * 86_400_000).length)],
   ];
 
+  async function removeCustomer() {
+    if(!removing)return;
+    setRemovingPending(true);
+    const result=await archiveCustomerAction(removing.id);
+    setRemovingPending(false);
+    if(!result.ok){setNotice(result.error.message);return;}
+    setItems(current=>current.filter(item=>item.id!==removing.id));
+    setNotice(`${removing.name} deleted from active customer records.`);
+    setRemoving(undefined);
+  }
+
   return <div className="space-y-6">
     <Toast message={notice} onDismiss={() => setNotice("")} />
     <PageHeader eyebrow="Customer records" title="Customers" description="Manage renter identity, contact details, rental history, and operational warnings." actions={<Button onClick={() => { setEditing(undefined); setOpen(true); }}><Plus size={17}/>Add customer</Button>} />
     <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">{metrics.map(([label,value]) => <button type="button" key={label} onClick={()=>{setLicense("All");setStatus(label==="Customers"?"All":label)}} className="rounded-xl border border-[#E8ECF2] bg-white p-4 text-left transition hover:border-[#84CAFF]"><p className="text-xs text-[#667085]">{label}</p><p className="mt-2 text-xl font-bold">{value}</p></button>)}</section>
     <FilterBar search={search} onSearch={setSearch} placeholder="Search name, phone or CNIC…" hasFilters={Boolean(search || status !== "All" || license!=="All")} onClear={() => { setSearch(""); setStatus("All"); setLicense("All"); }}><FilterSelect label="Status" value={status} onChange={setStatus} options={["Active", "Preferred", "Needs review", "Updated recently", "Review", "Blacklisted"]}/><FilterSelect label="License" value={license} onChange={setLicense} options={["Expiring soon","Expired","No license"]}/></FilterBar>
-    {loading ? <LoadingState rows={4}/> : loadError ? <InlineError message={loadError} onRetry={() => void load()}/> : rows.length === 0 ? <EmptyState filtered={Boolean(search || status !== "All" || license!=="All")}/> : <div className="overflow-hidden rounded-xl border border-[#E4E7EC] bg-white"><div className="divide-y divide-[#EAECF0]">{rows.map(item => <article key={item.id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center"><span className="grid h-10 w-10 place-items-center rounded-lg bg-[#EFF8FF] text-[#006FE6]"><UserRound size={18}/></span><div className="min-w-0 flex-1"><Link href={`/customers/${item.id}`} className="text-sm font-bold hover:text-[#006FE6]">{item.name}</Link><p className="mt-1 text-xs text-[#667085]">{item.phone} · <span className="font-mono">{item.cnic}</span>{item.email ? ` · ${item.email}` : ""}</p></div><div className="flex items-center gap-2"><StatusBadge status={displayStatus(item.status)}/><Button size="sm" variant="ghost" onClick={() => { setEditing(item); setOpen(true); }}><Pencil size={15}/>Edit</Button><Button asChild size="sm" variant="secondary"><Link href={`/customers/${item.id}`}>View</Link></Button></div></article>)}</div></div>}
+    {loading ? <LoadingState rows={4}/> : loadError ? <InlineError message={loadError} onRetry={() => void load()}/> : rows.length === 0 ? <EmptyState filtered={Boolean(search || status !== "All" || license!=="All")}/> : <div className="overflow-hidden rounded-xl border border-[#E4E7EC] bg-white"><div className="divide-y divide-[#EAECF0]">{rows.map(item => <article key={item.id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center"><span className="grid h-10 w-10 place-items-center rounded-lg bg-[#EFF8FF] text-[#006FE6]"><UserRound size={18}/></span><div className="min-w-0 flex-1"><Link href={`/customers/${item.id}`} className="text-sm font-bold hover:text-[#006FE6]">{item.name}</Link><p className="mt-1 text-xs text-[#667085]">{item.phone} · <span className="font-mono">{item.cnic}</span>{item.email ? ` · ${item.email}` : ""}</p></div><div className="flex items-center gap-2"><StatusBadge status={displayStatus(item.status)}/><Button size="sm" variant="ghost" onClick={() => { setEditing(item); setOpen(true); }}><Pencil size={15}/>Edit</Button><Button asChild size="sm" variant="secondary"><Link href={`/customers/${item.id}`}>View</Link></Button><Button size="sm" variant="ghost" aria-label={`Delete ${item.name}`} onClick={()=>setRemoving(item)}><Trash2 size={15}/>Delete</Button></div></article>)}</div></div>}
     {open && <CustomerDialog
       record={editing}
       onOpenChange={(next) => { setOpen(next); if (!next) setEditing(undefined); }}
       onSaved={(saved) => { setItems(current => current.some(item => item.id === saved.id) ? current.map(item => item.id === saved.id ? saved : item) : [saved, ...current]); setNotice(`${saved.name} ${editing ? "updated" : "added"}.`); setOpen(false); setEditing(undefined); }}
     />}
+    <ConfirmDialog open={Boolean(removing)} onOpenChange={next=>!next&&setRemoving(undefined)} title={`Delete ${removing?.name??"customer"}?`} description="The customer will leave active records. Completed rental and financial history will be preserved. Active bookings must be cancelled or completed first." onConfirm={()=>void removeCustomer()} pending={removingPending} confirmLabel="Delete customer" pendingLabel="Deleting…"/>
   </div>;
 }
 

@@ -1,6 +1,7 @@
 import "server-only";
 
 import fs from "node:fs";
+import path from "node:path";
 import PDFDocument from "pdfkit";
 import { sqlite } from "@/db/connection";
 import { composeTermsSnapshot, normalizeAgreementConfig, parseTermsImageSnapshot, type AgreementDesignConfig, type AgreementSectionId } from "@/lib/agreement-config";
@@ -53,12 +54,62 @@ type AgreementRow = {
 };
 
 type PdfFonts = { regular: string; bold: string; urdu?: string };
+type AgreementPrintField = { labelEn: string; labelUr: string; value: string };
+export type RentalAgreementPrintData = {
+  bookingNumber: string;
+  agency: { name: string; phone: string | null; email: string | null; address: string | null; registrationNumber: string | null; taxNumber: string | null; logo: string | null };
+  config: AgreementDesignConfig;
+  sections: Array<{ id: AgreementSectionId; titleEn: string; titleUr: string; fields: AgreementPrintField[] }>;
+  guarantor: AgreementPrintField[] | null;
+  termsText: string;
+  termsImageUrl: string | null;
+};
 const pageWidth = 595.28;
 const contentWidth = 507;
 const pageContentBottom = 758;
 const minimumTermsImageHeight = 110;
 
 export async function createRentalAgreementPdf(context: RequestContext, bookingId: string): Promise<{ bytes: Buffer; fileName: string; customerPhone: string }> {
+  const {row,config,termsImage}=await loadAgreementSource(context,bookingId);
+  const doc = new PDFDocument({ size: "A4", margin: 44, bufferPages: true, info: { Title: `${config.titleEn} #${row.publicNumber ?? bookingId}`, Author: row.agency } });
+  const fonts = registerFonts(doc);
+  const chunks: Buffer[] = [];
+  doc.on("data", chunk => chunks.push(Buffer.from(chunk)));
+  const completed = new Promise<Buffer>((resolve, reject) => { doc.on("end", () => resolve(Buffer.concat(chunks))); doc.on("error", reject); });
+
+  const compactImageLayout = Boolean(termsImage);
+  renderHeader(doc, fonts, row, config, compactImageLayout);
+  const sections = config.sections.filter(item => item.enabled);
+  for (const [index, section] of sections.entries()) {
+    const remainingHeight = sections.slice(index + 1).reduce((total, item) => total + estimatedRenderedSectionHeight(item.id, compactImageLayout, hasGuarantor(row)), 0);
+    renderSection(doc, fonts, row, config, section.id, section.titleEn, section.titleUr, termsImage, remainingHeight, compactImageLayout);
+    if (section.id === "renter" && hasGuarantor(row)) renderGuarantorSection(doc, fonts, row, config, compactImageLayout);
+  }
+  renderFooter(doc, fonts, config);
+  doc.end();
+  return { bytes: await completed, fileName: `rental-agreement-${row.publicNumber ?? bookingId}.pdf`, customerPhone: row.customerPhone };
+}
+
+export async function getRentalAgreementPrintData(context:RequestContext,bookingId:string):Promise<RentalAgreementPrintData>{
+  const {row,config,termsImageId}=await loadAgreementSource(context,bookingId);
+  const sections=config.sections.filter(section=>section.enabled).map(section=>({
+    id:section.id,
+    titleEn:section.titleEn,
+    titleUr:section.titleUr,
+    fields:section.id==="terms"||section.id==="signatures"?[]:detailFields(section.id,row).map(item=>({labelEn:item.en,labelUr:item.ur,value:item.value})),
+  }));
+  return {
+    bookingNumber:String(row.publicNumber??bookingId),
+    agency:{name:row.agency,phone:row.agencyPhone,email:row.agencyEmail,address:row.agencyAddress,registrationNumber:row.registrationNumber,taxNumber:row.taxNumber,logo:row.logo},
+    config,
+    sections,
+    guarantor:hasGuarantor(row)?guarantorFields({name:row.guarantorName!,parentage:row.guarantorParentage!,cnic:row.guarantorCnic!,phone:row.guarantorPhone!,address:row.guarantorAddress!,carAmount:row.guarantorCarAmount!}).map(item=>({labelEn:item.en,labelUr:item.ur,value:item.value})):null,
+    termsText:termsImageId?"":resolveTermsSnapshot(row.terms,config),
+    termsImageUrl:termsImageId?`/api/v1/files/${termsImageId}`:null,
+  };
+}
+
+async function loadAgreementSource(context:RequestContext,bookingId:string){
   const row = sqlite.prepare(`
     SELECT b.public_number AS publicNumber,b.pickup_at AS pickupAt,b.return_at AS returnAt,
       b.daily_rate AS dailyRate,b.total_amount AS totalAmount,b.deposit_required AS depositRequired,
@@ -93,23 +144,7 @@ export async function createRentalAgreementPdf(context: RequestContext, bookingI
     }
     termsImage = stored.bytes;
   }
-  const doc = new PDFDocument({ size: "A4", margin: 44, bufferPages: true, info: { Title: `${config.titleEn} #${row.publicNumber ?? bookingId}`, Author: row.agency } });
-  const fonts = registerFonts(doc);
-  const chunks: Buffer[] = [];
-  doc.on("data", chunk => chunks.push(Buffer.from(chunk)));
-  const completed = new Promise<Buffer>((resolve, reject) => { doc.on("end", () => resolve(Buffer.concat(chunks))); doc.on("error", reject); });
-
-  const compactImageLayout = Boolean(termsImage);
-  renderHeader(doc, fonts, row, config, compactImageLayout);
-  const sections = config.sections.filter(item => item.enabled);
-  for (const [index, section] of sections.entries()) {
-    const remainingHeight = sections.slice(index + 1).reduce((total, item) => total + estimatedRenderedSectionHeight(item.id, compactImageLayout, hasGuarantor(row)), 0);
-    renderSection(doc, fonts, row, config, section.id, section.titleEn, section.titleUr, termsImage, remainingHeight, compactImageLayout);
-    if (section.id === "renter" && hasGuarantor(row)) renderGuarantorSection(doc, fonts, row, config, compactImageLayout);
-  }
-  renderFooter(doc, fonts, config);
-  doc.end();
-  return { bytes: await completed, fileName: `rental-agreement-${row.publicNumber ?? bookingId}.pdf`, customerPhone: row.customerPhone };
+  return {row,config,termsImageId,termsImage};
 }
 
 function renderHeader(doc: PDFKit.PDFDocument, fonts: PdfFonts, row: AgreementRow, config: AgreementDesignConfig, compactImageLayout: boolean) {
@@ -281,7 +316,13 @@ function ensureSpace(doc: PDFKit.PDFDocument, height: number, config: AgreementD
 
 function registerFonts(doc: PDFKit.PDFDocument): PdfFonts {
   const fonts: PdfFonts = { regular: "Helvetica", bold: "Helvetica-Bold" };
-  const urdu = ["/System/Library/Fonts/SFArabic.ttf", "/usr/share/fonts/truetype/noto/NotoNastaliqUrdu-Regular.ttf", "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf"].find(path => fs.existsSync(path));
+  const urdu = [
+    path.join(process.cwd(), "public", "fonts", "NotoNaskhArabic-Regular.ttf"),
+    "/System/Library/Fonts/SFArabic.ttf",
+    "/usr/share/fonts/truetype/noto/NotoNastaliqUrdu-Regular.ttf",
+    "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf",
+    "C:\\Windows\\Fonts\\NotoNaskhArabic-Regular.ttf",
+  ].find(candidate => fs.existsSync(candidate));
   if (urdu) { try { doc.registerFont("VibeRentUrdu", urdu); fonts.urdu = "VibeRentUrdu"; } catch { /* Helvetica fallback remains available. */ } }
   return fonts;
 }

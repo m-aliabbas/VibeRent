@@ -1,7 +1,7 @@
 "use client";
 
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import { Archive, Eye, MoreHorizontal, Pencil, RotateCcw } from "lucide-react";
+import { Eye, MoreHorizontal, Pencil, RotateCcw, Trash2 } from "lucide-react";
 
 export function ActionMenu({
   onView,
@@ -49,8 +49,8 @@ export function ActionMenu({
             onSelect={onDelete}
             className="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-[#B42318] outline-none hover:bg-[#FEF3F2] focus:bg-[#FEF3F2]"
           >
-            {archived ? <RotateCcw size={15} /> : <Archive size={15} />}
-            {archived ? "Restore vehicle" : "Archive vehicle"}
+            {archived ? <RotateCcw size={15} /> : <Trash2 size={15} />}
+            {archived ? "Restore vehicle" : "Delete vehicle"}
           </DropdownMenu.Item>
         </DropdownMenu.Content>
       </DropdownMenu.Portal>

@@ -4,6 +4,8 @@ import { getWebRequestContext } from "@/server/auth/session";
 import { asDomainError } from "@/server/domain/errors";
 import {
   amendBooking,
+  archiveBooking,
+  cancelBooking,
   checkInRental,
   checkOutRental,
   confirmBooking,
@@ -15,6 +17,7 @@ import {
   reverseBookingTransaction,
   startBooking,
 } from "@/server/services/booking-service";
+import { revalidatePath } from "next/cache";
 import { clearBookingDraft } from "@/server/services/booking-cnic-service";
 import type { BookingListItem } from "@/server/repositories/contracts";
 import type { ConfirmBookingInput, RecordDepositInput, RecordPaymentInput, ReverseTransactionInput } from "@/server/validation/booking";
@@ -70,6 +73,30 @@ export async function createAvailabilityBlockAction(input: { vehicleId: string; 
 export async function amendBookingAction(bookingId:string,input:{vehicleId:string;pickupAt:string;returnAt:string;destinationCity:string;version:number}) {
   try { return {ok:true as const,data:amendBooking(await getWebRequestContext(),bookingId,input)}; }
   catch(error){const issue=asDomainError(error);return {ok:false as const,error:{code:issue.code,message:issue.message,fieldErrors:issue.fieldErrors??{}}};}
+}
+
+export async function cancelBookingAction(bookingId:string,input:{reason:string;version:number}) {
+  try {
+    const data=cancelBooking(await getWebRequestContext(),bookingId,input);
+    revalidatePath("/bookings");
+    revalidatePath(`/bookings/${bookingId}`);
+    return {ok:true as const,data};
+  } catch(error) {
+    const issue=asDomainError(error);
+    return {ok:false as const,error:{code:issue.code,message:issue.message,fieldErrors:issue.fieldErrors??{}}};
+  }
+}
+
+export async function archiveBookingAction(bookingId:string,reason?:string) {
+  try {
+    const data=archiveBooking(await getWebRequestContext(),bookingId,reason);
+    revalidatePath("/bookings");
+    revalidatePath(`/bookings/${bookingId}`);
+    return {ok:true as const,data};
+  } catch(error) {
+    const issue=asDomainError(error);
+    return {ok:false as const,error:{code:issue.code,message:issue.message}};
+  }
 }
 
 export async function checkOutRentalAction(bookingId: string, input: RentalInspectionInput) {

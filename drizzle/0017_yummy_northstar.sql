@@ -1,0 +1,1 @@
+ALTER TABLE `bookings` ADD `archived_at` text;

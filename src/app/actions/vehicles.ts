@@ -1,8 +1,9 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { getWebRequestContext } from "@/server/auth/session";
 import { asDomainError } from "@/server/domain/errors";
-import { getVehicle, getVehicleFinance, getVehicleFormOptions, listVehicles, saveVehicle } from "@/server/services/vehicle-service";
+import { getVehicle, getVehicleFinance, getVehicleFormOptions, listVehicles, saveVehicle, setVehicleArchived, transitionVehicleStatus } from "@/server/services/vehicle-service";
 import type { Vehicle } from "@/types/vehicle";
 import type { RepositoryResult } from "@/lib/repositories/repository";
 
@@ -26,6 +27,25 @@ export async function getVehicleFinanceAction(id: string) {
 
 export async function saveVehicleAction(vehicle: Vehicle): Promise<RepositoryResult<Vehicle>> {
   try { return { ok: true, data: saveVehicle(await getWebRequestContext(), vehicle) }; } catch (error) { return failure(error); }
+}
+
+export async function transitionVehicleStatusAction(id: string, input: Parameters<typeof transitionVehicleStatus>[2]): Promise<RepositoryResult<Vehicle>> {
+  try {
+    const data = transitionVehicleStatus(await getWebRequestContext(), id, input);
+    revalidatePath("/vehicles");
+    revalidatePath(`/vehicles/${id}`);
+    revalidatePath("/bookings/new");
+    return { ok: true, data };
+  } catch (error) { return failure(error); }
+}
+
+export async function setVehicleArchivedAction(id:string,archived:boolean):Promise<RepositoryResult<Vehicle>> {
+  try {
+    const data=setVehicleArchived(await getWebRequestContext(),id,archived);
+    revalidatePath("/vehicles");
+    revalidatePath(`/vehicles/${id}`);
+    return {ok:true,data};
+  } catch(error) { return failure(error); }
 }
 
 export async function getVehicleFormOptionsAction() {

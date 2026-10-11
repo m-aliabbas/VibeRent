@@ -50,6 +50,17 @@ function title(value: string) {
   return value.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+function mapVehicleStatus(value: string): Vehicle["status"] {
+  const statuses: Record<string, Vehicle["status"]> = {
+    available: "Available",
+    booked: "Booked",
+    maintenance: "Maintenance",
+    out_of_service: "Out of Service",
+    archived: "Archived",
+  };
+  return statuses[value] ?? "Out of Service";
+}
+
 function mapAgreement(row: VehicleRow): ManagementAgreement | undefined {
   if (!row.owner_id || !row.agreement_id || !row.effective_from) return undefined;
   return {
@@ -75,7 +86,7 @@ function mapVehicle(row: VehicleRow): Vehicle {
     category: (row.category === "suv" ? "SUV" : title(row.category)) as Vehicle["category"],
     city: row.city as Vehicle["city"],
     ownership: row.ownership === "managed" ? "Managed" : "Own",
-    status: title(row.status) as Vehicle["status"],
+    status: mapVehicleStatus(row.status),
     dailyRate: row.daily_rate,
     withDriverRate: row.with_driver_rate ?? row.daily_rate,
     color: row.color,

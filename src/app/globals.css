@@ -1,5 +1,18 @@
 @import "tailwindcss";
 
+@font-face {
+  font-family: "VibeRent Urdu";
+  src: url("/fonts/NotoNaskhArabic-Regular.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+}
+
+:lang(ur),
+[dir="rtl"] {
+  font-family: "VibeRent Urdu", "Segoe UI", Tahoma, sans-serif;
+}
+
 .field {
   margin-top: 0.25rem;
   height: 2.5rem;
@@ -9,6 +22,81 @@
   padding-inline: 0.75rem;
   font-size: 0.875rem;
   background: white;
+}
+
+@media print {
+  @page {
+    size: A4;
+    margin: 10mm;
+  }
+
+  body {
+    background: white !important;
+    color: #19191f !important;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  [data-app-chrome],
+  .print-hidden {
+    display: none !important;
+  }
+
+  [data-app-content-wrapper] {
+    padding-left: 0 !important;
+  }
+
+  [data-app-content] {
+    max-width: none !important;
+    padding: 0 !important;
+  }
+
+  .print-surface {
+    display: block !important;
+  }
+
+  .print-surface .overflow-x-auto {
+    overflow: visible !important;
+  }
+
+  .print-surface table {
+    min-width: 0 !important;
+  }
+
+  .print-surface section,
+  .print-surface table,
+  .print-surface tr,
+  .print-surface .rounded-xl {
+    break-inside: avoid;
+  }
+
+  .agreement-print-workspace {
+    margin: 0 !important;
+  }
+
+  .agreement-print-page {
+    width: auto !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    box-shadow: none !important;
+  }
+}
+
+.agreement-print-workspace {
+  min-height: 100vh;
+  background: #eef2f6;
+  padding: 16px;
+}
+
+.agreement-print-page {
+  width: min(210mm, 100%);
+  min-height: 277mm;
+  padding: 12mm;
+  box-shadow: 0 14px 34px rgba(16, 24, 40, .12);
+}
+
+.agreement-compact {
+  padding-block: 9mm;
 }
 
 :root {

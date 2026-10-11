@@ -1,8 +1,9 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { getWebRequestContext } from "@/server/auth/session";
 import { asDomainError } from "@/server/domain/errors";
-import { createCustomer, listCustomers, updateCustomer } from "@/server/services/customer-service";
+import { archiveCustomer, createCustomer, listCustomers, updateCustomer } from "@/server/services/customer-service";
 import { createCustomerCnicDraft, getCustomerCnicIntake, uploadCustomerCnic, type CustomerCnicTarget } from "@/server/services/customer-cnic-service";
 import type { CnicSide } from "@/server/services/booking-cnic-service";
 import type { CreateCustomerInput } from "@/server/validation/customer";
@@ -67,6 +68,15 @@ export async function updateCustomerAction(
   } catch (error) {
     return failure(error);
   }
+}
+
+export async function archiveCustomerAction(id:string) {
+  try {
+    const data=archiveCustomer(await getWebRequestContext(),id);
+    revalidatePath("/customers");
+    revalidatePath(`/customers/${id}`);
+    return {ok:true as const,data};
+  } catch(error) { return failure(error); }
 }
 
 export async function startCustomerCnicDraftAction() {

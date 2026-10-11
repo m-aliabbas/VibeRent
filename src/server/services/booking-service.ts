@@ -58,7 +58,7 @@ export function listBookings(context: RequestContext): BookingListItem[] {
     LEFT JOIN drivers d ON d.id=bk.driver_id AND d.agency_id=bk.agency_id
     JOIN vehicles v ON v.id=bk.vehicle_id AND v.agency_id=bk.agency_id
     JOIN branches br ON br.id=bk.branch_id AND br.agency_id=bk.agency_id
-    WHERE bk.agency_id=?
+    WHERE bk.agency_id=? AND bk.archived_at IS NULL
     ORDER BY bk.pickup_at DESC
   `).all(context.agencyId) as BookingRow[];
 
@@ -344,6 +344,48 @@ export function amendBooking(context:RequestContext, bookingId:string, rawInput:
     sqlite.prepare("UPDATE bookings SET branch_id=?,vehicle_id=?,destination_city=?,pickup_at=?,return_at=?,daily_rate=?,pricing_mode=?,mileage_rate=?,total_amount=?,version=version+1,updated_at=? WHERE agency_id=? AND id=?").run(vehicle.branchId,input.vehicleId,destinationCity,new Date(pickup).toISOString(),new Date(returned).toISOString(),rate,rule?(mileage?"destination_plus_mileage":"destination_fixed"):"vehicle_default",mileage,total,now,context.agencyId,bookingId);
     sqlite.prepare("INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)").run(randomUUID(),context.agencyId,context.userId,"booking.amended","booking",bookingId,JSON.stringify({vehicleId:input.vehicleId,destinationCity:input.destinationCity,pickupAt:input.pickupAt,returnAt:input.returnAt}),now);
     return getBooking(context,bookingId);
+  }).immediate();
+}
+
+export function cancelBooking(context:RequestContext, bookingId:string, rawInput:unknown) {
+  requireRole(context,["agency_owner","fleet_manager","rental_agent"]);
+  const input=rawInput as {reason?:unknown;version?:unknown};
+  const reason=typeof input.reason==="string"?input.reason.trim():"";
+  if(reason.length<5) throw new DomainError("VALIDATION_FAILED","Enter a clear cancellation reason.",400,{reason:"Use at least 5 characters."});
+  return sqlite.transaction(()=>{
+    const booking=sqlite.prepare("SELECT id,status,version FROM bookings WHERE agency_id=? AND id=? AND archived_at IS NULL LIMIT 1")
+      .get(context.agencyId,bookingId) as {id:string;status:string;version:number}|undefined;
+    if(!booking) throw new DomainError("NOT_FOUND","Booking not found.",404);
+    if(booking.status!=="confirmed") throw new DomainError("INVALID_STATUS_TRANSITION","Only confirmed bookings can be cancelled.",409);
+    if(typeof input.version==="number"&&input.version!==booking.version) throw new DomainError("VERSION_CONFLICT","The booking changed since it was loaded.",409);
+    const now=new Date().toISOString();
+    sqlite.prepare("UPDATE bookings SET status='cancelled',cancellation_reason=?,version=version+1,updated_at=? WHERE agency_id=? AND id=?")
+      .run(reason,now,context.agencyId,bookingId);
+    sqlite.prepare("INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)")
+      .run(randomUUID(),context.agencyId,context.userId,"booking.cancelled","booking",bookingId,JSON.stringify({reason}),now);
+    return getBooking(context,bookingId);
+  }).immediate();
+}
+
+export function archiveBooking(context:RequestContext, bookingId:string, rawReason?:unknown) {
+  requireRole(context,["agency_owner","fleet_manager"]);
+  const reason=typeof rawReason==="string"?rawReason.trim():"";
+  return sqlite.transaction(()=>{
+    const booking=sqlite.prepare(`SELECT bk.id,bk.status,
+      coalesce((SELECT sum(CASE WHEN lower(ft.kind) IN ('refund','reversal') THEN -ft.amount ELSE ft.amount END) FROM financial_transactions ft WHERE ft.agency_id=bk.agency_id AND ft.booking_id=bk.id AND ft.status='posted' AND lower(ft.kind) IN ('payment','deposit_applied','reversal','refund')),0) AS paid,
+      coalesce((SELECT sum(CASE WHEN lower(ft.kind) IN ('deposit_refunded','deposit_applied','deposit_forfeited') THEN -ft.amount ELSE ft.amount END) FROM financial_transactions ft WHERE ft.agency_id=bk.agency_id AND ft.booking_id=bk.id AND ft.status='posted' AND lower(ft.kind) IN ('deposit_received','deposit_refunded','deposit_applied','deposit_forfeited')),0) AS held
+      FROM bookings bk WHERE bk.agency_id=? AND bk.id=? AND bk.archived_at IS NULL LIMIT 1`)
+      .get(context.agencyId,bookingId) as {id:string;status:string;paid:number;held:number}|undefined;
+    if(!booking) throw new DomainError("NOT_FOUND","Booking not found.",404);
+    if(!["confirmed","cancelled","no_show"].includes(booking.status)) throw new DomainError("INVALID_STATUS_TRANSITION","Only confirmed, cancelled, or no-show bookings can be deleted.",409);
+    if(booking.status==="confirmed"&&reason.length<5) throw new DomainError("VALIDATION_FAILED","Enter a clear cancellation reason before deleting this booking.",400,{reason:"Use at least 5 characters."});
+    if(booking.paid!==0||booking.held!==0) throw new DomainError("INVALID_STATUS_TRANSITION","Settle or reverse all payments and deposits before removing this booking.",409);
+    const now=new Date().toISOString();
+    sqlite.prepare("UPDATE bookings SET status=CASE WHEN status='confirmed' THEN 'cancelled' ELSE status END,cancellation_reason=CASE WHEN status='confirmed' THEN ? ELSE cancellation_reason END,archived_at=?,version=version+1,updated_at=? WHERE agency_id=? AND id=?")
+      .run(reason||null,now,now,context.agencyId,bookingId);
+    sqlite.prepare("INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)")
+      .run(randomUUID(),context.agencyId,context.userId,"booking.archived","booking",bookingId,JSON.stringify({previousStatus:booking.status,cancellationReason:reason||undefined}),now);
+    return {id:bookingId};
   }).immediate();
 }
 
