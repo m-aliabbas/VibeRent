@@ -29,6 +29,7 @@ interface BookingFinanceProps {
   depositHeld?: number;
   transactions?: BookingTransactionDto[];
   onChanged: (updatedBooking: BookingDetailData, message: string) => void;
+  purpose?: "default" | "settlement";
 }
 
 export function BookingFinance({
@@ -38,6 +39,7 @@ export function BookingFinance({
   depositHeld = 0,
   transactions = [],
   onChanged,
+  purpose = "default",
 }: BookingFinanceProps) {
   const [mode, setMode] = useState<"payment" | "deposit" | "ledger">();
 
@@ -46,16 +48,16 @@ export function BookingFinance({
       <div className="flex flex-wrap gap-2">
         <Button size="sm" variant="secondary" onClick={() => setMode("ledger")}>
           <FileText size={15} />
-          Ledger
+          {purpose === "settlement" ? "Review payments" : "Ledger"}
         </Button>
-        <Button size="sm" variant="secondary" onClick={() => setMode("deposit")}>
+        {(purpose === "default" || depositHeld > 0) && <Button size="sm" variant="secondary" onClick={() => setMode("deposit")}>
           <RotateCcw size={15} />
-          Manage deposit
-        </Button>
-        <Button size="sm" onClick={() => setMode("payment")}>
+          {purpose === "settlement" ? `Refund deposit · ${formatPkr(depositHeld)}` : "Manage deposit"}
+        </Button>}
+        {purpose === "default" && <Button size="sm" onClick={() => setMode("payment")}>
           <CreditCard size={15} />
           Record payment
-        </Button>
+        </Button>}
       </div>
 
       {mode === "payment" && (
@@ -88,6 +90,7 @@ export function BookingFinance({
         <LedgerDialog
           bookingId={bookingId}
           transactions={transactions}
+          settlementMode={purpose === "settlement"}
           onClose={() => setMode(undefined)}
           onChanged={(updated, message) => {
             onChanged(updated, message);
@@ -323,13 +326,16 @@ function LedgerDialog({
   transactions,
   onClose,
   onChanged,
+  settlementMode = false,
 }: {
   bookingId: string;
   transactions: BookingTransactionDto[];
   onClose: () => void;
   onChanged: (updated: BookingDetailData, message: string) => void;
+  settlementMode?: boolean;
 }) {
   const [selectedTxn, setSelectedTxn] = useState<string | null>(null);
+  const [adjustmentType, setAdjustmentType] = useState<"reversal" | "refund">("reversal");
   const [reason, setReason] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
@@ -341,12 +347,13 @@ function LedgerDialog({
     const result = await reverseBookingTransactionAction(bookingId, {
       transactionId,
       reason: reason.trim(),
+      adjustmentType,
     });
     setPending(false);
     if (result.ok) {
       setSelectedTxn(null);
       setReason("");
-      onChanged(result.data, "Reversal posted as a linked compensating transaction.");
+      onChanged(result.data, adjustmentType === "refund" ? "Customer refund posted and linked to the original transaction." : "Reversal posted as a linked correction.");
     } else {
       setError(result.error.message || "Failed to reverse transaction.");
     }
@@ -355,7 +362,7 @@ function LedgerDialog({
   return (
     <Shell
       title="Transaction ledger"
-      description="Every transaction and correction is recorded and permanently auditable."
+      description={settlementMode ? "Refund money returned to the customer, or reverse an entry that was posted by mistake." : "Every transaction and correction is recorded and permanently auditable."}
       onClose={onClose}
     >
       <div className="mt-5 space-y-3">
@@ -365,7 +372,12 @@ function LedgerDialog({
           </p>
         ) : (
           transactions.map((item) => {
-            const isNegative = ["reversal", "refund"].includes(item.kind.toLowerCase());
+            const kind = item.kind.toLowerCase();
+            const isNegative = ["reversal", "refund"].includes(kind);
+            const canAdjust = item.status === "posted" && ["payment", "deposit_applied"].includes(kind);
+            const original = item.linkedTransactionId
+              ? transactions.find((transaction) => transaction.id === item.linkedTransactionId)
+              : undefined;
             return (
               <div key={item.id} className="rounded-lg border border-[#E8ECF2] p-3">
                 <div className="flex justify-between gap-3">
@@ -374,7 +386,7 @@ function LedgerDialog({
                       <strong className="text-sm capitalize">{item.kind.replace("_", " ")}</strong>
                       <span
                         className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${
-                          item.status === "reversed"
+                          ["reversed", "refunded"].includes(item.status)
                             ? "bg-amber-100 text-amber-800"
                             : "bg-emerald-100 text-emerald-800"
                         }`}
@@ -383,8 +395,14 @@ function LedgerDialog({
                       </span>
                     </div>
                     <p className="mt-0.5 text-xs text-[#667085]">
-                      {item.receiptNumber ? `${formatPaymentReceiptNumber(item.receiptNumber)} · ` : ""}{item.method}{item.reference ? ` · ${item.reference}` : ""}
+                      {item.receiptNumber ? `${formatPaymentReceiptNumber(item.receiptNumber)} · ` : ""}{item.method}
                     </p>
+                    {item.reference && <p className="mt-1 text-xs text-[#475467]">{isNegative ? "Reason" : "Reference"}: {item.reference}</p>}
+                    {original && (
+                      <p className="mt-1 text-[11px] font-medium text-[#667085]">
+                        Linked to {original.receiptNumber ? formatPaymentReceiptNumber(original.receiptNumber) : original.id} · {original.kind.replaceAll("_", " ")} · {formatPkr(original.amount)}
+                      </p>
+                    )}
                     <p className="text-[11px] text-[#98A2B3]">
                       {new Intl.DateTimeFormat("en-PK", {
                         dateStyle: "medium",
@@ -398,15 +416,15 @@ function LedgerDialog({
                   </strong>
                 </div>
 
-                {item.status === "posted" && !isNegative && (
+                {canAdjust && (
                   <div className="mt-3 border-t border-[#F2F4F7] pt-2">
                     {selectedTxn === item.id ? (
                       <div className="space-y-2">
                         <FormInput
-                          label="Correction reason"
+                          label={adjustmentType === "refund" ? "Refund reason / reference" : "Correction reason"}
                           value={reason}
                           onChange={(e) => setReason(e.target.value)}
-                          placeholder="State why this transaction is being reversed..."
+                          placeholder={adjustmentType === "refund" ? "e.g. Booking cancelled, bank transfer returned" : "State why this entry was posted incorrectly..."}
                         />
                         <div className="flex justify-end gap-2">
                           <Button size="sm" variant="secondary" onClick={() => setSelectedTxn(null)}>
@@ -418,22 +436,15 @@ function LedgerDialog({
                             disabled={!reason.trim() || pending}
                             onClick={() => void compensate(item.id)}
                           >
-                            {pending ? "Reversing…" : "Confirm Reversal"}
+                            {pending ? (adjustmentType === "refund" ? "Refunding…" : "Reversing…") : (adjustmentType === "refund" ? "Confirm refund" : "Confirm reversal")}
                           </Button>
                         </div>
                       </div>
                     ) : (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => {
-                          setSelectedTxn(item.id);
-                          setReason("");
-                          setError("");
-                        }}
-                      >
-                        Reverse
-                      </Button>
+                      <div className="flex flex-wrap gap-2">
+                        <Button size="sm" variant="secondary" onClick={() => {setSelectedTxn(item.id);setAdjustmentType("refund");setReason("");setError("")}}>Refund customer</Button>
+                        <Button size="sm" variant="ghost" onClick={() => {setSelectedTxn(item.id);setAdjustmentType("reversal");setReason("");setError("")}}>Reverse error</Button>
+                      </div>
                     )}
                   </div>
                 )}

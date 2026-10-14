@@ -127,6 +127,13 @@
       "when": 1791715853529,
       "tag": "0017_yummy_northstar",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1791901971642,
+      "tag": "0018_parched_sersi",
+      "breakpoints": true
     }
   ]
 }

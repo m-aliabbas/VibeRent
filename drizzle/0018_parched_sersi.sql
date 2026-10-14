@@ -1,0 +1,66 @@
+PRAGMA foreign_keys=OFF;--> statement-breakpoint
+CREATE TABLE `__new_bookings` (
+	`id` text PRIMARY KEY NOT NULL,
+	`agency_id` text NOT NULL,
+	`public_number` integer,
+	`branch_id` text NOT NULL,
+	`vehicle_id` text,
+	`customer_id` text NOT NULL,
+	`driver_id` text,
+	`rental_mode` text DEFAULT 'self_drive' NOT NULL,
+	`renter_skipped` integer DEFAULT false NOT NULL,
+	`fulfillment_type` text DEFAULT 'fleet' NOT NULL,
+	`external_supplier_name` text,
+	`external_supplier_phone` text,
+	`external_vehicle_make` text,
+	`external_vehicle_model` text,
+	`external_vehicle_year` integer,
+	`external_vehicle_plate` text,
+	`external_vehicle_color` text,
+	`supplier_pricing_mode` text,
+	`supplier_share_percent` real,
+	`supplier_fixed_cost` integer,
+	`supplier_payable` integer,
+	`guarantor_name` text,
+	`guarantor_parentage` text,
+	`guarantor_cnic` text,
+	`guarantor_phone` text,
+	`guarantor_address` text,
+	`guarantor_car_amount` integer,
+	`destination_city` text DEFAULT 'Local' NOT NULL,
+	`pickup_at` text NOT NULL,
+	`return_at` text NOT NULL,
+	`status` text NOT NULL,
+	`daily_rate` integer NOT NULL,
+	`pricing_mode` text DEFAULT 'vehicle_default' NOT NULL,
+	`estimated_km` integer DEFAULT 0 NOT NULL,
+	`mileage_rate` integer DEFAULT 0 NOT NULL,
+	`rate_override_reason` text,
+	`terms_snapshot` text DEFAULT '' NOT NULL,
+	`extras` integer DEFAULT 0 NOT NULL,
+	`discount` integer DEFAULT 0 NOT NULL,
+	`total_amount` integer NOT NULL,
+	`deposit_required` integer DEFAULT 0 NOT NULL,
+	`source` text DEFAULT 'counter' NOT NULL,
+	`notes` text,
+	`cancellation_reason` text,
+	`checked_out_at` text,
+	`completed_at` text,
+	`archived_at` text,
+	`version` integer DEFAULT 1 NOT NULL,
+	`created_at` text NOT NULL,
+	`updated_at` text NOT NULL,
+	FOREIGN KEY (`agency_id`) REFERENCES `agencies`(`id`) ON UPDATE no action ON DELETE no action,
+	FOREIGN KEY (`branch_id`) REFERENCES `branches`(`id`) ON UPDATE no action ON DELETE no action,
+	FOREIGN KEY (`vehicle_id`) REFERENCES `vehicles`(`id`) ON UPDATE no action ON DELETE no action,
+	FOREIGN KEY (`customer_id`) REFERENCES `customers`(`id`) ON UPDATE no action ON DELETE no action,
+	FOREIGN KEY (`driver_id`) REFERENCES `drivers`(`id`) ON UPDATE no action ON DELETE no action
+);
+--> statement-breakpoint
+INSERT INTO `__new_bookings`("id", "agency_id", "public_number", "branch_id", "vehicle_id", "customer_id", "driver_id", "rental_mode", "renter_skipped", "guarantor_name", "guarantor_parentage", "guarantor_cnic", "guarantor_phone", "guarantor_address", "guarantor_car_amount", "destination_city", "pickup_at", "return_at", "status", "daily_rate", "pricing_mode", "estimated_km", "mileage_rate", "rate_override_reason", "terms_snapshot", "extras", "discount", "total_amount", "deposit_required", "source", "notes", "cancellation_reason", "checked_out_at", "completed_at", "archived_at", "version", "created_at", "updated_at") SELECT "id", "agency_id", "public_number", "branch_id", "vehicle_id", "customer_id", "driver_id", "rental_mode", "renter_skipped", "guarantor_name", "guarantor_parentage", "guarantor_cnic", "guarantor_phone", "guarantor_address", "guarantor_car_amount", "destination_city", "pickup_at", "return_at", "status", "daily_rate", "pricing_mode", "estimated_km", "mileage_rate", "rate_override_reason", "terms_snapshot", "extras", "discount", "total_amount", "deposit_required", "source", "notes", "cancellation_reason", "checked_out_at", "completed_at", "archived_at", "version", "created_at", "updated_at" FROM `bookings`;--> statement-breakpoint
+DROP TABLE `bookings`;--> statement-breakpoint
+ALTER TABLE `__new_bookings` RENAME TO `bookings`;--> statement-breakpoint
+PRAGMA foreign_keys=ON;--> statement-breakpoint
+CREATE UNIQUE INDEX `bookings_agency_public_number_uq` ON `bookings` (`agency_id`,`public_number`);--> statement-breakpoint
+CREATE INDEX `bookings_vehicle_interval_idx` ON `bookings` (`agency_id`,`vehicle_id`,`pickup_at`,`return_at`);--> statement-breakpoint
+CREATE INDEX `bookings_customer_idx` ON `bookings` (`agency_id`,`customer_id`);

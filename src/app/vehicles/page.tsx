@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { CarFront, CirclePlus, Plus, Trash2, Wrench } from "lucide-react";
+import { Archive, CarFront, CirclePlus, Plus, Trash2, Wrench } from "lucide-react";
 import { PageHeader } from "@/components/shared/page-header";
 import { FilterBar, FilterSelect } from "@/components/shared/filter-bar";
 import { DataTable, type DataColumn } from "@/components/shared/data-table";
@@ -24,6 +24,7 @@ import { setVehicleArchivedAction } from "@/app/actions/vehicles";
 
 const pageSize = 20;
 type SortState = { key: string; direction: "asc" | "desc" };
+type FleetView = "active" | "archived";
 
 export default function VehiclesPage() {
   const router = useRouter();
@@ -48,6 +49,7 @@ export default function VehiclesPage() {
   const [notice, setNotice] = useState("");
   const [urlReady, setUrlReady] = useState(false);
   const [demo, setDemo] = useState("");
+  const [fleetView, setFleetView] = useState<FleetView>("active");
 
   useEffect(() => {
     if (!notice) return;
@@ -73,18 +75,19 @@ export default function VehiclesPage() {
     const initialSort = params.get("sort");
     const initialDirection = params.get("direction");
     const demoState = params.get("demo") ?? "";
+    const initialFleetView = params.get("view") === "archived" ? "archived" : "active";
     queueMicrotask(() => {
       if (!active) return;
       setSearch(params.get("q") ?? "");
       setStatus(
-        [
-          "Available",
-          "Booked",
-          "Maintenance",
-          "Out of Service",
-          "Archived",
-          "Needs attention",
-        ].includes(initialStatus ?? "")
+        initialFleetView === "active" &&
+          [
+            "Available",
+            "Booked",
+            "Maintenance",
+            "Out of Service",
+            "Needs attention",
+          ].includes(initialStatus ?? "")
           ? initialStatus!
           : "All",
       );
@@ -109,6 +112,7 @@ export default function VehiclesPage() {
           direction: initialDirection === "desc" ? "desc" : "asc",
         });
       setDemo(demoState);
+      setFleetView(initialFleetView);
       setUrlReady(true);
     });
     if (demoState === "loading")
@@ -161,16 +165,26 @@ export default function VehiclesPage() {
       params.set("direction", sort.direction);
     }
     if (demo) params.set("demo", demo);
+    if (fleetView === "archived") params.set("view", "archived");
     window.history.replaceState(
       null,
       "",
       `/vehicles${params.size ? `?${params}` : ""}`,
     );
-  }, [search, status, city, ownership, minRate, maxRate, page, sort, demo, urlReady]);
+  }, [search, status, city, ownership, minRate, maxRate, page, sort, demo, fleetView, urlReady]);
+
+  const activeItems = useMemo(
+    () => items.filter((vehicle) => vehicle.status !== "Archived"),
+    [items],
+  );
+  const archivedItems = useMemo(
+    () => items.filter((vehicle) => vehicle.status === "Archived"),
+    [items],
+  );
 
   const filtered = useMemo(
     () =>
-      items
+      (fleetView === "archived" ? archivedItems : activeItems)
         .filter((vehicle) => {
           const term = search.trim().toLowerCase();
           const matchesTerm =
@@ -180,7 +194,7 @@ export default function VehiclesPage() {
               .includes(term);
           return (
             matchesTerm &&
-            (status === "All" || (status === "Needs attention" ? ["Maintenance","Out of Service"].includes(vehicle.status) : vehicle.status === status)) &&
+            (fleetView === "archived" || status === "All" || (status === "Needs attention" ? ["Maintenance","Out of Service"].includes(vehicle.status) : vehicle.status === status)) &&
             (city === "All" || vehicle.city === city) &&
             (ownership === "All" || vehicle.ownership === ownership) &&
             (!minRate || vehicle.dailyRate >= Number(minRate)) &&
@@ -200,7 +214,7 @@ export default function VehiclesPage() {
             }) * (sort.direction === "asc" ? 1 : -1)
           );
         }),
-    [items, search, status, city, ownership, minRate, maxRate, sort],
+    [activeItems, archivedItems, fleetView, search, status, city, ownership, minRate, maxRate, sort],
   );
   const visible = filtered.slice((page - 1) * pageSize, page * pageSize);
   const hasFilters = Boolean(
@@ -373,7 +387,29 @@ export default function VehiclesPage() {
           ))}
         </div>
       </details>
-      <section
+      <div className="flex gap-1 overflow-x-auto rounded-xl border border-[#E4E7EC] bg-white p-1.5" aria-label="Fleet views">
+        {([
+          ["active", "Active fleet", activeItems.length, CarFront],
+          ["archived", "Deleted / archived", archivedItems.length, Archive],
+        ] as const).map(([value, label, count, Icon]) => (
+          <button
+            key={value}
+            type="button"
+            aria-pressed={fleetView === value}
+            onClick={() => {
+              setFleetView(value);
+              setStatus("All");
+              setPage(1);
+            }}
+            className={`flex min-h-10 shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold transition ${fleetView === value ? "bg-[#EAF4FF] text-[#005BBE]" : "text-[#667085] hover:bg-[#F8FAFC] hover:text-[#344054]"}`}
+          >
+            <Icon size={16} />
+            {label}
+            <span className={`rounded-full px-2 py-0.5 text-xs tabular-nums ${fleetView === value ? "bg-white text-[#005BBE]" : "bg-[#F2F4F7] text-[#667085]"}`}>{loading ? "—" : count}</span>
+          </button>
+        ))}
+      </div>
+      {fleetView === "active" && <section
         className="grid grid-cols-2 gap-3 lg:grid-cols-4"
         aria-label="Fleet summary"
         aria-busy={loading}
@@ -381,25 +417,25 @@ export default function VehiclesPage() {
         {[
           {
             label: "Total fleet",
-            value: items.length,
+            value: activeItems.length,
             icon: CarFront,
             tone: "text-[#006FE6] bg-[#EFF8FF]",
           },
           {
             label: "Available",
-            value: items.filter((v) => v.status === "Available").length,
+            value: activeItems.filter((v) => v.status === "Available").length,
             icon: CirclePlus,
             tone: "text-[#067647] bg-[#ECFDF3]",
           },
           {
             label: "On booking",
-            value: items.filter((v) => v.status === "Booked").length,
+            value: activeItems.filter((v) => v.status === "Booked").length,
             icon: CarFront,
             tone: "text-[#5925DC] bg-[#F4F3FF]",
           },
           {
             label: "Needs attention",
-            value: items.filter((v) =>
+            value: activeItems.filter((v) =>
               ["Maintenance", "Out of Service"].includes(v.status),
             ).length,
             icon: Wrench,
@@ -424,7 +460,7 @@ export default function VehiclesPage() {
             </div>
           </button>
         ))}
-      </section>
+      </section>}
       <FilterBar
         search={search}
         onSearch={(value) => {
@@ -442,7 +478,7 @@ export default function VehiclesPage() {
           setPage(1);
         }}
       >
-        <FilterSelect
+        {fleetView === "active" && <FilterSelect
           label="Status"
           value={status}
           onChange={(value) => {
@@ -454,10 +490,9 @@ export default function VehiclesPage() {
             "Booked",
             "Maintenance",
             "Out of Service",
-            "Archived",
             "Needs attention",
           ]}
-        />
+        />}
         <FilterSelect
           label="City"
           value={city}
@@ -555,8 +590,8 @@ export default function VehiclesPage() {
         title={`${removing?.status === "Archived" ? "Restore" : "Delete"} ${removing?.plate ?? "vehicle"}?`}
         description={
           removing?.status === "Archived"
-            ? "The vehicle will return to the active fleet as Available."
-            : "The vehicle will leave active fleet views while its operational history remains available. Active bookings must be cancelled or completed first."
+            ? "The vehicle will return to the active fleet. It will be marked Booked if it still has an active booking; otherwise it will be Available."
+            : "The vehicle will move to Deleted / archived and leave the active fleet. Its bookings, expenses, and audit history will remain available."
         }
         onConfirm={() => void remove()}
         pending={removingPending}

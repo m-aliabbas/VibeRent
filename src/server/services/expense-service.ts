@@ -11,7 +11,7 @@ import { listExpenseCategories } from "@/server/services/catalog-service";
 
 export type ExpenseDto = { id:string; amount:number; category:string; description:string; status:ExpenseStatus; occurredOn:string; version:number; createdAt:string; updatedAt:string; vehicleId:string|null; plate:string|null; bookingId:string|null; customerId:string|null; customer:string|null; ownerId:string|null; owner:string|null; receipt:boolean };
 export type ExpenseOption = { id:string; label:string };
-export type ExpenseBookingOption = ExpenseOption & { vehicleId:string; customerId:string };
+export type ExpenseBookingOption = ExpenseOption & { vehicleId:string|null; customerId:string };
 export type ExpenseWorkspaceData = { expenses:ExpenseDto[]; vehicles:ExpenseOption[]; bookings:ExpenseBookingOption[]; customers:ExpenseOption[]; owners:ExpenseOption[]; categories:ExpenseOption[] };
 
 const selectExpense = `SELECT e.id, e.amount, e.category, e.description, e.status, e.occurred_on AS occurredOn, e.version, e.created_at AS createdAt, e.updated_at AS updatedAt, e.vehicle_id AS vehicleId, v.plate, e.booking_id AS bookingId, e.customer_id AS customerId, c.name AS customer, e.owner_id AS ownerId, o.name AS owner, EXISTS(SELECT 1 FROM private_files pf WHERE pf.agency_id=e.agency_id AND pf.entity_type='expense' AND pf.entity_id=e.id AND pf.status='ready') AS receipt FROM expenses e LEFT JOIN vehicles v ON v.id=e.vehicle_id AND v.agency_id=e.agency_id LEFT JOIN customers c ON c.id=e.customer_id AND c.agency_id=e.agency_id LEFT JOIN owners o ON o.id=e.owner_id AND o.agency_id=e.agency_id`;
@@ -24,7 +24,7 @@ export function listExpenses(context: RequestContext) {
 export function getExpenseWorkspace(context: RequestContext): ExpenseWorkspaceData {
   const expenses = listExpenses(context);
   const vehicles = sqlite.prepare(`SELECT id, make || ' ' || model || ' · ' || plate AS label FROM vehicles WHERE agency_id=? AND archived_at IS NULL ORDER BY make,model,plate`).all(context.agencyId) as ExpenseOption[];
-  const bookings = sqlite.prepare(`SELECT b.id, b.id || ' · ' || c.name || ' · ' || v.plate AS label, b.vehicle_id AS vehicleId, b.customer_id AS customerId FROM bookings b JOIN customers c ON c.id=b.customer_id AND c.agency_id=b.agency_id JOIN vehicles v ON v.id=b.vehicle_id AND v.agency_id=b.agency_id WHERE b.agency_id=? ORDER BY b.created_at DESC LIMIT 100`).all(context.agencyId) as ExpenseBookingOption[];
+  const bookings = sqlite.prepare(`SELECT b.id, b.id || ' · ' || c.name || ' · ' || coalesce(b.external_vehicle_plate,v.plate) AS label, b.vehicle_id AS vehicleId, b.customer_id AS customerId FROM bookings b JOIN customers c ON c.id=b.customer_id AND c.agency_id=b.agency_id LEFT JOIN vehicles v ON v.id=b.vehicle_id AND v.agency_id=b.agency_id WHERE b.agency_id=? ORDER BY b.created_at DESC LIMIT 100`).all(context.agencyId) as ExpenseBookingOption[];
   const customers = sqlite.prepare(`SELECT id,name || ' · ' || phone_normalized AS label FROM customers WHERE agency_id=? AND archived_at IS NULL ORDER BY name`).all(context.agencyId) as ExpenseOption[];
   const owners = sqlite.prepare(`SELECT id,name AS label FROM owners WHERE agency_id=? AND status='active' ORDER BY name`).all(context.agencyId) as ExpenseOption[];
   const categories = listExpenseCategories(context).map(item => ({ id: item.id, label: item.name }));
@@ -38,11 +38,11 @@ export function createExpense(context: RequestContext, rawInput: unknown) {
     let vehicleId = input.vehicleId;
     let customerId = input.customerId;
     if (input.bookingId) {
-      const booking = sqlite.prepare(`SELECT vehicle_id AS vehicleId,customer_id AS customerId FROM bookings WHERE agency_id=? AND id=? LIMIT 1`).get(context.agencyId,input.bookingId) as {vehicleId:string;customerId:string}|undefined;
+      const booking = sqlite.prepare(`SELECT vehicle_id AS vehicleId,customer_id AS customerId FROM bookings WHERE agency_id=? AND id=? LIMIT 1`).get(context.agencyId,input.bookingId) as {vehicleId:string|null;customerId:string}|undefined;
       if (!booking) throw new DomainError("VALIDATION_FAILED", "The selected booking does not exist.", 400, { bookingId: "Select a valid booking." });
       if (vehicleId && vehicleId !== booking.vehicleId) throw new DomainError("VALIDATION_FAILED", "The selected booking belongs to a different vehicle.", 400, { vehicleId: "Use the booking vehicle." });
       if (customerId && customerId !== booking.customerId) throw new DomainError("VALIDATION_FAILED", "The selected booking belongs to a different customer.", 400, { customerId: "Use the booking customer." });
-      vehicleId = booking.vehicleId;
+      vehicleId = booking.vehicleId ?? undefined;
       customerId = booking.customerId;
     }
     assertScopedReference(context.agencyId, "vehicles", vehicleId);

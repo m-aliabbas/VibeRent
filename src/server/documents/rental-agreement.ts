@@ -120,7 +120,7 @@ async function loadAgreementSource(context:RequestContext,bookingId:string){
       a.address AS agencyAddress,a.registration_number AS registrationNumber,a.tax_number AS taxNumber,
       a.agreement_config AS agreementConfig,a.rental_terms AS legacyTerms,o.logo,
       c.name AS customer,c.father_name AS customerFatherName,c.phone_normalized AS customerPhone,c.cnic_normalized AS customerCnic,
-      v.make||' '||v.model||' '||v.year AS vehicle,v.plate,v.chassis_number AS chassisNumber,
+      CASE WHEN b.fulfillment_type='external' THEN b.external_vehicle_make||' '||b.external_vehicle_model||coalesce(' '||b.external_vehicle_year,'') ELSE v.make||' '||v.model||' '||v.year END AS vehicle,coalesce(b.external_vehicle_plate,v.plate) AS plate,v.chassis_number AS chassisNumber,
       v.engine_number AS engineNumber,d.name AS driver,d.phone_normalized AS driverPhone,
       d.cnic_normalized AS driverCnic,d.license_number AS driverLicense,
       (SELECT ri.odometer FROM rental_inspections ri WHERE ri.agency_id=b.agency_id AND ri.booking_id=b.id AND ri.kind='checkout' LIMIT 1) AS initialOdometer
@@ -128,7 +128,7 @@ async function loadAgreementSource(context:RequestContext,bookingId:string){
     JOIN agencies a ON a.id=b.agency_id
     LEFT JOIN organization o ON o.id=b.agency_id
     JOIN customers c ON c.id=b.customer_id AND c.agency_id=b.agency_id
-    JOIN vehicles v ON v.id=b.vehicle_id AND v.agency_id=b.agency_id
+    LEFT JOIN vehicles v ON v.id=b.vehicle_id AND v.agency_id=b.agency_id
     LEFT JOIN drivers d ON d.id=b.driver_id AND d.agency_id=b.agency_id
     WHERE b.agency_id=? AND b.id=?
   `).get(context.agencyId, bookingId) as AgreementRow | undefined;

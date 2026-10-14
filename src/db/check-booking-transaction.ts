@@ -1,6 +1,6 @@
 import { sqlite } from "@/db/connection";
 import { DomainError } from "@/server/domain/errors";
-import { confirmBooking, startBooking } from "@/server/services/booking-service";
+import { archiveBooking, cancelBooking, confirmBooking, startBooking } from "@/server/services/booking-service";
 import type { RequestContext } from "@/server/context/request-context";
 
 const context: RequestContext = {
@@ -103,6 +103,22 @@ if (reversed.paid !== 0) {
   throw new Error(`After reversal, expected paid to be 0, got ${reversed.paid}`);
 }
 
+const reversalTxn = reversed.transactions?.find(t => t.linkedTransactionId === paymentTxn.id && t.kind === "reversal");
+if (!reversalTxn || reversalTxn.reference !== "Test correction") {
+  throw new Error("Reversal details were not preserved in the booking ledger.");
+}
+
+const cancelled = cancelBooking(context, first.id, {
+  reason: "Customer changed travel plans",
+  version: reversed.version,
+});
+if (cancelled.status !== "Cancelled") throw new Error("Paid booking could not be cancelled after reversal.");
+
+archiveBooking(context, first.id);
+const archived = sqlite.prepare("SELECT archived_at AS archivedAt FROM bookings WHERE agency_id=? AND id=?")
+  .get(context.agencyId, first.id) as { archivedAt: string | null } | undefined;
+if (!archived?.archivedAt) throw new Error("Financially settled cancelled booking was not archived.");
+
 const auditPayment = sqlite.prepare("SELECT id FROM audit_events WHERE agency_id=? AND entity_id=? AND action='booking.payment_posted'").get(context.agencyId, first.id);
 if (!auditPayment) throw new Error("Payment audit event was not written.");
 
@@ -129,6 +145,8 @@ console.log(JSON.stringify({
   refreshRetainedPaid: true,
   overpaymentBlocked: true,
   reversalWorked: true,
+  reversalDetailsPreserved: true,
+  cancelledBookingArchivedAfterSettlement: true,
   auditWritten: true
 }, null, 2));
 sqlite.close();

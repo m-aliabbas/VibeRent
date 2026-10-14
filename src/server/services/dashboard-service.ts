@@ -35,10 +35,10 @@ export function getDashboard(context: RequestContext): DashboardData {
   `).get(context.agencyId, context.agencyId, context.agencyId, start, end, context.agencyId, monthStart, end, context.agencyId, localDate, nextLocalDate, context.agencyId, `${localDate.slice(0,7)}-01`, nextLocalDate, context.agencyId) as { totalVehicles: number; activeRentals: number; todayRevenue: number; monthRevenue:number; todayExpenses:number; monthExpenses:number; utilizedVehicles: number };
   const scheduleRows = sqlite.prepare(`
     SELECT bk.id, bk.status, bk.pickup_at AS pickupAt, bk.return_at AS returnAt, c.name AS customer,
-      v.make || ' ' || v.model || ' ' || v.year AS vehicle, v.plate, br.name || ', ' || br.city AS location
+      CASE WHEN bk.fulfillment_type='external' THEN bk.external_vehicle_make||' '||bk.external_vehicle_model||coalesce(' '||bk.external_vehicle_year,'') ELSE v.make||' '||v.model||' '||v.year END AS vehicle, coalesce(bk.external_vehicle_plate,v.plate) AS plate, br.name || ', ' || br.city AS location
     FROM bookings bk
     JOIN customers c ON c.id=bk.customer_id AND c.agency_id=bk.agency_id
-    JOIN vehicles v ON v.id=bk.vehicle_id AND v.agency_id=bk.agency_id
+    LEFT JOIN vehicles v ON v.id=bk.vehicle_id AND v.agency_id=bk.agency_id
     JOIN branches br ON br.id=bk.branch_id AND br.agency_id=bk.agency_id
     WHERE bk.agency_id=? AND bk.status IN ('confirmed','checked_out')
       AND ((bk.pickup_at>=? AND bk.pickup_at<?) OR (bk.return_at>=? AND bk.return_at<?))
@@ -51,8 +51,8 @@ export function getDashboard(context: RequestContext): DashboardData {
     return events;
   }).sort((a, b) => a.time.localeCompare(b.time));
   const activeRentalRows = sqlite.prepare(`
-    SELECT bk.id,c.name AS customer,v.make || ' ' || v.model || ' ' || v.year AS vehicle,v.plate,bk.return_at AS returnAt,bk.destination_city AS destinationCity
-    FROM bookings bk JOIN customers c ON c.id=bk.customer_id AND c.agency_id=bk.agency_id JOIN vehicles v ON v.id=bk.vehicle_id AND v.agency_id=bk.agency_id
+    SELECT bk.id,c.name AS customer,CASE WHEN bk.fulfillment_type='external' THEN bk.external_vehicle_make||' '||bk.external_vehicle_model||coalesce(' '||bk.external_vehicle_year,'') ELSE v.make||' '||v.model||' '||v.year END AS vehicle,coalesce(bk.external_vehicle_plate,v.plate) AS plate,bk.return_at AS returnAt,bk.destination_city AS destinationCity
+    FROM bookings bk JOIN customers c ON c.id=bk.customer_id AND c.agency_id=bk.agency_id LEFT JOIN vehicles v ON v.id=bk.vehicle_id AND v.agency_id=bk.agency_id
     WHERE bk.agency_id=? AND bk.status='checked_out' ORDER BY bk.return_at ASC
   `).all(context.agencyId) as DashboardData["activeRentalRows"];
   const activityRows = sqlite.prepare(`SELECT id,action,entity_type AS entityType,entity_id AS entityId,metadata,occurred_at AS occurredAt FROM audit_events WHERE agency_id=? ORDER BY occurred_at DESC,id DESC LIMIT 6`)

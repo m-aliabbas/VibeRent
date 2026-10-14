@@ -30,7 +30,7 @@ const MAX_BACKUP_BYTES = 1024 * 1024 * 1024;
 const MAX_EXTRACTED_BYTES = 2 * 1024 * 1024 * 1024;
 const databasePath = getDatabasePath();
 
-type BackupKind = "manual" | "automatic" | "pre-restore";
+type BackupKind = "manual" | "automatic" | "pre-restore" | "pre-migration";
 
 type BackupManifest = {
   schemaVersion: 1;

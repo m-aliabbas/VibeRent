@@ -45,9 +45,9 @@ export function AvailabilityCalendar({
   const periodStart = dates[0];
   const periodEnd = addDays(dates.at(-1)!, 1);
   const events = useMemo<CalendarEvent[]>(() => [
-    ...bookings
-      .filter(item => !["Cancelled", "No Show", "Draft"].includes(item.status))
-      .map(item => ({ id: item.id, vehicleId: item.vehicleId, from: item.pickupAt, to: item.returnAt, label: item.id, kind: item.status, href: `/bookings/${item.id}` })),
+    ...bookings.flatMap(item => !["Cancelled", "No Show", "Draft"].includes(item.status)&&item.vehicleId
+      ? [{ id: item.id, vehicleId: item.vehicleId, from: item.pickupAt, to: item.returnAt, label: item.id, kind: item.status, href: `/bookings/${item.id}` }]
+      : []),
     ...blocks.map(item => ({ id: item.id, vehicleId: item.vehicleId, from: item.from, to: item.to, label: item.reason, kind: item.kind })),
   ], [bookings, blocks]);
   const eventsByVehicle = useMemo(() => {

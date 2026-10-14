@@ -188,14 +188,11 @@ export function setVehicleArchived(context:RequestContext,id:string,archived:boo
     const vehicle=sqlite.prepare("SELECT id,status FROM vehicles WHERE agency_id=? AND id=? LIMIT 1")
       .get(context.agencyId,id) as {id:string;status:string}|undefined;
     if(!vehicle) throw new DomainError("NOT_FOUND","Vehicle not found.",404);
-    if(archived){
-      const activeBooking=sqlite.prepare("SELECT id FROM bookings WHERE agency_id=? AND vehicle_id=? AND archived_at IS NULL AND status IN ('confirmed','checked_out') LIMIT 1")
-        .get(context.agencyId,id);
-      if(activeBooking) throw new DomainError("INVALID_STATUS_TRANSITION","Cancel or complete the vehicle's active booking before deleting it.",409);
-    }
+    const activeBooking=!archived && sqlite.prepare("SELECT id FROM bookings WHERE agency_id=? AND vehicle_id=? AND archived_at IS NULL AND status IN ('confirmed','checked_out') LIMIT 1")
+      .get(context.agencyId,id);
     const now=new Date().toISOString();
     sqlite.prepare("UPDATE vehicles SET status=?,archived_at=?,version=version+1,updated_at=? WHERE agency_id=? AND id=?")
-      .run(archived?"archived":"available",archived?now:null,now,context.agencyId,id);
+      .run(archived?"archived":activeBooking?"booked":"available",archived?now:null,now,context.agencyId,id);
     sqlite.prepare("INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)")
       .run(randomUUID(),context.agencyId,context.userId,archived?"vehicle.archived":"vehicle.restored","vehicle",id,JSON.stringify({previousStatus:vehicle.status}),now);
     return getVehicle(context,id);

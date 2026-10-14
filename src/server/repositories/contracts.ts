@@ -28,6 +28,13 @@ export type BookingListItem = {
   vehicleId: string;
   vehicle: string;
   plate: string;
+  fulfillmentType: "fleet" | "external";
+  externalSupplierName?: string;
+  externalSupplierPhone?: string;
+  supplierPricingMode?: "percentage" | "fixed";
+  supplierSharePercent?: number;
+  supplierFixedCost?: number;
+  supplierPayable?: number;
   city: string;
   destinationCity: string;
   pickupAt: string;

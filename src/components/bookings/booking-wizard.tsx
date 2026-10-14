@@ -62,6 +62,8 @@ function isGuarantorComplete(value: GuarantorDraft) {
 // ─── Draft ──────────────────────────────────────────────────────────────────
 
 type Draft = {
+  fulfillmentType:"fleet"|"external";
+  external:{supplierName:string;supplierPhone:string;vehicleMake:string;vehicleModel:string;vehicleYear:number;vehiclePlate:string;vehicleColor:string;pricingMode:"percentage"|"fixed";supplierSharePercent:number;supplierFixedCost:number};
   rentalMode:"self_drive"|"with_driver";
   driverId:string;
   renterSkipped:boolean;
@@ -89,6 +91,8 @@ function defaultDraft(): Draft {
   returned.setHours(23, 59, 0, 0);
   const local = (date: Date) => new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
   return {
+  fulfillmentType:"fleet",
+  external:{supplierName:"",supplierPhone:"",vehicleMake:"",vehicleModel:"",vehicleYear:new Date().getFullYear(),vehiclePlate:"",vehicleColor:"",pricingMode:"percentage",supplierSharePercent:83,supplierFixedCost:0},
   rentalMode:"self_drive",
   driverId:"",
   renterSkipped:false,
@@ -207,7 +211,7 @@ export function BookingWizard() {
   }, []);
 
   // Derived fleet options from live vehicle data
-  const fleetOptions: FleetOption[] = vehicles.map((v) => {
+  const fleetOptions: FleetOption[] = vehicles.filter((v) => v.status === "Available").map((v) => {
     const rule=v.rateRules?.find(item=>item.destinationCity.toLowerCase()===draft.city.toLowerCase());
     return {id:v.id,label:`${v.make} ${v.model} ${v.year}`,plate:v.plate,city:v.city,baseRate:v.dailyRate,rate:draft.rentalMode==="with_driver"?(v.withDriverRate??v.dailyRate):(rule?.dailyRate??v.dailyRate),withDriverRate:v.withDriverRate??v.dailyRate,perKmRate:draft.rentalMode==="with_driver"?0:(rule?.perKmRate??0),minimumDays:rule?.minimumDays??1};
   });
@@ -227,20 +231,22 @@ export function BookingWizard() {
 
   const canContinue = [
     Boolean(draft.from && draft.to && new Date(draft.to) > new Date(draft.from) && (draft.rentalMode==="self_drive"||draft.driverId)),
-    Boolean(vehicle && getConflicts(vehicle.id, draft.from, draft.to, bookings).length === 0),
+    draft.fulfillmentType==="external"?Boolean(draft.external.supplierName.trim()&&draft.external.supplierPhone.trim()&&draft.external.vehicleMake.trim()&&draft.external.vehicleModel.trim()&&draft.external.vehiclePlate.trim()):Boolean(vehicle && getConflicts(vehicle.id, draft.from, draft.to, bookings).length === 0),
     Boolean((draft.customerId || (draft.rentalMode==="with_driver"&&draft.renterSkipped)) && (!draft.guarantor || isGuarantorComplete(draft.guarantor))),
-    draft.dailyRate > 0 && days >= (vehicle?.minimumDays??1) && draft.discount <= draft.dailyRate * days + draft.extras && (draft.dailyRate === (vehicle?.rate??draft.dailyRate) || Boolean(draft.overrideReason.trim())),
+    draft.dailyRate > 0 && days >= (vehicle?.minimumDays??1) && draft.discount <= draft.dailyRate * days + draft.extras && (draft.fulfillmentType==="external"||draft.dailyRate === (vehicle?.rate??draft.dailyRate) || Boolean(draft.overrideReason.trim())) && (draft.fulfillmentType==="fleet"||(draft.external.pricingMode==="percentage"?draft.external.supplierSharePercent>=0&&draft.external.supplierSharePercent<=100:draft.external.supplierFixedCost>=0&&draft.external.supplierFixedCost<=total)),
     true,
   ][step];
 
   async function confirm(event: FormEvent) {
     event.preventDefault();
-    if (!vehicle || (!draft.customerId && !draft.renterSkipped) || !bookingReference || submitting) return;
+    if ((draft.fulfillmentType==="fleet"&&!vehicle) || (!draft.customerId && !draft.renterSkipped) || !bookingReference || submitting) return;
     setSubmitting(true);
     setSubmitError("");
     const result = await confirmBookingAction({
       bookingDraftId: bookingReference.id,
-      vehicleId: vehicle.id,
+      vehicleId: vehicle?.id,
+      fulfillmentType:draft.fulfillmentType,
+      external:draft.fulfillmentType==="external"?draft.external:undefined,
       customerId: draft.customerId,
       rentalMode:draft.rentalMode,
       driverId:draft.driverId||undefined,
@@ -255,7 +261,7 @@ export function BookingWizard() {
       source: "counter",
       notes: draft.notes,
       estimatedKm: draft.estimatedKm,
-      dailyRateOverride: vehicle && draft.dailyRate !== vehicle.rate ? draft.dailyRate : undefined,
+      dailyRateOverride: draft.fulfillmentType==="external"?draft.dailyRate:vehicle && draft.dailyRate !== vehicle.rate ? draft.dailyRate : undefined,
       overrideReason: draft.overrideReason || undefined,
     });
     setSubmitting(false);
@@ -434,10 +440,9 @@ function VehicleStep({ draft, setDraft, vehicles, conflictMode, clearConflict }:
           <p className="mt-1 text-xs">We kept every other field. Choose an alternative vehicle to continue.</p>
         </div>
       )}
-      {vehicles.length === 0 && (
-        <p className="mt-4 text-sm text-[#667085]">No vehicles found for {draft.city}.</p>
-      )}
-      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+      <div className="mt-4 grid grid-cols-2 gap-2 rounded-lg bg-[#F2F4F7] p-1" role="group" aria-label="Vehicle source"><button type="button" onClick={()=>setDraft({...draft,fulfillmentType:"fleet",dailyRate:0})} className={`rounded-md px-3 py-2 text-sm font-semibold ${draft.fulfillmentType==="fleet"?"bg-white text-[#0058B8] shadow-sm":"text-[#667085]"}`}>VibeRent fleet</button><button type="button" onClick={()=>setDraft({...draft,fulfillmentType:"external",vehicleId:"",dailyRate:draft.dailyRate||0,overrideReason:""})} className={`rounded-md px-3 py-2 text-sm font-semibold ${draft.fulfillmentType==="external"?"bg-white text-[#0058B8] shadow-sm":"text-[#667085]"}`}>Source externally</button></div>
+      {draft.fulfillmentType==="fleet"&&vehicles.length === 0 && <p className="mt-4 rounded-lg border border-[#B2DDFF] bg-[#EFF8FF] p-3 text-sm text-[#175CD3]">No fleet vehicle is available. Choose <strong>Source externally</strong> above to arrange one for this booking.</p>}
+      {draft.fulfillmentType==="fleet"&&<div className="mt-4 grid gap-3 sm:grid-cols-2">
         {vehicles.map((item) => (
           <button
             type="button"
@@ -453,10 +458,13 @@ function VehicleStep({ draft, setDraft, vehicles, conflictMode, clearConflict }:
             </p>
           </button>
         ))}
-      </div>
+      </div>}
+      {draft.fulfillmentType==="external"&&<ExternalVehicleFields draft={draft} setDraft={setDraft}/>}
     </div>
   );
 }
+
+function ExternalVehicleFields({draft,setDraft}:{draft:Draft;setDraft:(value:Draft)=>void}){const update=(values:Partial<Draft["external"]>)=>setDraft({...draft,external:{...draft.external,...values}});return <div className="mt-4 space-y-4"><div className="rounded-lg border border-[#B2DDFF] bg-[#EFF8FF] p-3 text-sm text-[#175CD3]"><strong>One booking only.</strong> This vehicle will not be added to your fleet or availability calendar.</div><div className="grid gap-4 sm:grid-cols-2"><FormInput label="Supplier / owner name" required value={draft.external.supplierName} onChange={e=>update({supplierName:e.target.value})}/><FormInput label="Supplier phone" required type="tel" value={draft.external.supplierPhone} onChange={e=>update({supplierPhone:e.target.value})}/><FormInput label="Vehicle make" required placeholder="Toyota" value={draft.external.vehicleMake} onChange={e=>update({vehicleMake:e.target.value})}/><FormInput label="Vehicle model" required placeholder="Corolla" value={draft.external.vehicleModel} onChange={e=>update({vehicleModel:e.target.value})}/><FormInput label="Registration number" required placeholder="LEA-4582" value={draft.external.vehiclePlate} onChange={e=>update({vehiclePlate:e.target.value.toUpperCase()})}/><FormInput label="Year" type="number" min={1980} max={new Date().getFullYear()+1} value={draft.external.vehicleYear} onChange={e=>update({vehicleYear:Number(e.target.value)})}/><FormInput label="Colour (optional)" value={draft.external.vehicleColor} onChange={e=>update({vehicleColor:e.target.value})}/></div></div>}
 
 // ─── Customer step ───────────────────────────────────────────────────────────
 
@@ -715,6 +723,7 @@ function GuarantorSection({draft,setDraft,bookingReference}:{draft:Draft;setDraf
 // ─── Pricing step ────────────────────────────────────────────────────────────
 
 function PricingStep({ draft, setDraft, days, total }: { draft: Draft; setDraft: (value: Draft) => void; days: number; total: number }) {
+  const supplierPayable=draft.external.pricingMode==="percentage"?Math.round(total*draft.external.supplierSharePercent/100):draft.external.supplierFixedCost;
   return (
     <div className="grid gap-4 sm:grid-cols-2">
       <FormInput label="Daily rate" type="number" min={1000} value={draft.dailyRate} onChange={(e)=>setDraft({...draft,dailyRate:Number(e.target.value)})} />
@@ -723,11 +732,12 @@ function PricingStep({ draft, setDraft, days, total }: { draft: Draft; setDraft:
       <FormInput label="Extras" type="number" value={draft.extras} onChange={(e) => setDraft({ ...draft, extras: Number(e.target.value) })} />
       <FormInput label="Discount" type="number" value={draft.discount} onChange={(e) => setDraft({ ...draft, discount: Number(e.target.value) })} />
       <FormInput label="Notes" value={draft.notes} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} />
-      <FormInput label="Rate change reason (required for an override)" value={draft.overrideReason} onChange={(e)=>setDraft({...draft,overrideReason:e.target.value})} placeholder="e.g. approved corporate rate"/>
+      {draft.fulfillmentType==="fleet"&&<FormInput label="Rate change reason (required for an override)" value={draft.overrideReason} onChange={(e)=>setDraft({...draft,overrideReason:e.target.value})} placeholder="e.g. approved corporate rate"/>}
       <div className="rounded-lg bg-[#F8FAFC] p-4">
         <p className="text-xs text-[#667085]">{days} rental days · rate verified by server</p>
         <p className="mt-1 text-xl font-bold">{formatPkr(total)}</p>
       </div>
+      {draft.fulfillmentType==="external"&&<div className="space-y-4 rounded-xl border border-[#B2DDFF] bg-[#F5FAFF] p-4 sm:col-span-2"><div><h3 className="text-sm font-bold text-[#175CD3]">Supplier terms</h3><p className="mt-1 text-xs text-[#475467]">83/17 is the default. Change it for this booking when needed.</p></div><div className="grid gap-4 sm:grid-cols-2"><FormSelect label="Arrangement" value={draft.external.pricingMode} onChange={e=>setDraft({...draft,external:{...draft.external,pricingMode:e.target.value as "percentage"|"fixed"}})} options={[{label:"Percentage split",value:"percentage"},{label:"Fixed supplier cost",value:"fixed"}]}/>{draft.external.pricingMode==="percentage"?<FormInput label="Supplier share (%)" type="number" min={0} max={100} value={draft.external.supplierSharePercent} onChange={e=>setDraft({...draft,external:{...draft.external,supplierSharePercent:Number(e.target.value)}})}/>:<FormInput label="Supplier cost (PKR)" type="number" min={0} value={draft.external.supplierFixedCost} onChange={e=>setDraft({...draft,external:{...draft.external,supplierFixedCost:Number(e.target.value)}})}/>}</div><div className="grid grid-cols-3 gap-2 text-sm"><div className="rounded-lg bg-white p-3"><p className="text-xs text-[#667085]">Customer total</p><strong>{formatPkr(total)}</strong></div><div className="rounded-lg bg-white p-3"><p className="text-xs text-[#667085]">Supplier gets</p><strong>{formatPkr(supplierPayable)}</strong></div><div className="rounded-lg bg-white p-3"><p className="text-xs text-[#667085]">Your commission</p><strong className={total-supplierPayable<0?"text-[#B42318]":"text-[#067647]"}>{formatPkr(total-supplierPayable)}</strong></div></div></div>}
     </div>
   );
 }
@@ -742,16 +752,19 @@ function Review({ draft, days, total, vehicle, customers }: {
   customers: CustomerDto[];
 }) {
   const customer = customers.find((c) => c.id === draft.customerId);
+  const supplierPayable=draft.external.pricingMode==="percentage"?Math.round(total*draft.external.supplierSharePercent/100):draft.external.supplierFixedCost;
   const details: [string, string | undefined][] = [
     ["Schedule", `${new Date(draft.from).toLocaleString("en-PK")} – ${new Date(draft.to).toLocaleString("en-PK")}`],
     ["Going to", draft.city],
-    ["Vehicle", vehicle ? `${vehicle.label} · ${vehicle.plate}` : "—"],
+    ["Fulfilment",draft.fulfillmentType==="external"?"Externally sourced":"VibeRent fleet"],
+    ["Vehicle", draft.fulfillmentType==="external"?`${draft.external.vehicleMake} ${draft.external.vehicleModel} ${draft.external.vehicleYear} · ${draft.external.vehiclePlate}`:vehicle ? `${vehicle.label} · ${vehicle.plate}` : "—"],
+    ...(draft.fulfillmentType==="external"?[["Supplier",`${draft.external.supplierName} · ${draft.external.supplierPhone}`],["Supplier payable",`${formatPkr(supplierPayable)} · Agency keeps ${formatPkr(total-supplierPayable)}`]] as [string,string][]:[]),
     ["Customer", customer ? `${customer.name} · ${customer.phone}` : "—"],
     ["Guarantor", draft.guarantor ? `${draft.guarantor.name} · ${draft.guarantor.phone}` : "Not added"],
     ["Car amount", draft.guarantor ? formatPkr(draft.guarantor.carAmount) : "—"],
     ["Price", `${formatPkr(total)} · ${days} days`],
     ["Deposit", draft.deposit?formatPkr(draft.deposit):"Not required"],
-    ["Final availability", "Checked transactionally on confirmation"],
+    ["Final availability", draft.fulfillmentType==="external"?"Supplier vehicle confirmed for this booking":"Checked transactionally on confirmation"],
   ];
   return (
     <div>

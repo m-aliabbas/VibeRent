@@ -2,7 +2,20 @@ import { DomainError } from "@/server/domain/errors";
 
 export type ConfirmBookingInput = {
   bookingDraftId?: string;
-  vehicleId: string;
+  vehicleId?: string;
+  fulfillmentType: "fleet" | "external";
+  external?: {
+    supplierName: string;
+    supplierPhone: string;
+    vehicleMake: string;
+    vehicleModel: string;
+    vehicleYear?: number;
+    vehiclePlate: string;
+    vehicleColor?: string;
+    pricingMode: "percentage" | "fixed";
+    supplierSharePercent?: number;
+    supplierFixedCost?: number;
+  };
   customerId: string;
   rentalMode: "self_drive" | "with_driver";
   driverId?: string;
@@ -57,7 +70,20 @@ export function parseConfirmBookingInput(value: unknown): ConfirmBookingInput {
   if (!input || typeof input !== "object") throw new DomainError("VALIDATION_FAILED", "Invalid booking payload.", 400);
   const guarantor = parseGuarantor(input.guarantor, errors);
   const rentalMode=input.rentalMode??"self_drive";
-  if (!input.vehicleId) errors.vehicleId = "Select a vehicle.";
+  const fulfillmentType=input.fulfillmentType??"fleet";
+  if (fulfillmentType!=="fleet"&&fulfillmentType!=="external") errors.fulfillmentType="Choose how the booking will be fulfilled.";
+  if (fulfillmentType==="fleet"&&!input.vehicleId) errors.vehicleId = "Select a vehicle.";
+  const external=input.external;
+  if(fulfillmentType==="external"){
+    if(!external?.supplierName?.trim())errors["external.supplierName"]="Enter the supplier name.";
+    if(!external?.supplierPhone?.trim())errors["external.supplierPhone"]="Enter the supplier phone.";
+    if(!external?.vehicleMake?.trim())errors["external.vehicleMake"]="Enter the vehicle make.";
+    if(!external?.vehicleModel?.trim())errors["external.vehicleModel"]="Enter the vehicle model.";
+    if(!external?.vehiclePlate?.trim())errors["external.vehiclePlate"]="Enter the registration number.";
+    if(!external?.pricingMode||!["percentage","fixed"].includes(external.pricingMode))errors["external.pricingMode"]="Choose percentage or fixed cost.";
+    if(external?.pricingMode==="percentage"&&(!Number.isFinite(external.supplierSharePercent)||external.supplierSharePercent!<0||external.supplierSharePercent!>100))errors["external.supplierSharePercent"]="Enter a percentage from 0 to 100.";
+    if(external?.pricingMode==="fixed"&&(!Number.isInteger(external.supplierFixedCost)||external.supplierFixedCost!<0))errors["external.supplierFixedCost"]="Enter a valid fixed supplier cost.";
+  }
   if (!input.customerId && !(rentalMode === "with_driver" && input.renterSkipped)) errors.customerId = "Select an existing customer.";
   if (rentalMode !== "self_drive" && rentalMode !== "with_driver") errors.rentalMode = "Choose self drive or with driver.";
   if (rentalMode === "with_driver" && !input.driverId) errors.driverId = "Select a driver.";
@@ -70,10 +96,11 @@ export function parseConfirmBookingInput(value: unknown): ConfirmBookingInput {
   }
   if (input.estimatedKm !== undefined && (!Number.isInteger(input.estimatedKm) || input.estimatedKm < 0)) errors.estimatedKm = "Estimated mileage must be zero or more.";
   if (input.dailyRateOverride !== undefined && (!Number.isInteger(input.dailyRateOverride) || input.dailyRateOverride < 1000)) errors.dailyRateOverride = "Enter a valid override rate.";
-  if (input.dailyRateOverride !== undefined && !input.overrideReason?.trim()) errors.overrideReason = "Explain why the destination rate is being changed.";
+  if(fulfillmentType==="external"&&input.dailyRateOverride===undefined)errors.dailyRateOverride="Enter the customer daily rate.";
+  if (fulfillmentType==="fleet"&&input.dailyRateOverride !== undefined && !input.overrideReason?.trim()) errors.overrideReason = "Explain why the destination rate is being changed.";
   if (Object.keys(errors).length) throw new DomainError("VALIDATION_FAILED", "Review the booking details.", 400, errors);
   return {
-    bookingDraftId: input.bookingDraftId?.trim() || undefined, vehicleId: input.vehicleId!, customerId: input.customerId?.trim() || "", rentalMode, driverId:input.driverId?.trim()||undefined, renterSkipped:Boolean(input.renterSkipped), guarantor, destinationCity: input.destinationCity?.trim() || "Local", pickupAt: new Date(pickup).toISOString(), returnAt: new Date(returned).toISOString(),
+    bookingDraftId: input.bookingDraftId?.trim() || undefined, vehicleId: input.vehicleId?.trim() || undefined, fulfillmentType, external:fulfillmentType==="external"&&external?{supplierName:external.supplierName.trim(),supplierPhone:external.supplierPhone.trim(),vehicleMake:external.vehicleMake.trim(),vehicleModel:external.vehicleModel.trim(),vehicleYear:external.vehicleYear,vehiclePlate:external.vehiclePlate.trim().toUpperCase(),vehicleColor:external.vehicleColor?.trim()||undefined,pricingMode:external.pricingMode,supplierSharePercent:external.supplierSharePercent,supplierFixedCost:external.supplierFixedCost}:undefined, customerId: input.customerId?.trim() || "", rentalMode, driverId:input.driverId?.trim()||undefined, renterSkipped:Boolean(input.renterSkipped), guarantor, destinationCity: input.destinationCity?.trim() || "Local", pickupAt: new Date(pickup).toISOString(), returnAt: new Date(returned).toISOString(),
     extras: input.extras!, discount: input.discount!, depositRequired: input.depositRequired!, source: input.source?.trim() || "counter", notes: input.notes?.trim() || undefined, estimatedKm: input.estimatedKm ?? 0, dailyRateOverride: input.dailyRateOverride, overrideReason: input.overrideReason?.trim() || undefined,
   };
 }
@@ -150,6 +177,7 @@ export function parseRecordDepositInput(value: unknown): RecordDepositInput {
 export type ReverseTransactionInput = {
   transactionId: string;
   reason: string;
+  adjustmentType?: "reversal" | "refund";
 };
 
 export function parseReverseTransactionInput(value: unknown): ReverseTransactionInput {
@@ -162,9 +190,13 @@ export function parseReverseTransactionInput(value: unknown): ReverseTransaction
   if (!input.reason?.trim()) {
     errors.reason = "A reason is required for correcting or reversing a transaction.";
   }
+  if (input.adjustmentType && !["reversal", "refund"].includes(input.adjustmentType)) {
+    errors.adjustmentType = "Choose refund or reversal.";
+  }
   if (Object.keys(errors).length) throw new DomainError("VALIDATION_FAILED", "Review the reversal details.", 400, errors);
   return {
     transactionId: input.transactionId!.trim(),
     reason: input.reason!.trim(),
+    adjustmentType: input.adjustmentType ?? "reversal",
   };
 }

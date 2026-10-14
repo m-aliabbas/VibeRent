@@ -134,6 +134,10 @@ export async function recordBookingDepositAction(bookingId: string, input: Recor
 export async function reverseBookingTransactionAction(bookingId: string, input: ReverseTransactionInput) {
   try {
     const data = reverseBookingTransaction(await getWebRequestContext(), bookingId, input);
+    revalidatePath("/bookings");
+    revalidatePath(`/bookings/${bookingId}`);
+    revalidatePath("/dashboard");
+    revalidatePath("/reports");
     return { ok: true as const, data };
   } catch (error) {
     const issue = asDomainError(error);

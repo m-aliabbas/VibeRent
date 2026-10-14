@@ -14,10 +14,10 @@ export function getTodaysOperations(context: RequestContext, date?: string) {
   const rows = sqlite.prepare(`
     SELECT bk.id, bk.pickup_at AS pickupAt, bk.return_at AS returnAt, bk.status, bk.version,
       c.id AS customerId, c.name AS customer, c.phone_normalized AS customerPhone,
-      v.id AS vehicleId, v.plate, v.make, v.model, br.id AS branchId, br.name AS branch, br.city
+      v.id AS vehicleId, coalesce(bk.external_vehicle_plate,v.plate) AS plate, coalesce(bk.external_vehicle_make,v.make) AS make, coalesce(bk.external_vehicle_model,v.model) AS model, br.id AS branchId, br.name AS branch, br.city
     FROM bookings bk
     JOIN customers c ON c.id=bk.customer_id AND c.agency_id=bk.agency_id
-    JOIN vehicles v ON v.id=bk.vehicle_id AND v.agency_id=bk.agency_id
+    LEFT JOIN vehicles v ON v.id=bk.vehicle_id AND v.agency_id=bk.agency_id
     JOIN branches br ON br.id=bk.branch_id AND br.agency_id=bk.agency_id
     WHERE bk.agency_id=? AND bk.status IN ('confirmed','checked_out')
       AND ((bk.pickup_at>=? AND bk.pickup_at<?) OR (bk.return_at>=? AND bk.return_at<?))

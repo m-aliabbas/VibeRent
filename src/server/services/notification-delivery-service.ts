@@ -136,14 +136,14 @@ async function deliverPdf(context: RequestContext, phone: string, action: string
 }
 
 function bookingNotice(agencyId: string, bookingId: string) {
-  return sqlite.prepare(`SELECT b.public_number AS publicNumber,a.name AS agency,c.name AS customer,c.phone_normalized AS phone,v.make||' '||v.model||' '||v.year AS vehicle,v.plate,b.total_amount AS totalAmount,
+  return sqlite.prepare(`SELECT b.public_number AS publicNumber,a.name AS agency,c.name AS customer,c.phone_normalized AS phone,CASE WHEN b.fulfillment_type='external' THEN b.external_vehicle_make||' '||b.external_vehicle_model||coalesce(' '||b.external_vehicle_year,'') ELSE v.make||' '||v.model||' '||v.year END AS vehicle,coalesce(b.external_vehicle_plate,v.plate) AS plate,b.total_amount AS totalAmount,
     coalesce((SELECT sum(CASE WHEN lower(ft.kind) IN ('refund','reversal') THEN -ft.amount ELSE ft.amount END) FROM financial_transactions ft WHERE ft.agency_id=b.agency_id AND ft.booking_id=b.id AND ft.status='posted' AND lower(ft.kind) IN ('payment','deposit_applied','reversal','refund')),0) AS paid,
     (SELECT odometer FROM rental_inspections ri WHERE ri.agency_id=b.agency_id AND ri.booking_id=b.id AND ri.kind='checkout') AS checkoutOdometer,
     (SELECT odometer FROM rental_inspections ri WHERE ri.agency_id=b.agency_id AND ri.booking_id=b.id AND ri.kind='checkin') AS checkinOdometer,
     (SELECT fuel_level FROM rental_inspections ri WHERE ri.agency_id=b.agency_id AND ri.booking_id=b.id AND ri.kind='checkout') AS checkoutFuel,
     (SELECT fuel_level FROM rental_inspections ri WHERE ri.agency_id=b.agency_id AND ri.booking_id=b.id AND ri.kind='checkin') AS checkinFuel,
     b.checked_out_at AS checkedOutAt,b.completed_at AS completedAt
-    FROM bookings b JOIN agencies a ON a.id=b.agency_id JOIN customers c ON c.id=b.customer_id AND c.agency_id=b.agency_id JOIN vehicles v ON v.id=b.vehicle_id AND v.agency_id=b.agency_id WHERE b.agency_id=? AND b.id=? LIMIT 1`)
+    FROM bookings b JOIN agencies a ON a.id=b.agency_id JOIN customers c ON c.id=b.customer_id AND c.agency_id=b.agency_id LEFT JOIN vehicles v ON v.id=b.vehicle_id AND v.agency_id=b.agency_id WHERE b.agency_id=? AND b.id=? LIMIT 1`)
     .get(agencyId, bookingId) as BookingNoticeRow | undefined;
 }
 

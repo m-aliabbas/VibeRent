@@ -36,12 +36,12 @@ export function getCustomer(context: RequestContext, id: string) {
 export function getCustomerDetail(context: RequestContext, id: string): CustomerDetailDto {
   const customer = getCustomer(context, id);
   const bookings = sqlite.prepare(`
-    SELECT bk.id, v.make || ' ' || v.model || ' ' || v.year AS vehicle, v.plate,
+    SELECT bk.id, CASE WHEN bk.fulfillment_type='external' THEN bk.external_vehicle_make||' '||bk.external_vehicle_model||coalesce(' '||bk.external_vehicle_year,'') ELSE v.make||' '||v.model||' '||v.year END AS vehicle, coalesce(bk.external_vehicle_plate,v.plate) AS plate,
       bk.status, bk.pickup_at AS pickupAt, bk.return_at AS returnAt, bk.total_amount AS totalAmount,
       coalesce((SELECT sum(CASE WHEN lower(ft.kind) IN ('refund','reversal') THEN -ft.amount ELSE ft.amount END)
         FROM financial_transactions ft WHERE ft.agency_id=bk.agency_id AND ft.booking_id=bk.id AND ft.status='posted' AND lower(ft.kind) IN ('payment','deposit_applied','reversal','refund')),0) AS paid
     FROM bookings bk
-    JOIN vehicles v ON v.id=bk.vehicle_id AND v.agency_id=bk.agency_id
+    LEFT JOIN vehicles v ON v.id=bk.vehicle_id AND v.agency_id=bk.agency_id
     WHERE bk.agency_id=? AND bk.customer_id=?
     ORDER BY bk.pickup_at DESC
   `).all(context.agencyId, id) as Array<{ id: string; vehicle: string; plate: string; status: string; pickupAt: string; returnAt: string; totalAmount: number; paid: number }>;
