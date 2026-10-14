@@ -1,0 +1,191 @@
+name: Windows Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-windows:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    env:
+      NODE_VERSION: "22.20.0"
+      RUST_VERSION: "1.90.0"
+      RELEASE_REPOSITORY: "m-aliabbas/viberent-releases"
+
+    steps:
+      - name: Check out the private source repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Set up Rust
+        shell: pwsh
+        run: |
+          rustup toolchain install $env:RUST_VERSION --profile minimal
+          rustup default $env:RUST_VERSION
+          rustc --version
+          cargo --version
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Validate release version
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: npm run release:check -- $env:RELEASE_TAG
+
+      - name: Test Windows license fingerprint and approval policy
+        run: npm run license:test
+
+      - run: npm run lint
+      - run: npm run typecheck
+
+      - name: Build NSIS installer
+        run: npm run desktop:build -- --bundles nsis
+
+      - name: Confirm JavaScript lock file did not change
+        shell: pwsh
+        run: |
+          git diff -- package-lock.json
+          git diff --exit-code -- package-lock.json
+          if ($LASTEXITCODE -ne 0) { throw "The build changed package-lock.json." }
+
+      - name: Create build record and customer manifest
+        shell: pwsh
+        run: |
+          $releaseDir = Join-Path $env:GITHUB_WORKSPACE "release\windows"
+          New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
+          $installer = Get-ChildItem "src-tauri\target\release\bundle\nsis\*-setup.exe" | Select-Object -First 1
+          if (-not $installer) { throw "The NSIS installer was not produced." }
+          $package = Get-Content "package.json" -Raw | ConvertFrom-Json
+          $installerName = "VibeRent_$($package.version)_x64-setup.exe"
+          $copiedInstaller = Join-Path $releaseDir $installerName
+          Copy-Item -LiteralPath $installer.FullName -Destination $copiedInstaller -Force
+          $installerHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $copiedInstaller).Hash.ToLowerInvariant()
+          "$installerHash  $installerName" | Set-Content -Encoding ascii (Join-Path $releaseDir "SHA256SUMS.txt")
+          $record = [ordered]@{
+            application = "VibeRent"
+            version = $package.version
+            commit = $env:GITHUB_SHA
+            source_ref = $env:GITHUB_REF
+            workflow_run = $env:GITHUB_RUN_ID
+            built_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+            runner = "windows-2022"
+            node = (& node --version).Trim()
+            npm = (& npm --version).Trim()
+            rustc = (& rustc --version).Trim()
+            cargo = (& cargo --version).Trim()
+            npm_lock_sha256 = (Get-FileHash -Algorithm SHA256 "package-lock.json").Hash.ToLowerInvariant()
+            installer = $installerName
+            installer_sha256 = $installerHash
+            signed = $false
+          }
+          $record | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $releaseDir "build-manifest.json")
+          $tag = "v$($package.version)"
+          $releaseUrl = "https://github.com/$env:RELEASE_REPOSITORY/releases/tag/$tag"
+          $downloadUrl = "https://github.com/$env:RELEASE_REPOSITORY/releases/download/$tag/$installerName"
+          $notes = (git log -1 --pretty=%s).Trim()
+          $manifest = [ordered]@{
+            schema_version = 1
+            version = $package.version
+            published_at = (Get-Date).ToUniversalTime().ToString("o")
+            notes = $notes
+            release_url = $releaseUrl
+            downloads = [ordered]@{
+              "windows-x86_64" = [ordered]@{
+                url = $downloadUrl
+                sha256 = $installerHash
+                size = (Get-Item -LiteralPath $copiedInstaller).Length
+              }
+            }
+          }
+          $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 (Join-Path $releaseDir "latest.json")
+
+      - name: Validate software update assets
+        shell: pwsh
+        run: |
+          $releaseDir = Join-Path $env:GITHUB_WORKSPACE "release\windows"
+          $package = Get-Content "package.json" -Raw | ConvertFrom-Json
+          $manifest = Get-Content (Join-Path $releaseDir "latest.json") -Raw | ConvertFrom-Json
+          $download = $manifest.downloads."windows-x86_64"
+          $installer = Join-Path $releaseDir "VibeRent_$($package.version)_x64-setup.exe"
+          if ($manifest.schema_version -ne 1) { throw "Unsupported latest.json schema version." }
+          if ($manifest.version -ne $package.version) { throw "latest.json does not match package.json." }
+          if (-not (Test-Path -LiteralPath $installer)) { throw "The installer named by latest.json is missing." }
+          $downloadUrl = [string]$download.url
+          if ($downloadUrl -notmatch "^https://github.com/m-aliabbas/viberent-releases/releases/download/v$([regex]::Escape($package.version))/VibeRent_$([regex]::Escape($package.version))_x64-setup\.exe$") {
+            throw "latest.json contains an unexpected installer URL."
+          }
+          $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash.ToLowerInvariant()
+          if ($download.sha256 -ne $actualHash) { throw "latest.json checksum does not match the installer." }
+          if ([int64]$download.size -ne (Get-Item -LiteralPath $installer).Length) { throw "latest.json size does not match the installer." }
+
+      - name: Upload private diagnostic artifact
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: VibeRent-Windows-${{ github.run_number }}
+          path: release/windows/*
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Publish customer release
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_REPO_TOKEN }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) { throw "RELEASE_REPO_TOKEN is required." }
+          $tag = $env:GITHUB_REF_NAME
+          $releaseDir = Join-Path $env:GITHUB_WORKSPACE "release\windows"
+          $installer = Get-ChildItem $releaseDir -Filter "VibeRent_*_x64-setup.exe" | Select-Object -First 1
+          $assets = @($installer.FullName, (Join-Path $releaseDir "SHA256SUMS.txt"), (Join-Path $releaseDir "latest.json"))
+
+          $headers = @{
+            Accept = "application/vnd.github+json"
+            Authorization = "Bearer $env:GH_TOKEN"
+            "X-GitHub-Api-Version" = "2022-11-28"
+          }
+          $repository = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$env:RELEASE_REPOSITORY"
+          $unexpected = @()
+          try {
+            $tree = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$env:RELEASE_REPOSITORY/git/trees/$($repository.default_branch)?recursive=1"
+            $unexpected = @($tree.tree | Where-Object { $_.type -eq "blob" -and $_.path -ne "README.md" })
+          } catch {
+            $statusCode = [int]$_.Exception.Response.StatusCode
+            if ($statusCode -ne 409) { throw }
+            $readme = "# VibeRent Releases`n`nOfficial customer release downloads for VibeRent.`n"
+            $body = @{
+              message = "Initialize release repository"
+              content = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($readme))
+            } | ConvertTo-Json
+            Invoke-RestMethod -Method Put -Headers $headers -ContentType "application/json" -Body $body -Uri "https://api.github.com/repos/$env:RELEASE_REPOSITORY/contents/README.md" | Out-Null
+            Write-Host "Initialized the public release repository with README.md."
+          }
+          if ($unexpected.Count -gt 0) {
+            throw "The public release repository contains unexpected files: $($unexpected.path -join ', ')"
+          }
+
+          & gh release view $tag --repo $env:RELEASE_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            & gh release upload $tag @assets --clobber --repo $env:RELEASE_REPOSITORY
+            & gh release edit $tag --repo $env:RELEASE_REPOSITORY --latest --title "VibeRent $tag"
+          } else {
+            & gh release create $tag @assets --repo $env:RELEASE_REPOSITORY --latest --title "VibeRent $tag" --notes "VibeRent $tag"
+          }
+          if ($LASTEXITCODE -ne 0) { throw "Publishing the customer release failed." }
