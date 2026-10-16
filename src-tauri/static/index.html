@@ -1,7 +1,83 @@
 <!doctype html>
 <html lang="en">
-  <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Starting VibeRent…</title></head>
-  <body style="margin:0;display:grid;min-height:100vh;place-items:center;background:#f8fafc;color:#19191f;font-family:system-ui">
-    <main style="text-align:center"><h1 style="font-size:24px">Starting VibeRent…</h1><p style="color:#667085">Preparing the local rental database.</p></main>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>VibeRent Launcher</title>
+    <style>
+      :root { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; color: #19191f; background: #f8fafc; }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; }
+      main { width: 100%; padding: 22px 24px 18px; }
+      .brand { display: flex; align-items: center; gap: 11px; margin-bottom: 18px; }
+      .logo { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 12px; background: #006fe6; color: white; font-size: 20px; font-weight: 800; box-shadow: 0 6px 18px rgba(0,111,230,.22); }
+      h1 { margin: 0; font-size: 20px; line-height: 1.2; letter-spacing: -.02em; }
+      .eyebrow { margin: 2px 0 0; color: #667085; font-size: 12px; }
+      .status { display: flex; gap: 10px; align-items: flex-start; padding: 13px 14px; border: 1px solid #e3e8ef; border-radius: 12px; background: white; box-shadow: 0 1px 2px rgba(16,24,40,.04); }
+      .dot { flex: 0 0 auto; width: 9px; height: 9px; margin-top: 5px; border-radius: 999px; background: #f59e0b; box-shadow: 0 0 0 4px #fef3c7; }
+      .dot.ready { background: #12a150; box-shadow: 0 0 0 4px #dcfce7; }
+      .dot.error { background: #dc2626; box-shadow: 0 0 0 4px #fee2e2; }
+      #message { margin: 0; font-size: 14px; font-weight: 650; }
+      #detail { margin: 3px 0 0; color: #667085; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 320px; }
+      .actions { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; margin-top: 14px; }
+      button { min-height: 38px; border: 1px solid #d7dee8; border-radius: 10px; padding: 0 12px; background: white; color: #344054; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+      button:hover:not(:disabled) { background: #f1f5f9; }
+      button:focus-visible { outline: 3px solid rgba(0,111,230,.25); outline-offset: 1px; }
+      button:disabled { cursor: not-allowed; opacity: .48; }
+      #open { border-color: #006fe6; background: #006fe6; color: white; }
+      #open:hover:not(:disabled) { background: #005fc5; }
+      #exit { color: #b42318; }
+      #logs { display: none; width: 100%; margin-top: 8px; color: #b42318; }
+      @media (prefers-reduced-motion: no-preference) { .dot:not(.ready):not(.error) { animation: pulse 1.4s ease-in-out infinite; } }
+      @keyframes pulse { 50% { opacity: .45; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="brand">
+        <div class="logo" aria-hidden="true">V</div>
+        <div><h1>VibeRent</h1><p class="eyebrow">Desktop service launcher</p></div>
+      </div>
+      <section class="status" role="status" aria-live="polite">
+        <span id="dot" class="dot"></span>
+        <div><p id="message">Starting VibeRent…</p><p id="detail">Preparing local services</p></div>
+      </section>
+      <div class="actions">
+        <button id="open" disabled>Open VibeRent</button>
+        <button id="restart" disabled>Restart Services</button>
+        <button id="exit">Stop &amp; Exit</button>
+      </div>
+      <button id="logs">View Logs</button>
+    </main>
+    <script>
+      const invoke = window.__TAURI__.core.invoke;
+      const elements = {
+        dot: document.querySelector("#dot"), message: document.querySelector("#message"),
+        detail: document.querySelector("#detail"), open: document.querySelector("#open"),
+        restart: document.querySelector("#restart"), logs: document.querySelector("#logs"),
+      };
+
+      function render(status) {
+        elements.message.textContent = status.message;
+        elements.detail.textContent = status.detail || status.url;
+        elements.dot.className = `dot ${status.ready ? "ready" : status.failed ? "error" : ""}`;
+        elements.open.disabled = !status.ready;
+        elements.restart.disabled = status.busy;
+        elements.logs.style.display = status.failed ? "block" : "none";
+      }
+
+      async function refresh() {
+        try { render(await invoke("launcher_status")); } catch (error) {
+          render({ message: "Launcher unavailable", detail: String(error), failed: true, busy: false, ready: false });
+        }
+      }
+
+      elements.open.addEventListener("click", () => invoke("open_viberent"));
+      elements.restart.addEventListener("click", async () => { try { await invoke("restart_services"); } catch {} });
+      document.querySelector("#exit").addEventListener("click", () => invoke("stop_and_exit"));
+      elements.logs.addEventListener("click", () => invoke("view_logs"));
+      refresh();
+      setInterval(refresh, 500);
+    </script>
   </body>
 </html>

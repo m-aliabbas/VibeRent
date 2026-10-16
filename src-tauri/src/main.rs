@@ -5,20 +5,63 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::net::{TcpStream, UdpSocket};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use mdns_sd::{ServiceDaemon, ServiceInfo};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
-use tauri::{Manager, RunEvent};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::tray::TrayIconBuilder;
+use tauri::{AppHandle, Manager, RunEvent};
+use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
-struct ServerProcess(Mutex<Option<CommandChild>>);
-struct MdnsResponder(Mutex<Option<ServiceDaemon>>);
+struct LauncherState {
+    process: Mutex<Option<CommandChild>>,
+    mdns: Mutex<Option<ServiceDaemon>>,
+    status: Mutex<LauncherStatus>,
+    lifecycle: tokio::sync::Mutex<()>,
+    generation: AtomicU64,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LauncherStatus {
+    message: String,
+    detail: String,
+    url: String,
+    ready: bool,
+    busy: bool,
+    failed: bool,
+}
+
+impl Default for LauncherState {
+    fn default() -> Self {
+        Self {
+            process: Mutex::new(None),
+            mdns: Mutex::new(None),
+            status: Mutex::new(LauncherStatus {
+                message: "Starting VibeRent…".into(),
+                detail: "Preparing local services".into(),
+                url: PREFERRED_APP_URL.into(),
+                ready: false,
+                busy: true,
+                failed: false,
+            }),
+            lifecycle: tokio::sync::Mutex::new(()),
+            generation: AtomicU64::new(0),
+        }
+    }
+}
 
 const DESKTOP_PORT: u16 = 80;
 const DESKTOP_HOSTNAME: &str = "rent.local";
+const PREFERRED_APP_URL: &str = "http://rent.local";
+const FALLBACK_APP_URL: &str = "http://localhost";
+const HEALTH_URL: &str = "http://127.0.0.1/health";
 
 #[tauri::command]
 fn save_download(
@@ -300,131 +343,580 @@ fn packaged_environment(app: &tauri::AppHandle) -> HashMap<String, String> {
     HashMap::new()
 }
 
-async fn wait_for_server(port: u16, timeout: Duration) -> bool {
+#[derive(PartialEq, Eq)]
+enum HealthProbe {
+    VibeRent,
+    Occupied,
+    Unavailable,
+}
+
+async fn health_probe() -> HealthProbe {
+    if TcpStream::connect_timeout(
+        &([127, 0, 0, 1], DESKTOP_PORT).into(),
+        Duration::from_millis(300),
+    )
+    .is_err()
+    {
+        return HealthProbe::Unavailable;
+    }
+
+    let client = match reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(1))
+        .timeout(Duration::from_secs(2))
+        .build()
+    {
+        Ok(client) => client,
+        Err(_) => return HealthProbe::Occupied,
+    };
+    match client.get(HEALTH_URL).send().await {
+        Ok(response)
+            if response.status().is_success()
+                && response
+                    .headers()
+                    .get("x-viberent-service")
+                    .and_then(|value| value.to_str().ok())
+                    == Some("viberent") =>
+        {
+            HealthProbe::VibeRent
+        }
+        _ => HealthProbe::Occupied,
+    }
+}
+
+async fn is_viberent_url(url: &str) -> bool {
+    let Ok(client) = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(1))
+        .timeout(Duration::from_secs(2))
+        .build()
+    else {
+        return false;
+    };
+    matches!(
+        client.get(format!("{url}/health")).send().await,
+        Ok(response)
+            if response.status().is_success()
+                && response
+                    .headers()
+                    .get("x-viberent-service")
+                    .and_then(|value| value.to_str().ok())
+                    == Some("viberent")
+    )
+}
+
+async fn select_browser_url() -> &'static str {
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(4) {
+        if is_viberent_url(PREFERRED_APP_URL).await {
+            return PREFERRED_APP_URL;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    FALLBACK_APP_URL
+}
+
+async fn wait_for_server(timeout: Duration) -> bool {
     let started = Instant::now();
     while started.elapsed() < timeout {
-        if TcpStream::connect(("127.0.0.1", port)).is_ok() {
+        if health_probe().await == HealthProbe::VibeRent {
             return true;
         }
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        tokio::time::sleep(Duration::from_millis(350)).await;
     }
     false
 }
 
+fn set_status(app: &AppHandle, message: &str, detail: &str, ready: bool, busy: bool, failed: bool) {
+    let state = app.state::<LauncherState>();
+    let current_url = state
+        .status
+        .lock()
+        .expect("launcher status lock")
+        .url
+        .clone();
+    *state.status.lock().expect("launcher status lock") = LauncherStatus {
+        message: message.into(),
+        detail: detail.into(),
+        url: current_url,
+        ready,
+        busy,
+        failed,
+    };
+}
+
+fn set_browser_url(app: &AppHandle, url: &str) {
+    app.state::<LauncherState>()
+        .status
+        .lock()
+        .expect("launcher status lock")
+        .url = url.into();
+}
+
+fn log_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .app_local_data_dir()
+        .map_err(|error| error.to_string())?
+        .join("startup.log"))
+}
+
+fn open_browser(app: &AppHandle) -> Result<(), String> {
+    let url = app
+        .state::<LauncherState>()
+        .status
+        .lock()
+        .expect("launcher status lock")
+        .url
+        .clone();
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|error| error.to_string())
+}
+
+fn stop_owned_services(app: &AppHandle) -> bool {
+    let state = app.state::<LauncherState>();
+    state.generation.fetch_add(1, Ordering::SeqCst);
+    if let Some(responder) = state.mdns.lock().expect("mDNS responder lock").take() {
+        let _ = responder.shutdown();
+    }
+    let stopped = if let Some(child) = state.process.lock().expect("server process lock").take() {
+        let _ = child.kill();
+        true
+    } else {
+        false
+    };
+    stopped
+}
+
+async fn start_services_unlocked(app: AppHandle, open_when_ready: bool) -> Result<(), String> {
+    let state = app.state::<LauncherState>();
+    let log = log_path(&app)?;
+
+    match health_probe().await {
+        HealthProbe::VibeRent => {
+            append_log(
+                &log,
+                "Connected to an existing VibeRent service on port 80.",
+            );
+            let browser_url = select_browser_url().await;
+            set_browser_url(&app, browser_url);
+            set_status(
+                &app,
+                "VibeRent services are running",
+                browser_url,
+                true,
+                false,
+                false,
+            );
+            if open_when_ready {
+                open_browser(&app)?;
+            }
+            return Ok(());
+        }
+        HealthProbe::Occupied => {
+            let detail = "Port 80 is being used by another application. Close it, then select Restart Services.";
+            append_log(&log, detail);
+            set_status(
+                &app,
+                "Failed to start — View Logs",
+                detail,
+                false,
+                false,
+                true,
+            );
+            return Err(detail.into());
+        }
+        HealthProbe::Unavailable => {}
+    }
+
+    set_status(
+        &app,
+        "Starting database…",
+        "Preparing VibeRent local data",
+        false,
+        true,
+        false,
+    );
+    append_log(&log, "Starting database and desktop runtime.");
+
+    let app_data = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|error| error.to_string())?;
+    let data = app_data.join("data");
+    let backups = app_data.join("backups");
+    let private_files = data.join("private-files");
+    std::fs::create_dir_all(&data).map_err(|error| error.to_string())?;
+    std::fs::create_dir_all(&backups).map_err(|error| error.to_string())?;
+    std::fs::create_dir_all(&private_files).map_err(|error| error.to_string())?;
+
+    let standalone = standalone_directory(&app)?;
+    set_status(
+        &app,
+        "Starting backend…",
+        "Launching the local VibeRent server",
+        false,
+        true,
+        false,
+    );
+    let mut command = app
+        .shell()
+        .sidecar("next-server")
+        .map_err(|error| error.to_string())?
+        .current_dir(&standalone)
+        .arg("server.js");
+    for (key, value) in packaged_environment(&app) {
+        command = command.env(key, value);
+    }
+    #[cfg(target_os = "macos")]
+    if let Ok(resources) = app.path().resource_dir() {
+        command = command.env(
+            "DYLD_LIBRARY_PATH",
+            resources.join("bin").to_string_lossy().to_string(),
+        );
+    }
+    let mut trusted_origins = vec![
+        http_origin(DESKTOP_HOSTNAME, DESKTOP_PORT),
+        http_origin("127.0.0.1", DESKTOP_PORT),
+        http_origin("localhost", DESKTOP_PORT),
+    ];
+    if let Some(ip) = local_lan_ip() {
+        trusted_origins.push(http_origin(&ip.to_string(), DESKTOP_PORT));
+    }
+    command = command
+        .env("PORT", DESKTOP_PORT.to_string())
+        .env("HOSTNAME", "0.0.0.0")
+        .env("NODE_ENV", "production")
+        .env("NEXT_TELEMETRY_DISABLED", "1")
+        .env("VIBERENT_DESKTOP", "1")
+        .env("VIBERENT_VERSION", env!("CARGO_PKG_VERSION"))
+        .env("VIBERENT_DATA_DIR", data.to_string_lossy().to_string())
+        .env(
+            "DATABASE_URL",
+            data.join("viberent.db").to_string_lossy().to_string(),
+        )
+        .env(
+            "PRIVATE_FILE_STORAGE_ROOT",
+            private_files.to_string_lossy().to_string(),
+        )
+        .env("BACKUP_ROOT", backups.to_string_lossy().to_string())
+        .env(
+            "LICENSE_CACHE_PATH",
+            data.join("license-cache.enc").to_string_lossy().to_string(),
+        )
+        .env(
+            "GOOGLE_DRIVE_SESSION_PATH",
+            data.join("google-drive-session.enc")
+                .to_string_lossy()
+                .to_string(),
+        )
+        .env(
+            "VIBERENT_MIGRATIONS_DIR",
+            standalone.join("drizzle").to_string_lossy().to_string(),
+        )
+        .env("BETTER_AUTH_URL", PREFERRED_APP_URL)
+        .env(
+            "GOOGLE_DRIVE_REDIRECT_URI",
+            http_origin("127.0.0.1", DESKTOP_PORT),
+        )
+        .env("BETTER_AUTH_TRUSTED_ORIGINS", trusted_origins.join(","));
+
+    let (mut receiver, child) = command.spawn().map_err(|error| error.to_string())?;
+    let generation = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
+    *state.process.lock().expect("server process lock") = Some(child);
+    let output_app = app.clone();
+    let output_log = log.clone();
+    tauri::async_runtime::spawn(async move {
+        while let Some(event) = receiver.recv().await {
+            match event {
+                CommandEvent::Stdout(bytes) => append_log(
+                    &output_log,
+                    &format!("SERVER: {}", String::from_utf8_lossy(&bytes)),
+                ),
+                CommandEvent::Stderr(bytes) => append_log(
+                    &output_log,
+                    &format!("SERVER_ERROR: {}", String::from_utf8_lossy(&bytes)),
+                ),
+                CommandEvent::Error(error) => {
+                    append_log(&output_log, &format!("SERVER_EVENT_ERROR: {error}"))
+                }
+                CommandEvent::Terminated(payload) => {
+                    append_log(&output_log, &format!("SERVER_EXIT: {:?}", payload.code));
+                    if output_app
+                        .state::<LauncherState>()
+                        .generation
+                        .load(Ordering::SeqCst)
+                        == generation
+                    {
+                        set_status(
+                            &output_app,
+                            "Failed to start — View Logs",
+                            "The VibeRent server stopped unexpectedly.",
+                            false,
+                            false,
+                            true,
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+    });
+
+    set_status(
+        &app,
+        "Waiting for server…",
+        "Checking the local VibeRent health endpoint",
+        false,
+        true,
+        false,
+    );
+    if !wait_for_server(Duration::from_secs(90)).await {
+        let detail = "The local server did not become healthy within 90 seconds.";
+        append_log(&log, detail);
+        stop_owned_services(&app);
+        set_status(
+            &app,
+            "Failed to start — View Logs",
+            detail,
+            false,
+            false,
+            true,
+        );
+        return Err(detail.into());
+    }
+
+    match start_mdns(DESKTOP_PORT) {
+        Ok(responder) => {
+            append_log(&log, "VibeRent advertised at http://rent.local via mDNS.");
+            *state.mdns.lock().expect("mDNS responder lock") = Some(responder);
+        }
+        Err(error) => append_log(
+            &log,
+            &format!("MDNS_WARNING: Could not advertise rent.local: {error}"),
+        ),
+    }
+    let browser_url = select_browser_url().await;
+    set_browser_url(&app, browser_url);
+    if browser_url == FALLBACK_APP_URL {
+        append_log(
+            &log,
+            "MDNS_WARNING: rent.local did not resolve; using http://localhost.",
+        );
+    }
+    append_log(&log, &format!("VibeRent is ready at {browser_url}."));
+    set_status(
+        &app,
+        "VibeRent services are running",
+        browser_url,
+        true,
+        false,
+        false,
+    );
+    if open_when_ready {
+        open_browser(&app)?;
+    }
+    Ok(())
+}
+
+async fn start_services(app: AppHandle, open_when_ready: bool) -> Result<(), String> {
+    let state = app.state::<LauncherState>();
+    let _guard = state.lifecycle.lock().await;
+    let result = start_services_unlocked(app.clone(), open_when_ready).await;
+    if let Err(error) = &result {
+        if let Ok(path) = log_path(&app) {
+            append_log(&path, &format!("LAUNCHER_ERROR: {error}"));
+        }
+        if !app
+            .state::<LauncherState>()
+            .status
+            .lock()
+            .expect("launcher status lock")
+            .failed
+        {
+            set_status(
+                &app,
+                "Failed to start — View Logs",
+                error,
+                false,
+                false,
+                true,
+            );
+        }
+    }
+    result
+}
+
+async fn restart_services_inner(app: AppHandle) -> Result<(), String> {
+    let state = app.state::<LauncherState>();
+    let _guard = state.lifecycle.lock().await;
+    set_status(
+        &app,
+        "Restarting VibeRent…",
+        "Stopping local services safely",
+        false,
+        true,
+        false,
+    );
+    if stop_owned_services(&app) {
+        let started = Instant::now();
+        while TcpStream::connect(("127.0.0.1", DESKTOP_PORT)).is_ok()
+            && started.elapsed() < Duration::from_secs(8)
+        {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+    let result = start_services_unlocked(app.clone(), true).await;
+    if let Err(error) = &result {
+        if let Ok(path) = log_path(&app) {
+            append_log(&path, &format!("RESTART_ERROR: {error}"));
+        }
+        if !app
+            .state::<LauncherState>()
+            .status
+            .lock()
+            .expect("launcher status lock")
+            .failed
+        {
+            set_status(
+                &app,
+                "Failed to start — View Logs",
+                error,
+                false,
+                false,
+                true,
+            );
+        }
+    }
+    result
+}
+
+#[tauri::command]
+fn launcher_status(app: AppHandle) -> LauncherStatus {
+    app.state::<LauncherState>()
+        .status
+        .lock()
+        .expect("launcher status lock")
+        .clone()
+}
+
+#[tauri::command]
+async fn open_viberent(app: AppHandle) -> Result<(), String> {
+    if health_probe().await != HealthProbe::VibeRent {
+        let detail = "VibeRent is not responding. Select Restart Services and try again.";
+        set_status(
+            &app,
+            "Failed to start — View Logs",
+            detail,
+            false,
+            false,
+            true,
+        );
+        return Err(detail.into());
+    }
+    open_browser(&app)
+}
+
+#[tauri::command]
+async fn restart_services(app: AppHandle) -> Result<(), String> {
+    restart_services_inner(app).await
+}
+
+#[tauri::command]
+fn view_logs(app: AppHandle) -> Result<(), String> {
+    let path = log_path(&app)?.to_string_lossy().to_string();
+    app.opener()
+        .open_path(path, None::<&str>)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn stop_and_exit(app: AppHandle) {
+    app.exit(0);
+}
+
+fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
+    let open = MenuItem::with_id(app, "open-viberent", "Open VibeRent", true, None::<&str>)?;
+    let restart = MenuItem::with_id(
+        app,
+        "restart-services",
+        "Restart Services",
+        true,
+        None::<&str>,
+    )?;
+    let separator = PredefinedMenuItem::separator(app)?;
+    let exit = MenuItem::with_id(app, "exit", "Exit", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&open, &restart, &separator, &exit])?;
+    let mut tray = TrayIconBuilder::with_id("viberent-tray")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .tooltip("VibeRent services");
+    if let Some(icon) = app.default_window_icon() {
+        tray = tray.icon(icon.clone());
+    }
+    tray.on_menu_event(|app, event| match event.id().as_ref() {
+        "open-viberent" => {
+            let handle = app.clone();
+            tauri::async_runtime::spawn(async move {
+                if wait_for_server(Duration::from_secs(30)).await {
+                    let _ = open_browser(&handle);
+                } else if let Some(window) = handle.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            });
+        }
+        "restart-services" => {
+            let handle = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let _ = restart_services_inner(handle).await;
+            });
+        }
+        "exit" => app.exit(0),
+        _ => {}
+    })
+    .build(app)?;
+    Ok(())
+}
+
 fn main() {
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            let handle = app.clone();
+            tauri::async_runtime::spawn(async move {
+                if wait_for_server(Duration::from_secs(30)).await {
+                    let _ = open_browser(&handle);
+                } else if let Some(window) = handle.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            });
+        }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![save_download, download_update])
-        .manage(ServerProcess(Mutex::new(None)))
-        .manage(MdnsResponder(Mutex::new(None)))
+        .invoke_handler(tauri::generate_handler![
+            save_download,
+            download_update,
+            launcher_status,
+            open_viberent,
+            restart_services,
+            view_logs,
+            stop_and_exit
+        ])
+        .manage(LauncherState::default())
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                window.app_handle().exit(0);
+            }
+        })
         .setup(|app| {
             let handle = app.handle().clone();
-            let window = app.get_webview_window("main").ok_or("Main window not found")?;
-
-            #[cfg(not(debug_assertions))]
-            {
-                let app_data = app.path().app_local_data_dir()?;
-                let data = app_data.join("data");
-                let backups = app_data.join("backups");
-                let private_files = data.join("private-files");
-                std::fs::create_dir_all(&data)?;
-                std::fs::create_dir_all(&backups)?;
-                std::fs::create_dir_all(&private_files)?;
-                let log_path = app_data.join("startup.log");
-                append_log(&log_path, "=== VibeRent desktop start ===");
-
-                let port = DESKTOP_PORT;
-                if TcpStream::connect(("127.0.0.1", port)).is_ok() {
-                    append_log(&log_path, "Startup blocked because port 80 is already in use.");
-                    let _ = window.eval("document.body.innerHTML='<main style=\"font-family:system-ui;padding:48px\"><h2>VibeRent could not start</h2><p>Port 80 is already in use. Close the other application, IIS, or HTTP.sys reservation and start VibeRent again.</p></main>'");
-                    return Ok(());
-                }
-
-                let standalone = standalone_directory(&handle).map_err(std::io::Error::other)?;
-                let mut command = handle
-                    .shell()
-                    .sidecar("next-server")?
-                    .current_dir(&standalone)
-                    .arg("server.js");
-                let environment = packaged_environment(&handle);
-                for (key, value) in environment {
-                    command = command.env(key, value);
-                }
-                let mut trusted_origins = vec![
-                    http_origin(DESKTOP_HOSTNAME, port),
-                    http_origin("127.0.0.1", port),
-                    http_origin("localhost", port),
-                ];
-                if let Some(ip) = local_lan_ip() {
-                    trusted_origins.push(http_origin(&ip.to_string(), port));
-                }
-                let application_origin = http_origin(DESKTOP_HOSTNAME, port);
-                let loopback_origin = http_origin("127.0.0.1", port);
-                command = command
-                    .env("PORT", port.to_string())
-                    .env("HOSTNAME", "0.0.0.0")
-                    .env("NODE_ENV", "production")
-                    .env("NEXT_TELEMETRY_DISABLED", "1")
-                    .env("VIBERENT_DESKTOP", "1")
-                    .env("VIBERENT_VERSION", env!("CARGO_PKG_VERSION"))
-                    .env("VIBERENT_DATA_DIR", data.to_string_lossy().to_string())
-                    .env("DATABASE_URL", data.join("viberent.db").to_string_lossy().to_string())
-                    .env("PRIVATE_FILE_STORAGE_ROOT", private_files.to_string_lossy().to_string())
-                    .env("BACKUP_ROOT", backups.to_string_lossy().to_string())
-                    .env("LICENSE_CACHE_PATH", data.join("license-cache.enc").to_string_lossy().to_string())
-                    .env("GOOGLE_DRIVE_SESSION_PATH", data.join("google-drive-session.enc").to_string_lossy().to_string())
-                    .env("VIBERENT_MIGRATIONS_DIR", standalone.join("drizzle").to_string_lossy().to_string())
-                    .env("BETTER_AUTH_URL", &application_origin)
-                    .env("GOOGLE_DRIVE_REDIRECT_URI", &loopback_origin)
-                    .env("BETTER_AUTH_TRUSTED_ORIGINS", trusted_origins.join(","));
-
-                let (mut receiver, child) = command.spawn()?;
-                *app.state::<ServerProcess>().0.lock().expect("server process lock") = Some(child);
-                let log_for_output = log_path.clone();
-                tauri::async_runtime::spawn(async move {
-                    while let Some(event) = receiver.recv().await {
-                        match event {
-                            CommandEvent::Stdout(bytes) => append_log(&log_for_output, &format!("SERVER: {}", String::from_utf8_lossy(&bytes))),
-                            CommandEvent::Stderr(bytes) => append_log(&log_for_output, &format!("SERVER_ERROR: {}", String::from_utf8_lossy(&bytes))),
-                            CommandEvent::Error(error) => append_log(&log_for_output, &format!("SERVER_EVENT_ERROR: {error}")),
-                            CommandEvent::Terminated(payload) => append_log(&log_for_output, &format!("SERVER_EXIT: {:?}", payload.code)),
-                            _ => {}
-                        }
-                    }
-                });
-
-                let handle_for_ready = handle.clone();
-                let log_for_ready = log_path.clone();
-                tauri::async_runtime::spawn(async move {
-                    if wait_for_server(port, Duration::from_secs(60)).await {
-                        let navigation_origin = match start_mdns(port) {
-                            Ok(responder) => {
-                                append_log(&log_for_ready, "VibeRent advertised at http://rent.local via mDNS.");
-                                *handle_for_ready
-                                    .state::<MdnsResponder>()
-                                    .0
-                                    .lock()
-                                    .expect("mDNS responder lock") = Some(responder);
-                                application_origin
-                            }
-                            Err(error) => {
-                                append_log(
-                                    &log_for_ready,
-                                    &format!("MDNS_ERROR: Could not advertise rent.local: {error}"),
-                                );
-                                loopback_origin
-                            }
-                        };
-                        let _ = window.eval(&format!(
-                            "window.location.replace('{navigation_origin}')"
-                        ));
-                    } else {
-                        let _ = window.eval("document.body.innerHTML='<main style=\"font-family:system-ui;padding:48px\"><h2>VibeRent could not start</h2><p>Open the startup log in the VibeRent application-data folder.</p></main>'");
-                    }
-                });
+            setup_tray(app)?;
+            if let Ok(path) = log_path(&handle) {
+                append_log(&path, "=== VibeRent launcher start ===");
             }
-
+            tauri::async_runtime::spawn(async move {
+                let _ = start_services(handle, true).await;
+            });
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -432,24 +924,7 @@ fn main() {
 
     app.run(|handle, event| {
         if matches!(event, RunEvent::Exit | RunEvent::ExitRequested { .. }) {
-            if let Some(responder) = handle
-                .state::<MdnsResponder>()
-                .0
-                .lock()
-                .expect("mDNS responder lock")
-                .take()
-            {
-                let _ = responder.shutdown();
-            }
-            if let Some(child) = handle
-                .state::<ServerProcess>()
-                .0
-                .lock()
-                .expect("server process lock")
-                .take()
-            {
-                let _ = child.kill();
-            }
+            stop_owned_services(handle);
         }
     });
 }

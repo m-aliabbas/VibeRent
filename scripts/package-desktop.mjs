@@ -55,6 +55,21 @@ const sidecar = path.join(binDirectory, `next-server-${triple}${extension}`);
 await rm(sidecar, { force: true });
 await copyFile(process.execPath, sidecar);
 
+// Homebrew's macOS Node executable links libnode dynamically. Bundle that
+// library beside the other desktop resources and point the spawned sidecar at
+// it from Rust so a packaged build does not fail before server.js can start.
+if (process.platform === "darwin") {
+  const libnodeName = `libnode.${process.versions.modules}.dylib`;
+  const libnodeSource = path.resolve(path.dirname(process.execPath), "..", "lib", libnodeName);
+  await requirePath(
+    libnodeSource,
+    `The macOS Node runtime requires ${libnodeName}, but it was not found beside ${process.execPath}.`,
+  );
+  const libnodeDestination = path.join(binDirectory, libnodeName);
+  await rm(libnodeDestination, { force: true });
+  await copyFile(libnodeSource, libnodeDestination);
+}
+
 const packagedEnv = path.join(binDirectory, ".env");
 const localEnv = path.join(root, "desktop", ".env");
 try {

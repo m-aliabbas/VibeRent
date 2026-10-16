@@ -1,12 +1,12 @@
 # VibeRent Windows desktop release
 
-VibeRent is packaged as a Tauri v2 application. The installer contains the standalone Next.js server and a Node.js sidecar; it does not contain a second FastAPI backend.
+VibeRent is packaged as a Tauri v2 launcher. The installer contains the standalone Next.js server and a Node.js sidecar; it does not contain a second FastAPI backend. Tauri displays only a small service-status window. The complete application runs in the user's default browser at `http://rent.local`, with `http://localhost` as an automatic fallback.
 
-The installer downloads Microsoft WebView2 only when the target PC needs it. This keeps WebView2's roughly 127 MB offline runtime out of the VibeRent installer, so an internet connection is required during installation on PCs where WebView2 is not already available.
+The installer does not download WebView2. The small Tauri launcher still requires the WebView2 runtime that is included with supported Windows 10 and Windows 11 installations; repair or install WebView2 separately on an unusually stripped-down machine.
 
 ## Runtime data
 
-The Tauri shell starts one server on TCP port `80`, binds it to `0.0.0.0`, and advertises `rent.local` as an HTTP service through mDNS. The desktop window and trusted LAN clients use `http://rent.local`; `http://127.0.0.1` and `http://localhost` remain loopback fallbacks. The application refuses to start if port 80 is already occupied, including by IIS or an HTTP.sys reservation. Permit inbound TCP 80 and UDP 5353 only on private networks in Windows Firewall; do not expose the service to public networks or the internet. Runtime state is stored outside the installation directory under the current user's Tauri local-data directory (`com.vibeexe.viberent`):
+The Tauri launcher starts one server on TCP port `80`, binds it to `0.0.0.0`, and verifies `http://127.0.0.1/health`. It then verifies `http://rent.local/health`; when that signed response succeeds it opens `http://rent.local`, otherwise it opens `http://localhost`. Trusted LAN clients use the port-free `rent.local` URL through mDNS. If port 80 already exposes the signed VibeRent health response, the launcher connects without starting a second server; any other listener produces a friendly port-conflict error. Permit inbound TCP 80 and UDP 5353 only on private networks in Windows Firewall; do not expose the service to public networks or the internet. Runtime state is stored outside the installation directory under the current user's Tauri local-data directory (`com.vibeexe.viberent`):
 
 - `data/viberent.db` — SQLite database
 - `data/private-files/` — vehicle photos and documents
@@ -14,6 +14,8 @@ The Tauri shell starts one server on TCP port `80`, binds it to `0.0.0.0`, and a
 - `data/google-drive-session.enc` — locally encrypted Google OAuth session
 - `backups/` — manual, automatic, and pre-restore archives
 - `startup.log` — desktop startup diagnostics
+
+The launcher owns only the Node sidecar it starts. Restart, launcher-window close, **Stop & Exit**, and tray **Exit** terminate that owned process. Closing a browser tab does not stop VibeRent. The official Tauri single-instance plugin prevents duplicate launchers; opening the executable again asks the running launcher to reopen the browser instead.
 
 Installing an update does not replace these files. Do not move the SQLite database to OneDrive, Google Drive sync, or a network share. Use the application backup workflow instead.
 
