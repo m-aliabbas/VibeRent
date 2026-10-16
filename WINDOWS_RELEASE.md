@@ -2,6 +2,8 @@
 
 VibeRent is packaged as a Tauri v2 application. The installer contains the standalone Next.js server and a Node.js sidecar; it does not contain a second FastAPI backend.
 
+The installer downloads Microsoft WebView2 only when the target PC needs it. This keeps WebView2's roughly 127 MB offline runtime out of the VibeRent installer, so an internet connection is required during installation on PCs where WebView2 is not already available.
+
 ## Runtime data
 
 The Tauri shell starts one server on TCP port `80`, binds it to `0.0.0.0`, and advertises `rent.local` as an HTTP service through mDNS. The desktop window and trusted LAN clients use `http://rent.local`; `http://127.0.0.1` and `http://localhost` remain loopback fallbacks. The application refuses to start if port 80 is already occupied, including by IIS or an HTTP.sys reservation. Permit inbound TCP 80 and UDP 5353 only on private networks in Windows Firewall; do not expose the service to public networks or the internet. Runtime state is stored outside the installation directory under the current user's Tauri local-data directory (`com.vibeexe.viberent`):

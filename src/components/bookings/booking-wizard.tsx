@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
-import { ArrowLeft, Check, Loader2, MessageCircle, Plus, ShieldAlert, X } from "lucide-react";
+import { ArrowLeft, CalendarClock, CarFront, Check, Loader2, MessageCircle, Plus, Search, ShieldAlert, X } from "lucide-react";
 
 import { clearBookingAction, confirmBookingAction, startBookingAction } from "@/app/actions/bookings";
 import { listCustomersAction, createCustomerAction } from "@/app/actions/customers";
@@ -12,6 +12,7 @@ import { createAgencyCityAction, listAgencyCitiesAction } from "@/app/actions/ca
 import { getBookingCnicAction, getGuarantorCnicAction, uploadBookingCnicAction, uploadGuarantorCnicAction } from "@/app/actions/booking-cnic";
 import { listDriversAction } from "@/app/actions/drivers";
 import { CnicDocumentDrawer } from "@/components/customers/cnic-document-drawer";
+import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { FormCombobox } from "@/components/forms/form-combobox";
 import { FormInput, FormSelect } from "@/components/forms/form-controls";
 import { Button } from "@/components/ui/button";
@@ -62,6 +63,8 @@ function isGuarantorComplete(value: GuarantorDraft) {
 // ─── Draft ──────────────────────────────────────────────────────────────────
 
 type Draft = {
+  bookingMode:"reservation"|"rent_now";
+  checkout:{odometer:number;fuelLevel:string;conditionNotes:string};
   fulfillmentType:"fleet"|"external";
   external:{supplierName:string;supplierPhone:string;vehicleMake:string;vehicleModel:string;vehicleYear:number;vehiclePlate:string;vehicleColor:string;pricingMode:"percentage"|"fixed";supplierSharePercent:number;supplierFixedCost:number};
   rentalMode:"self_drive"|"with_driver";
@@ -91,6 +94,8 @@ function defaultDraft(): Draft {
   returned.setHours(23, 59, 0, 0);
   const local = (date: Date) => new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
   return {
+  bookingMode:"reservation",
+  checkout:{odometer:0,fuelLevel:"Full",conditionNotes:"Vehicle handed over without visible damage"},
   fulfillmentType:"fleet",
   external:{supplierName:"",supplierPhone:"",vehicleMake:"",vehicleModel:"",vehicleYear:new Date().getFullYear(),vehiclePlate:"",vehicleColor:"",pricingMode:"percentage",supplierSharePercent:83,supplierFixedCost:0},
   rentalMode:"self_drive",
@@ -111,8 +116,6 @@ function defaultDraft(): Draft {
   overrideReason: "",
   };
 }
-
-const steps = ["Schedule", "Vehicle", "Customer", "Pricing", "Review"];
 
 // ─── Conflict detection (client-side, uses DB bookings) ──────────────────────
 
@@ -142,11 +145,13 @@ export function BookingWizard() {
   const [draft, setDraft] = useState<Draft>(defaultDraft);
   const [confirmed, setConfirmed] = useState("");
   const [agreementDelivery,setAgreementDelivery]=useState<{status:"sent"|"skipped"|"failed";message:string}>();
+  const [startedImmediately,setStartedImmediately]=useState(false);
   const [conflictMode, setConflictMode] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [bookingReference, setBookingReference] = useState<{ id: string; publicNumber: number }>();
   const [clearing,setClearing]=useState(false);
+  const [confirmationOpen,setConfirmationOpen]=useState(false);
 
   // Server data
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
@@ -220,6 +225,7 @@ export function BookingWizard() {
   const cities = Array.from(new Set([...savedCities,...vehicles.flatMap(vehicle=>vehicle.rateRules?.map(rule=>rule.destinationCity)??[])])).sort();
 
   const vehicle = fleetOptions.find((item) => item.id === draft.vehicleId);
+  const steps=draft.bookingMode==="rent_now"?["Schedule","Vehicle","Customer","Pricing","Review","Handover"]:["Schedule","Vehicle","Customer","Pricing","Review"];
   const days = Math.max(1, Math.ceil((new Date(draft.to).getTime() - new Date(draft.from).getTime()) / 86_400_000));
   const total = draft.dailyRate * days + (vehicle?.perKmRate??0) * draft.estimatedKm + draft.extras - draft.discount;
 
@@ -235,10 +241,10 @@ export function BookingWizard() {
     Boolean((draft.customerId || (draft.rentalMode==="with_driver"&&draft.renterSkipped)) && (!draft.guarantor || isGuarantorComplete(draft.guarantor))),
     draft.dailyRate > 0 && days >= (vehicle?.minimumDays??1) && draft.discount <= draft.dailyRate * days + draft.extras && (draft.fulfillmentType==="external"||draft.dailyRate === (vehicle?.rate??draft.dailyRate) || Boolean(draft.overrideReason.trim())) && (draft.fulfillmentType==="fleet"||(draft.external.pricingMode==="percentage"?draft.external.supplierSharePercent>=0&&draft.external.supplierSharePercent<=100:draft.external.supplierFixedCost>=0&&draft.external.supplierFixedCost<=total)),
     true,
+    draft.bookingMode!=="rent_now"||Boolean(Number.isInteger(draft.checkout.odometer)&&draft.checkout.odometer>=0&&draft.checkout.fuelLevel&&draft.checkout.conditionNotes.trim()),
   ][step];
 
-  async function confirm(event: FormEvent) {
-    event.preventDefault();
+  async function confirm() {
     if ((draft.fulfillmentType==="fleet"&&!vehicle) || (!draft.customerId && !draft.renterSkipped) || !bookingReference || submitting) return;
     setSubmitting(true);
     setSubmitError("");
@@ -263,8 +269,11 @@ export function BookingWizard() {
       estimatedKm: draft.estimatedKm,
       dailyRateOverride: draft.fulfillmentType==="external"?draft.dailyRate:vehicle && draft.dailyRate !== vehicle.rate ? draft.dailyRate : undefined,
       overrideReason: draft.overrideReason || undefined,
+      startImmediately:draft.bookingMode==="rent_now",
+      checkoutInspection:draft.bookingMode==="rent_now"?draft.checkout:undefined,
     });
     setSubmitting(false);
+    setConfirmationOpen(false);
     if (!result.ok) {
       setSubmitError(result.error.message);
       if (result.error.code === "BOOKING_CONFLICT") {
@@ -276,6 +285,7 @@ export function BookingWizard() {
     sessionStorage.removeItem("viberent-booking-draft");
     sessionStorage.removeItem("viberent-booking-reference");
     setAgreementDelivery(result.data.agreementDelivery);
+    setStartedImmediately(result.data.status==="checked_out");
     setConfirmed(result.data.id);
   }
 
@@ -296,10 +306,10 @@ export function BookingWizard() {
     return (
       <div className="mx-auto max-w-2xl rounded-xl border border-[#ABEFC6] bg-white p-8 text-center">
         <span className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-[#ECFDF3] text-[#067647]"><Check size={28} /></span>
-        <h1 className="mt-4 text-2xl font-bold">Booking confirmed</h1>
-        <p className="mt-2 text-sm text-[#667085]">Booking <strong className="text-[#101828]">#{bookingReference?.publicNumber}</strong> now persistently blocks {vehicle?.plate} for the selected interval.</p>
+        <h1 className="mt-4 text-2xl font-bold">{startedImmediately?"Rental started":"Booking confirmed"}</h1>
+        <p className="mt-2 text-sm text-[#667085]">Booking <strong className="text-[#101828]">#{bookingReference?.publicNumber}</strong> {startedImmediately?"was confirmed and checked out in one step":"now persistently blocks the selected vehicle for the agreed interval"}.</p>
         {agreementDelivery&&<p role="status" className={`mx-auto mt-4 flex max-w-lg items-start justify-center gap-2 rounded-lg border p-3 text-sm ${agreementDelivery.status==="sent"?"border-[#ABEFC6] bg-[#ECFDF3] text-[#067647]":agreementDelivery.status==="failed"?"border-[#FEDF89] bg-[#FFFAEB] text-[#93370D]":"border-[#D0D5DD] bg-[#F8FAFC] text-[#475467]"}`}><MessageCircle size={17} className="mt-0.5 shrink-0"/>{agreementDelivery.message}</p>}
-        <div className="mt-6 flex justify-center gap-2"><Button asChild><Link href="/bookings">View bookings</Link></Button></div>
+        <div className="mt-6 flex flex-wrap justify-center gap-2"><Button asChild variant="secondary"><Link href="/bookings">View bookings</Link></Button><Button asChild><Link href={`/bookings/${confirmed}`}>Open rental</Link></Button></div>
       </div>
     );
   }
@@ -324,11 +334,11 @@ export function BookingWizard() {
   }
 
   return (
-    <form onSubmit={confirm} className="space-y-6">
+    <form onSubmit={(event)=>event.preventDefault()} className="space-y-6">
       <Link href="/bookings" className="inline-flex items-center gap-2 text-sm font-semibold text-[#475467]"><ArrowLeft size={17} />Bookings</Link>
       <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between"><div><p className="text-xs font-bold uppercase tracking-wider text-[#006FE6]">New booking</p><h1 className="mt-1 text-2xl font-bold">Create a reservation</h1><p className="mt-1 text-sm text-[#667085]">Your progress is preserved in this browser session.</p></div>{bookingReference&&<div className="flex flex-col gap-2 sm:flex-row sm:items-stretch"><div className="w-fit rounded-xl border border-[#B2DDFF] bg-[#EFF8FF] px-4 py-2 text-sm text-[#175CD3]">Booking ID <strong className="ml-1 text-xl text-[#004EAA]">#{bookingReference.publicNumber}</strong></div><BookingCnicDrawer bookingReference={bookingReference}/><Button type="button" variant="secondary" disabled={clearing} onClick={()=>void clearBooking()}><X size={16}/>{clearing?"Clearing…":"Clear"}</Button></div>}</div>
       {dataError && <p className="rounded-lg border border-[#FEDF89] bg-[#FFFAEB] px-3 py-2 text-xs text-[#93370D]">{dataError}</p>}
-      <ol className="grid grid-cols-5 gap-1" aria-label="Booking steps">
+      <ol className={`grid gap-1 ${draft.bookingMode==="rent_now"?"grid-cols-3 sm:grid-cols-6":"grid-cols-5"}`} aria-label="Booking steps">
         {steps.map((label, index) => <li key={label} className={`rounded-lg px-2 py-2 text-center text-[11px] font-semibold sm:text-xs ${index === step ? "bg-[#006FE6] text-white" : index < step ? "bg-[#EAF4FF] text-[#0058B8]" : "bg-[#F2F4F7] text-[#667085]"}`}>{index + 1}. {label}</li>)}
       </ol>
       <section className="rounded-xl border border-[#E4E7EC] bg-white p-5">
@@ -337,12 +347,14 @@ export function BookingWizard() {
         {step === 2 && <CustomerStep draft={draft} setDraft={setDraft} customers={customers} bookingReference={bookingReference} onCustomerCreated={(c) => setCustomers((prev) => [...prev, c])} />}
         {step === 3 && <PricingStep draft={draft} setDraft={setDraft} days={days} total={total} />}
         {step === 4 && <Review draft={draft} days={days} total={total} vehicle={vehicle} customers={customers} />}
+        {step === 5 && draft.bookingMode==="rent_now" && <HandoverStep draft={draft} setDraft={setDraft}/>}
       </section>
       {submitError && <p role="alert" className="rounded-lg border border-[#FDA29B] bg-[#FEF3F2] p-3 text-sm text-[#B42318]">{submitError}</p>}
       <div className="flex justify-between">
         <Button type="button" variant="secondary" disabled={step === 0 || submitting} onClick={() => setStep(step - 1)}>Back</Button>
-        {step < 4 ? <Button type="button" disabled={!canContinue||!bookingReference} onClick={() => setStep(step + 1)}>Continue</Button> : <Button type="submit" disabled={submitting||!bookingReference}>{submitting ? "Confirming…" : `Confirm booking #${bookingReference?.publicNumber ?? ""}`}</Button>}
+        {step < steps.length-1 ? <Button type="button" disabled={!canContinue||!bookingReference} onClick={() => setStep(step + 1)}>Continue</Button> : <Button type="button" disabled={!canContinue||submitting||!bookingReference} onClick={()=>setConfirmationOpen(true)}>{draft.bookingMode==="rent_now"?`Review & start rental #${bookingReference?.publicNumber ?? ""}`:`Review & confirm booking #${bookingReference?.publicNumber ?? ""}`}</Button>}
       </div>
+      <ConfirmDialog open={confirmationOpen} onOpenChange={setConfirmationOpen} title={draft.bookingMode==="rent_now"?"Start this rental now?":"Confirm this booking?"} description={draft.bookingMode==="rent_now"?"This will create the booking and check the vehicle out using the handover details you reviewed. This action only runs after you confirm here.":"This will create the booking and block the selected vehicle for the chosen dates. Review the summary before confirming."} confirmLabel={draft.bookingMode==="rent_now"?"Confirm and start rental":"Confirm booking"} pendingLabel={draft.bookingMode==="rent_now"?"Starting rental…":"Confirming booking…"} confirmVariant="primary" pending={submitting} onConfirm={()=>void confirm()}/>
     </form>
   );
 }
@@ -394,6 +406,13 @@ function ScheduleStep({ draft, setDraft, cities, drivers, onCityCreated }: { dra
   async function addCity(){if(!cityInput.trim()||pending)return;setPending(true);setError("");const result=await createAgencyCityAction(cityInput);setPending(false);if(!result.ok){setError(result.error.message);return}onCityCreated(result.data.name);chooseCity(result.data.name)}
   return (
     <div className="grid gap-4 sm:grid-cols-2">
+      <div className="sm:col-span-2">
+        <span className="mb-2 block text-sm font-semibold text-[#344054]">What are you creating?</span>
+        <div className="grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label="Booking timing">
+          <button type="button" role="radio" aria-checked={draft.bookingMode==="reservation"} onClick={()=>setDraft({...draft,bookingMode:"reservation"})} className={`flex items-start gap-3 rounded-xl border p-4 text-left ${draft.bookingMode==="reservation"?"border-[#006FE6] bg-[#EFF8FF]":"border-[#E4E7EC] bg-white"}`}><CalendarClock className="mt-0.5 shrink-0 text-[#006FE6]" size={20}/><span><strong className="block text-sm">Pre-booking</strong><span className="mt-1 block text-xs text-[#667085]">Reserve now and complete the handover later.</span></span></button>
+          <button type="button" role="radio" aria-checked={draft.bookingMode==="rent_now"} onClick={()=>{const now=new Date();const local=new Date(now.getTime()-now.getTimezoneOffset()*60_000).toISOString().slice(0,16);setDraft({...draft,bookingMode:"rent_now",from:local})}} className={`flex items-start gap-3 rounded-xl border p-4 text-left ${draft.bookingMode==="rent_now"?"border-[#006FE6] bg-[#EFF8FF]":"border-[#E4E7EC] bg-white"}`}><CarFront className="mt-0.5 shrink-0 text-[#006FE6]" size={20}/><span><strong className="block text-sm">Rent now</strong><span className="mt-1 block text-xs text-[#667085]">Create the booking and start the rental immediately.</span></span></button>
+        </div>
+      </div>
       <FormSelect label="Rental type" value={draft.rentalMode} onChange={e=>setDraft({...draft,rentalMode:e.target.value as Draft["rentalMode"],driverId:e.target.value==="self_drive"?"":draft.driverId,renterSkipped:e.target.value==="self_drive"?false:draft.renterSkipped,vehicleId:"",dailyRate:0})} options={[{label:"Self drive",value:"self_drive"},{label:"With driver",value:"with_driver"}]}/>
       {draft.rentalMode==="with_driver"?<FormCombobox label="Driver" value={draft.driverId} onValueChange={driverId=>setDraft({...draft,driverId})} options={[{label:"Select a driver",value:""},...drivers.map(driver=>({label:`${driver.name} · ${driver.phone}`,value:driver.id}))]} searchPlaceholder="Search driver name or phone…"/>:<div/>}
       <div>
@@ -430,6 +449,9 @@ function VehicleStep({ draft, setDraft, vehicles, conflictMode, clearConflict }:
   conflictMode: boolean;
   clearConflict: () => void;
 }) {
+  const [vehicleSearch,setVehicleSearch]=useState("");
+  const term=vehicleSearch.trim().toLocaleLowerCase("en");
+  const filteredVehicles=term?vehicles.filter(item=>`${item.label} ${item.plate} ${item.city}`.toLocaleLowerCase("en").includes(term)):vehicles;
   return (
     <div>
       <h2 className="font-bold">Available vehicles</h2>
@@ -441,9 +463,11 @@ function VehicleStep({ draft, setDraft, vehicles, conflictMode, clearConflict }:
         </div>
       )}
       <div className="mt-4 grid grid-cols-2 gap-2 rounded-lg bg-[#F2F4F7] p-1" role="group" aria-label="Vehicle source"><button type="button" onClick={()=>setDraft({...draft,fulfillmentType:"fleet",dailyRate:0})} className={`rounded-md px-3 py-2 text-sm font-semibold ${draft.fulfillmentType==="fleet"?"bg-white text-[#0058B8] shadow-sm":"text-[#667085]"}`}>VibeRent fleet</button><button type="button" onClick={()=>setDraft({...draft,fulfillmentType:"external",vehicleId:"",dailyRate:draft.dailyRate||0,overrideReason:""})} className={`rounded-md px-3 py-2 text-sm font-semibold ${draft.fulfillmentType==="external"?"bg-white text-[#0058B8] shadow-sm":"text-[#667085]"}`}>Source externally</button></div>
+      {draft.fulfillmentType==="fleet"&&vehicles.length>0&&<label className="relative mt-4 block"><span className="sr-only">Search available vehicles</span><Search size={17} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#667085]"/><input type="search" value={vehicleSearch} onChange={event=>setVehicleSearch(event.target.value)} placeholder="Search available vehicles by make, model, plate or city" className="h-11 w-full rounded-[9px] border border-[#D0D5DD] bg-white pl-10 pr-3 text-sm outline-none focus:border-[#006FE6] focus:ring-2 focus:ring-[#006FE6]/10"/><span className="mt-1.5 block text-xs text-[#667085]">{filteredVehicles.length} of {vehicles.length} vehicles shown</span></label>}
       {draft.fulfillmentType==="fleet"&&vehicles.length === 0 && <p className="mt-4 rounded-lg border border-[#B2DDFF] bg-[#EFF8FF] p-3 text-sm text-[#175CD3]">No fleet vehicle is available. Choose <strong>Source externally</strong> above to arrange one for this booking.</p>}
+      {draft.fulfillmentType==="fleet"&&vehicles.length>0&&filteredVehicles.length===0&&<p className="mt-4 rounded-lg border border-[#D0D5DD] bg-[#F8FAFC] p-4 text-sm text-[#667085]">No available vehicle matches “{vehicleSearch.trim()}”. Try a make, model, registration plate, or city.</p>}
       {draft.fulfillmentType==="fleet"&&<div className="mt-4 grid gap-3 sm:grid-cols-2">
-        {vehicles.map((item) => (
+        {filteredVehicles.map((item) => (
           <button
             type="button"
             key={item.id}
@@ -755,6 +779,7 @@ function Review({ draft, days, total, vehicle, customers }: {
   const supplierPayable=draft.external.pricingMode==="percentage"?Math.round(total*draft.external.supplierSharePercent/100):draft.external.supplierFixedCost;
   const details: [string, string | undefined][] = [
     ["Schedule", `${new Date(draft.from).toLocaleString("en-PK")} – ${new Date(draft.to).toLocaleString("en-PK")}`],
+    ["Flow",draft.bookingMode==="rent_now"?"Immediate booking · rental starts now":"Pre-booking · handover later"],
     ["Going to", draft.city],
     ["Fulfilment",draft.fulfillmentType==="external"?"Externally sourced":"VibeRent fleet"],
     ["Vehicle", draft.fulfillmentType==="external"?`${draft.external.vehicleMake} ${draft.external.vehicleModel} ${draft.external.vehicleYear} · ${draft.external.vehiclePlate}`:vehicle ? `${vehicle.label} · ${vehicle.plate}` : "—"],
@@ -779,4 +804,12 @@ function Review({ draft, days, total, vehicle, customers }: {
       </dl>
     </div>
   );
+}
+
+function HandoverStep({draft,setDraft}:{draft:Draft;setDraft:(value:Draft)=>void}){
+  const update=(values:Partial<Draft["checkout"]>)=>setDraft({...draft,checkout:{...draft.checkout,...values}});
+  return <div>
+    <div className="flex items-start gap-3 rounded-xl border border-[#B2DDFF] bg-[#EFF8FF] p-4"><CarFront className="mt-0.5 shrink-0 text-[#006FE6]" size={20}/><div><h2 className="font-bold text-[#175CD3]">Handover inspection</h2><p className="mt-1 text-xs text-[#475467]">Confirming this step creates the booking and checks the vehicle out atomically.</p></div></div>
+    <div className="mt-5 grid gap-4 sm:grid-cols-2"><FormInput label="Handover odometer (km)" type="number" min={0} value={draft.checkout.odometer||""} onChange={e=>update({odometer:Number(e.target.value)})}/><FormSelect label="Handover fuel" value={draft.checkout.fuelLevel} onChange={e=>update({fuelLevel:e.target.value})} options={["Full","3/4","1/2","1/4","Empty"]}/><label className="text-sm font-semibold text-[#344054] sm:col-span-2">Vehicle condition at handover<textarea className="mt-1.5 min-h-24 w-full rounded-[9px] border border-[#D0D5DD] p-3 text-sm font-normal outline-none focus:border-[#006FE6] focus:ring-2 focus:ring-[#006FE6]/10" value={draft.checkout.conditionNotes} onChange={e=>update({conditionNotes:e.target.value})}/></label></div>
+  </div>;
 }

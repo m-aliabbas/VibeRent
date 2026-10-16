@@ -44,6 +44,8 @@ export async function setVehicleArchivedAction(id:string,archived:boolean):Promi
     const data=setVehicleArchived(await getWebRequestContext(),id,archived);
     revalidatePath("/vehicles");
     revalidatePath(`/vehicles/${id}`);
+    revalidatePath("/bookings/new");
+    revalidatePath("/");
     return {ok:true,data};
   } catch(error) { return failure(error); }
 }

@@ -33,6 +33,7 @@ type VehicleRow = {
   owner_share_amount: number | null;
   expense_responsibility: string | null;
   payout_frequency: string | null;
+  archived_at: string | null;
 };
 
 const selectSql = `
@@ -86,7 +87,7 @@ function mapVehicle(row: VehicleRow): Vehicle {
     category: (row.category === "suv" ? "SUV" : title(row.category)) as Vehicle["category"],
     city: row.city as Vehicle["city"],
     ownership: row.ownership === "managed" ? "Managed" : "Own",
-    status: mapVehicleStatus(row.status),
+    status: row.archived_at ? "Archived" : mapVehicleStatus(row.status),
     dailyRate: row.daily_rate,
     withDriverRate: row.with_driver_rate ?? row.daily_rate,
     color: row.color,

@@ -11,28 +11,49 @@ export type DashboardData = {
   todayExpenses: number;
   monthExpenses: number;
   utilization: number;
+  finance: {
+    today: DashboardFinancePeriod;
+    month: DashboardFinancePeriod;
+    allTime: DashboardFinancePeriod;
+  };
   activeRentalRows: Array<{ id:string; customer:string; vehicle:string; plate:string; returnAt:string; destinationCity:string }>;
   schedule: Array<{ id: string; time: string; type: "Pickup" | "Return"; customer: string; vehicle: string; plate: string; location: string }>;
   activity: Array<{ id: string; title: string; detail: string; occurredAt: string; kind: "booking" | "vehicle" | "customer" | "finance" | "other" }>;
 };
+
+export type DashboardFinancePeriod={income:number;expenses:number;ownerPayments:number;netProfit:number};
+
+function financePeriod(agencyId:string,from?:string,to?:string):DashboardFinancePeriod{
+  const timeClause=from&&to?" AND ft.posted_at>=? AND ft.posted_at<?":"";
+  const income=sqlite.prepare(`SELECT coalesce(sum(CASE WHEN lower(ft.kind) IN ('payment','late_return_charge','deposit_applied','deposit_forfeited') THEN ft.amount WHEN lower(ft.kind) IN ('refund','reversal') AND lower(coalesce(original.kind,'')) IN ('payment','late_return_charge','deposit_applied','deposit_forfeited') THEN -ft.amount ELSE 0 END),0) AS amount FROM financial_transactions ft LEFT JOIN financial_transactions original ON original.id=ft.linked_transaction_id AND original.agency_id=ft.agency_id WHERE ft.agency_id=? AND ft.status='posted'${timeClause}`)
+    .get(...(from&&to?[agencyId,from,to]:[agencyId])) as {amount:number};
+  const expenseClause=from&&to?" AND occurred_on>=? AND occurred_on<?":"";
+  const expenseFrom=from?new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Karachi",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date(from)):undefined;
+  const expenseTo=to?new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Karachi",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date(to)):undefined;
+  const expense=sqlite.prepare(`SELECT coalesce(sum(amount),0) AS amount FROM expenses WHERE agency_id=? AND status='approved'${expenseClause}`)
+    .get(...(expenseFrom&&expenseTo?[agencyId,expenseFrom,expenseTo]:[agencyId])) as {amount:number};
+  const payoutClause=from&&to?" AND paid_at>=? AND paid_at<?":"";
+  const owner=sqlite.prepare(`SELECT coalesce(sum(amount),0) AS amount FROM owner_payouts WHERE agency_id=? AND status='posted'${payoutClause}`)
+    .get(...(from&&to?[agencyId,from,to]:[agencyId])) as {amount:number};
+  const source=sqlite.prepare(`SELECT coalesce(sum(amount),0) AS amount FROM source_payouts WHERE agency_id=? AND status='posted'${payoutClause}`)
+    .get(...(from&&to?[agencyId,from,to]:[agencyId])) as {amount:number};
+  const ownerPayments=owner.amount+source.amount;
+  return {income:income.amount,expenses:expense.amount,ownerPayments,netProfit:income.amount-expense.amount-ownerPayments};
+}
 
 export function getDashboard(context: RequestContext): DashboardData {
   requireRole(context, ["agency_owner", "fleet_manager", "rental_agent", "accountant"]);
   const localDate = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Karachi", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
   const start = new Date(`${localDate}T00:00:00+05:00`).toISOString();
   const end = new Date(`${localDate}T24:00:00+05:00`).toISOString();
-  const nextLocalDate = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Karachi", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(end));
   const monthStart = new Date(`${localDate.slice(0, 7)}-01T00:00:00+05:00`).toISOString();
   const counts = sqlite.prepare(`
     SELECT
       (SELECT count(*) FROM vehicles WHERE agency_id=? AND archived_at IS NULL) AS totalVehicles,
       (SELECT count(*) FROM bookings WHERE agency_id=? AND status='checked_out') AS activeRentals,
-      (SELECT coalesce(sum(CASE WHEN lower(ft.kind) IN ('payment','deposit_applied','deposit_forfeited') THEN ft.amount WHEN lower(ft.kind) IN ('refund','reversal') AND lower(coalesce(original.kind,'')) IN ('payment','deposit_applied','deposit_forfeited') THEN -ft.amount ELSE 0 END),0) FROM financial_transactions ft LEFT JOIN financial_transactions original ON original.id=ft.linked_transaction_id AND original.agency_id=ft.agency_id WHERE ft.agency_id=? AND ft.status='posted' AND ft.posted_at>=? AND ft.posted_at<?) AS todayRevenue,
-      (SELECT coalesce(sum(CASE WHEN lower(ft.kind) IN ('payment','deposit_applied','deposit_forfeited') THEN ft.amount WHEN lower(ft.kind) IN ('refund','reversal') AND lower(coalesce(original.kind,'')) IN ('payment','deposit_applied','deposit_forfeited') THEN -ft.amount ELSE 0 END),0) FROM financial_transactions ft LEFT JOIN financial_transactions original ON original.id=ft.linked_transaction_id AND original.agency_id=ft.agency_id WHERE ft.agency_id=? AND ft.status='posted' AND ft.posted_at>=? AND ft.posted_at<?) AS monthRevenue,
-      (SELECT coalesce(sum(amount),0) FROM expenses WHERE agency_id=? AND status='approved' AND occurred_on>=? AND occurred_on<?) AS todayExpenses,
-      (SELECT coalesce(sum(amount),0) FROM expenses WHERE agency_id=? AND status='approved' AND occurred_on>=? AND occurred_on<?) AS monthExpenses,
       (SELECT count(DISTINCT vehicle_id) FROM bookings WHERE agency_id=? AND status='checked_out') AS utilizedVehicles
-  `).get(context.agencyId, context.agencyId, context.agencyId, start, end, context.agencyId, monthStart, end, context.agencyId, localDate, nextLocalDate, context.agencyId, `${localDate.slice(0,7)}-01`, nextLocalDate, context.agencyId) as { totalVehicles: number; activeRentals: number; todayRevenue: number; monthRevenue:number; todayExpenses:number; monthExpenses:number; utilizedVehicles: number };
+  `).get(context.agencyId, context.agencyId, context.agencyId) as { totalVehicles: number; activeRentals: number; utilizedVehicles: number };
+  const finance={today:financePeriod(context.agencyId,start,end),month:financePeriod(context.agencyId,monthStart,end),allTime:financePeriod(context.agencyId)};
   const scheduleRows = sqlite.prepare(`
     SELECT bk.id, bk.status, bk.pickup_at AS pickupAt, bk.return_at AS returnAt, c.name AS customer,
       CASE WHEN bk.fulfillment_type='external' THEN bk.external_vehicle_make||' '||bk.external_vehicle_model||coalesce(' '||bk.external_vehicle_year,'') ELSE v.make||' '||v.model||' '||v.year END AS vehicle, coalesce(bk.external_vehicle_plate,v.plate) AS plate, br.name || ', ' || br.city AS location
@@ -64,5 +85,5 @@ export function getDashboard(context: RequestContext): DashboardData {
     const kind: DashboardData["activity"][number]["kind"] = row.entityType === "booking" ? "booking" : row.entityType === "vehicle" ? "vehicle" : row.entityType === "customer" ? "customer" : row.entityType.includes("payment") || row.entityType.includes("transaction") ? "finance" : "other";
     return { id: row.id, title, detail, occurredAt: row.occurredAt, kind };
   });
-  return { ...counts, utilization: counts.totalVehicles ? Math.round(counts.utilizedVehicles / counts.totalVehicles * 100) : 0, schedule, activeRentalRows, activity };
+  return { ...counts,todayRevenue:finance.today.income,monthRevenue:finance.month.income,todayExpenses:finance.today.expenses,monthExpenses:finance.month.expenses,finance, utilization: counts.totalVehicles ? Math.round(counts.utilizedVehicles / counts.totalVehicles * 100) : 0, schedule, activeRentalRows, activity };
 }

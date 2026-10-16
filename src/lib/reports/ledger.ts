@@ -2,7 +2,8 @@ export type LedgerEntryKind =
   | "Opening owner balance"
   | "Rental income"
   | "Expense"
-  | "Owner settlement";
+  | "Owner settlement"
+  | "Source settlement";
 
 export type LedgerEntry = {
   id: string;
@@ -68,7 +69,7 @@ export function summarizeLedger(entries: LedgerEntry[]): LedgerSummary {
       agencyExpenses: sum.agencyExpenses + (row.kind === "Expense" && !row.ownerId ? row.expense : 0),
       ownerExpenses: sum.ownerExpenses + (row.kind === "Expense" && row.ownerId ? row.expense : 0),
       ownerShare: sum.ownerShare + (row.kind === "Rental income" ? row.ownerMovement : 0),
-      ownerSettlements: sum.ownerSettlements + (row.kind === "Owner settlement" ? Math.abs(row.ownerMovement) : 0),
+      ownerSettlements: sum.ownerSettlements + (["Owner settlement","Source settlement"].includes(row.kind) ? Math.abs(row.ownerMovement) : 0),
       openingOwnerBalance: sum.openingOwnerBalance + (row.kind === "Opening owner balance" ? row.ownerMovement : 0),
       closingOwnerBalance: sum.closingOwnerBalance + row.ownerMovement,
       operatingResult: sum.operatingResult + row.operatingResult,

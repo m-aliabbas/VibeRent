@@ -134,6 +134,13 @@
       "when": 1791901971642,
       "tag": "0018_parched_sersi",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1792076279209,
+      "tag": "0019_exotic_omega_red",
+      "breakpoints": true
     }
   ]
 }

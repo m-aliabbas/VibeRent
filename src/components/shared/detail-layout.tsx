@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import Link from "next/link";
 
 export function DetailPanel({
   title,
@@ -26,6 +27,7 @@ export type TimelineItem = {
   detail: string;
   time: string;
   icon: ReactNode;
+  href?: string;
 };
 export function Timeline({ items }: { items: TimelineItem[] }) {
   return (
@@ -41,12 +43,20 @@ export function Timeline({ items }: { items: TimelineItem[] }) {
               className="absolute left-4 top-8 h-[calc(100%-24px)] w-px bg-[#DDE3EA]"
             />
           )}
-          <div>
+          <div className="min-w-0 flex-1">
             <p className="text-sm font-semibold">{item.title}</p>
             <p className="mt-1 text-xs text-[#667085]">{item.detail}</p>
             <p className="mt-1 text-xs font-medium text-[#98A2B3]">
               {item.time}
             </p>
+            {item.href && (
+              <Link
+                href={item.href}
+                className="mt-2 inline-flex min-h-9 items-center text-xs font-semibold text-[#006FE6] hover:underline focus:outline-2 focus:outline-offset-2 focus:outline-[#006FE6]"
+              >
+                View booking
+              </Link>
+            )}
           </div>
         </li>
       ))}

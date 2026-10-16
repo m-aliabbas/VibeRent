@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowRight, BarChart3, CalendarDays, CarFront, CircleDollarSign, Clock3, FileText, Hand, MapPin, Plus, ReceiptText, Users, Zap } from "lucide-react";
+import { ArrowRight, BarChart3, CalendarDays, CarFront, CircleDollarSign, Clock3, FileText, Hand, Landmark, MapPin, Plus, ReceiptText, TrendingUp, Users, Zap } from "lucide-react";
 import { TimeGreeting } from "@/components/dashboard/time-greeting";
 import { formatPkr } from "@/lib/utils";
 import { getSessionViewer, getWebRequestContext } from "@/server/auth/session";
@@ -15,18 +15,19 @@ const actions = [
 export default async function Dashboard() {
   const [viewer, context] = await Promise.all([getSessionViewer(), getWebRequestContext()]);
   const data = getDashboard(context);
-  const stats = [
-    { label: "Total Vehicles", value: String(data.totalVehicles), note: "View the full fleet", icon: CarFront, href: "/vehicles" },
-    { label: "Active Rentals", value: String(data.activeRentals), note: "Open checked-out rentals", icon: CalendarDays, href: "/bookings?status=Checked+Out" },
-    { label: "Today’s Income", value: formatPkr(data.todayRevenue), note: `${formatPkr(data.monthRevenue)} this month`, icon: CircleDollarSign, href: "/reports?tab=Revenue+%26+collections" },
-    { label: "Today’s Expenses", value: formatPkr(data.todayExpenses), note: `${formatPkr(data.monthExpenses)} this month`, icon: ReceiptText, href: "/expenses" },
-  ];
+  const today=new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Karachi",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
+  const ledgerHref=(entry:string)=>`/reports?tab=Ledger&from=${today}&to=${today}&entry=${entry}`;
   const activityIcon = { booking: CalendarDays, vehicle: CarFront, customer: Users, finance: CircleDollarSign, other: FileText };
 
   return <div className="space-y-5">
     <section className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between"><div><div className="flex items-center gap-2"><h1 className="text-[30px] font-extrabold tracking-[-.035em] text-[#0D1730] sm:text-[34px]"><TimeGreeting name={viewer?.name.split(" ")[0] ?? "there"}/></h1><Hand size={29} className="rotate-[-12deg] fill-[#FFC83D] text-[#E6A900]" aria-hidden="true"/></div><p className="mt-1 text-[15px] text-[#4E596C]">Here’s what’s happening with your rental business today.</p></div><Link href="/bookings/new" className="inline-flex h-10 w-fit items-center gap-2 rounded-[9px] bg-[#0878F9] px-4 text-sm font-semibold text-white shadow-sm hover:bg-[#0066D6]"><Plus size={17}/>New booking</Link></section>
 
-    <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4" aria-label="Business overview">{stats.map(({label,value,note,icon:Icon,href})=><Link href={href} key={label} className="group rounded-xl border border-[#E3E7ED] bg-white p-4 shadow-[0_2px_7px_rgba(16,24,40,.055)] transition hover:border-[#84CAFF] hover:shadow-md focus:outline-2 focus:outline-[#006FE6]"><div className="flex items-center gap-3.5"><span className="grid h-13 w-13 shrink-0 place-items-center rounded-xl bg-[#EAF3FF] text-[#0878F9]"><Icon size={26}/></span><div><p className="text-sm text-[#344054]">{label}</p><p className="mt-0.5 text-[28px] font-extrabold leading-none tracking-[-.035em] text-[#0D1730]">{value}</p></div></div><p className="mt-4 flex items-center justify-between text-sm text-[#5C6678]">{note}<ArrowRight size={15} className="transition-transform group-hover:translate-x-0.5"/></p></Link>)}</section>
+    <section className="overflow-hidden rounded-xl border border-[#E3E7ED] bg-white shadow-[0_2px_7px_rgba(16,24,40,.055)]"><div className="flex flex-col gap-2 border-b border-[#E9ECF1] px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between sm:px-5"><div className="flex items-center gap-2.5"><TrendingUp size={21}/><div><h2 className="text-[17px] font-bold">Financial snapshot</h2><p className="text-xs text-[#667085]">Posted ledger cash: income minus approved expenses and payments to owners or external sources.</p></div></div><Link href="/reports?tab=Ledger" className="text-sm font-semibold text-[#006FE6]">Open ledger</Link></div><div className="grid divide-y sm:grid-cols-2 sm:divide-x sm:divide-y-0 lg:grid-cols-4">{[
+      {label:"Income",icon:CircleDollarSign,tone:"text-[#067647] bg-[#ECFDF3]",key:"income" as const},
+      {label:"Expenses",icon:ReceiptText,tone:"text-[#B54708] bg-[#FFFAEB]",key:"expenses" as const},
+      {label:"Owner & source payments",icon:Landmark,tone:"text-[#5925DC] bg-[#F4F3FF]",key:"ownerPayments" as const},
+      {label:"Net profit",icon:TrendingUp,tone:"text-[#006FE6] bg-[#EFF8FF]",key:"netProfit" as const},
+    ].map(({label,icon:Icon,tone,key})=><Link href={key==="expenses"?ledgerHref("expense"):key==="ownerPayments"?ledgerHref("owner-payment"):key==="income"?ledgerHref("income"):ledgerHref("all")} key={label} aria-label={`Open ${label.toLowerCase()} ledger for today`} className="group p-4 transition hover:bg-[#FAFCFF] focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-[#006FE6]"><div className="flex items-center gap-2"><span className={`grid h-8 w-8 place-items-center rounded-lg ${tone}`}><Icon size={16}/></span><h3 className="text-sm font-bold">{label}</h3><ArrowRight size={14} className="ml-auto text-[#98A2B3] transition-transform group-hover:translate-x-0.5 group-hover:text-[#006FE6]"/></div><p className="mt-4 text-xl font-extrabold tabular-nums">{formatPkr(data.finance.today[key])}</p><p className="mt-1 text-xs text-[#667085]">Today</p><div className="mt-3 grid grid-cols-2 gap-3 border-t pt-3 text-xs"><div><p className="font-bold tabular-nums">{formatPkr(data.finance.month[key])}</p><p className="mt-0.5 text-[#667085]">This month</p></div><div><p className="font-bold tabular-nums">{formatPkr(data.finance.allTime[key])}</p><p className="mt-0.5 text-[#667085]">All time</p></div></div><p className="mt-3 text-xs font-semibold text-[#006FE6]">View ledger</p></Link>)}</div></section>
 
     <div className="grid gap-4 xl:grid-cols-[1.42fr_1fr]">
       <div className="space-y-4">

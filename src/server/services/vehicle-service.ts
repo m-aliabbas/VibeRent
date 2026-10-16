@@ -80,19 +80,19 @@ export function getVehicleFinance(context: RequestContext, id: string): VehicleF
     SELECT
       coalesce(sum(CASE WHEN t.posted_at>=? AND t.posted_at<? THEN
         CASE
-          WHEN lower(t.kind) IN ('payment','deposit_applied','deposit_forfeited') THEN t.amount
-          WHEN lower(t.kind) IN ('refund','reversal') AND lower(coalesce(original.kind,'')) IN ('payment','deposit_applied','deposit_forfeited') THEN -t.amount
+          WHEN lower(t.kind) IN ('payment','late_return_charge','deposit_applied','deposit_forfeited') THEN t.amount
+          WHEN lower(t.kind) IN ('refund','reversal') AND lower(coalesce(original.kind,'')) IN ('payment','late_return_charge','deposit_applied','deposit_forfeited') THEN -t.amount
           ELSE 0
         END ELSE 0 END),0) AS today,
       coalesce(sum(CASE WHEN t.posted_at>=? AND t.posted_at<? THEN
         CASE
-          WHEN lower(t.kind) IN ('payment','deposit_applied','deposit_forfeited') THEN t.amount
-          WHEN lower(t.kind) IN ('refund','reversal') AND lower(coalesce(original.kind,'')) IN ('payment','deposit_applied','deposit_forfeited') THEN -t.amount
+          WHEN lower(t.kind) IN ('payment','late_return_charge','deposit_applied','deposit_forfeited') THEN t.amount
+          WHEN lower(t.kind) IN ('refund','reversal') AND lower(coalesce(original.kind,'')) IN ('payment','late_return_charge','deposit_applied','deposit_forfeited') THEN -t.amount
           ELSE 0
         END ELSE 0 END),0) AS month,
       coalesce(sum(CASE
-        WHEN lower(t.kind) IN ('payment','deposit_applied','deposit_forfeited') THEN t.amount
-        WHEN lower(t.kind) IN ('refund','reversal') AND lower(coalesce(original.kind,'')) IN ('payment','deposit_applied','deposit_forfeited') THEN -t.amount
+        WHEN lower(t.kind) IN ('payment','late_return_charge','deposit_applied','deposit_forfeited') THEN t.amount
+        WHEN lower(t.kind) IN ('refund','reversal') AND lower(coalesce(original.kind,'')) IN ('payment','late_return_charge','deposit_applied','deposit_forfeited') THEN -t.amount
         ELSE 0
       END),0) AS total
     FROM financial_transactions t

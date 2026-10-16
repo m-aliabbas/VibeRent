@@ -35,6 +35,9 @@ export type BookingListItem = {
   supplierSharePercent?: number;
   supplierFixedCost?: number;
   supplierPayable?: number;
+  supplierPaid?: number;
+  supplierBalance?: number;
+  sourcePayouts?: SourcePayoutDto[];
   city: string;
   destinationCity: string;
   pickupAt: string;
@@ -46,6 +49,7 @@ export type BookingListItem = {
   tax: number;
   deposit: number;
   paid: number;
+  paymentStatus?: "Unpaid" | "Partially paid" | "Paid" | "Payment reversed";
   depositHeld?: number;
   transactions?: BookingTransactionDto[];
   status: "Draft" | "Confirmed" | "Checked Out" | "Completed" | "Cancelled" | "No Show";
@@ -58,6 +62,15 @@ export type BookingListItem = {
   termsSnapshot: string;
   version: number;
   inspections?: BookingInspectionDto[];
+};
+
+export type SourcePayoutDto = {
+  id: string;
+  amount: number;
+  method: string;
+  reference: string;
+  status: string;
+  paidAt: string;
 };
 
 export type BookingInspectionDto = {

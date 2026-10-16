@@ -374,7 +374,7 @@ function LedgerDialog({
           transactions.map((item) => {
             const kind = item.kind.toLowerCase();
             const isNegative = ["reversal", "refund"].includes(kind);
-            const canAdjust = item.status === "posted" && ["payment", "deposit_applied"].includes(kind);
+            const canAdjust = item.status === "posted" && ["payment", "late_return_charge", "deposit_applied"].includes(kind);
             const original = item.linkedTransactionId
               ? transactions.find((transaction) => transaction.id === item.linkedTransactionId)
               : undefined;
@@ -383,7 +383,7 @@ function LedgerDialog({
                 <div className="flex justify-between gap-3">
                   <div>
                     <div className="flex items-center gap-2">
-                      <strong className="text-sm capitalize">{item.kind.replace("_", " ")}</strong>
+                      <strong className="text-sm capitalize">{item.kind.replaceAll("_", " ")}</strong>
                       <span
                         className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${
                           ["reversed", "refunded"].includes(item.status)

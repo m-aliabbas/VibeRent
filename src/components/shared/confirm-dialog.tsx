@@ -13,6 +13,7 @@ export function ConfirmDialog({
   pending = false,
   confirmLabel = "Confirm",
   pendingLabel = "Working…",
+  confirmVariant = "danger",
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -22,6 +23,7 @@ export function ConfirmDialog({
   pending?: boolean;
   confirmLabel?: string;
   pendingLabel?: string;
+  confirmVariant?: "primary" | "danger";
 }) {
   return (
     <Dialog.Root
@@ -55,7 +57,7 @@ export function ConfirmDialog({
             >
               Cancel
             </Button>
-            <Button variant="danger" disabled={pending} onClick={onConfirm}>
+            <Button variant={confirmVariant} disabled={pending} onClick={onConfirm}>
               {pending && <LoaderCircle className="animate-spin" size={17} />}{" "}
               {pending ? pendingLabel : confirmLabel}
             </Button>

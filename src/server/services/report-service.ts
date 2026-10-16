@@ -7,10 +7,11 @@ import { requireRole } from "@/server/auth/authorize";
 import type { RequestContext } from "@/server/context/request-context";
 
 type Vehicle = { id: string; name: string; plate: string; city: string; ownership: string; ownerId: string | null; archivedAt: string | null };
-type Booking = { id: string; vehicleId: string; ownerId: string | null; source: string; pickupAt: string; returnAt: string; completedAt: string | null; status: string; totalAmount: number; shareBasis: string | null; ownerSharePercent: number | null; ownerShareAmount: number | null };
+type Booking = { id: string; vehicleId: string | null; ownerId: string | null; source: string; pickupAt: string; returnAt: string; completedAt: string | null; status: string; totalAmount: number; shareBasis: string | null; ownerSharePercent: number | null; ownerShareAmount: number | null; fulfillmentType:"fleet"|"external"; externalVehicle:string|null; externalPlate:string|null; externalSupplierName:string|null; city:string };
 type Cost = { id: string; vehicleId: string | null; ownerId: string | null; date: string; category: string; description: string; amount: number; status: string; receipt: number };
-type Transaction = { id: string; bookingId: string | null; date: string; amount: number; kind: string; status: string; method: string };
-type Payout = { id: string; ownerId: string; paidAt: string; amount: number; method: string; reference: string };
+type Transaction = { id: string; bookingId: string | null; date: string; amount: number; kind: string; originalKind:string|null; status: string; method: string; reference:string };
+type Payout = { id: string; ownerId: string; vehicleId:string|null; paidAt: string; amount: number; method: string; reference: string };
+type SourcePayout = {id:string;bookingId:string;supplierName:string;paidAt:string;amount:number;method:string;reference:string};
 type Block = { vehicleId: string; startAt: string; endAt: string };
 
 export type { LedgerEntry, LedgerSummary } from "@/lib/reports/ledger";
@@ -94,10 +95,14 @@ export function getReports(context: RequestContext): ReportsData {
     SELECT b.id, b.vehicle_id AS vehicleId, v.owner_id AS ownerId, b.source,
            b.pickup_at AS pickupAt, b.return_at AS returnAt, b.completed_at AS completedAt,
            b.status, b.total_amount AS totalAmount, a.share_basis AS shareBasis,
-           a.owner_share_percent AS ownerSharePercent, a.owner_share_amount AS ownerShareAmount
+           a.owner_share_percent AS ownerSharePercent, a.owner_share_amount AS ownerShareAmount,
+           b.fulfillment_type AS fulfillmentType,
+           CASE WHEN b.fulfillment_type='external' THEN b.external_vehicle_make||' '||b.external_vehicle_model||coalesce(' '||b.external_vehicle_year,'') END AS externalVehicle,
+           b.external_vehicle_plate AS externalPlate,b.external_supplier_name AS externalSupplierName,br.city
     FROM bookings b
-    JOIN vehicles v ON v.id=b.vehicle_id AND v.agency_id=b.agency_id
+    LEFT JOIN vehicles v ON v.id=b.vehicle_id AND v.agency_id=b.agency_id
     LEFT JOIN management_agreements a ON a.id=v.agreement_id AND a.agency_id=v.agency_id
+    JOIN branches br ON br.id=b.branch_id AND br.agency_id=b.agency_id
     WHERE b.agency_id=?
   `).all(context.agencyId) as Booking[];
   const costs = sqlite.prepare(`
@@ -106,10 +111,12 @@ export function getReports(context: RequestContext): ReportsData {
            EXISTS(SELECT 1 FROM private_files pf WHERE pf.agency_id=e.agency_id AND pf.entity_type='expense' AND pf.entity_id=e.id AND pf.status='ready') AS receipt
     FROM expenses e WHERE e.agency_id=?
   `).all(context.agencyId) as Cost[];
-  const transactions = sqlite.prepare("SELECT id,booking_id AS bookingId,posted_at AS date,amount,kind,status,method FROM financial_transactions WHERE agency_id=?")
+  const transactions = sqlite.prepare(`SELECT ft.id,ft.booking_id AS bookingId,ft.posted_at AS date,ft.amount,ft.kind,original.kind AS originalKind,ft.status,ft.method,ft.reference FROM financial_transactions ft LEFT JOIN financial_transactions original ON original.id=ft.linked_transaction_id AND original.agency_id=ft.agency_id WHERE ft.agency_id=?`)
     .all(context.agencyId) as Transaction[];
-  const payouts = sqlite.prepare("SELECT id,owner_id AS ownerId,paid_at AS paidAt,amount,method,reference FROM owner_payouts WHERE agency_id=? AND status='posted'")
+  const payouts = sqlite.prepare("SELECT id,owner_id AS ownerId,vehicle_id AS vehicleId,paid_at AS paidAt,amount,method,reference FROM owner_payouts WHERE agency_id=? AND status='posted'")
     .all(context.agencyId) as Payout[];
+  const sourcePayouts=sqlite.prepare("SELECT id,booking_id AS bookingId,supplier_name AS supplierName,paid_at AS paidAt,amount,method,reference FROM source_payouts WHERE agency_id=? AND status='posted'")
+    .all(context.agencyId) as SourcePayout[];
   const blocks = sqlite.prepare("SELECT vehicle_id AS vehicleId,start_at AS startAt,end_at AS endAt FROM availability_blocks WHERE agency_id=? AND archived_at IS NULL")
     .all(context.agencyId) as Block[];
   const owners = sqlite.prepare("SELECT id,name FROM owners WHERE agency_id=? ORDER BY name")
@@ -117,30 +124,31 @@ export function getReports(context: RequestContext): ReportsData {
 
   const vehicleById = new Map(vehicles.map((vehicle) => [vehicle.id, vehicle]));
   const ownerById = new Map(owners.map((owner) => [owner.id, owner]));
+  const bookingById=new Map(bookings.map(booking=>[booking.id,booking]));
   const completedBookings = bookings.filter((row) => row.status === "completed");
   const approvedCosts = costs.filter((row) => row.status === "approved");
-  const allShares = allocatedOwnerShares(completedBookings);
   const ledgerEntries: LedgerEntry[] = [
-    ...completedBookings.map((row) => {
-      const vehicle = vehicleById.get(row.vehicleId);
-      const owner = row.ownerId ? ownerById.get(row.ownerId) : undefined;
-      const share = allShares.get(row.id) ?? 0;
+    ...transactions.filter(row=>{const kind=row.kind.toLowerCase();return row.status==="posted"&&(["payment","late_return_charge","deposit_applied","deposit_forfeited"].includes(kind)||(["refund","reversal"].includes(kind)&&["payment","late_return_charge","deposit_applied","deposit_forfeited"].includes(row.originalKind?.toLowerCase()??"")))}).map((transaction) => {
+      const row=transaction.bookingId?bookingById.get(transaction.bookingId):undefined;
+      const vehicle = row?.vehicleId?vehicleById.get(row.vehicleId):undefined;
+      const owner = row?.ownerId ? ownerById.get(row.ownerId) : undefined;
+      const amount=["refund","reversal"].includes(transaction.kind.toLowerCase())?-transaction.amount:transaction.amount;
       return {
-        id: `RENT-${row.id}`,
-        date: (row.completedAt ?? row.pickupAt).slice(0, 10),
-        vehicleId: row.vehicleId,
-        vehicle: vehicle?.name ?? `Historical vehicle (${row.vehicleId})`,
-        city: vehicle?.city ?? "Unknown city",
-        ownership: vehicle?.ownerId ? "Managed" as const : "Owned" as const,
-        ownerId: row.ownerId,
-        owner: owner?.name ?? null,
+        id: `TXN-${transaction.id}`,
+        date: transaction.date.slice(0,10),
+        vehicleId: row?.vehicleId??null,
+        vehicle: vehicle?.name??row?.externalVehicle??"Unlinked booking payment",
+        city: vehicle?.city??row?.city??"Unknown city",
+        ownership: vehicle?.ownerId||row?.fulfillmentType==="external" ? "Managed" as const : "Owned" as const,
+        ownerId: row?.ownerId??null,
+        owner: owner?.name??row?.externalSupplierName??null,
         kind: "Rental income" as const,
-        reference: row.id,
-        description: `Completed ${row.source || "direct"} rental`,
-        income: row.totalAmount,
+        reference: transaction.reference||transaction.id,
+        description: `${transaction.kind.replaceAll("_"," ")} · ${transaction.method}`,
+        income: amount,
         expense: 0,
-        ownerMovement: share,
-        operatingResult: row.totalAmount - share,
+        ownerMovement: 0,
+        operatingResult: amount,
       };
     }),
     ...approvedCosts.map((row) => {
@@ -161,15 +169,15 @@ export function getReports(context: RequestContext): ReportsData {
         income: 0,
         expense: row.amount,
         ownerMovement: row.ownerId ? -row.amount : 0,
-        operatingResult: row.ownerId ? 0 : -row.amount,
+        operatingResult: -row.amount,
       };
     }),
     ...payouts.map((row) => ({
       id: `PAY-${row.id}`,
       date: row.paidAt.slice(0, 10),
-      vehicleId: null,
-      vehicle: "Owner account",
-      city: "All cities",
+      vehicleId: row.vehicleId,
+      vehicle: row.vehicleId?vehicleById.get(row.vehicleId)?.name??"Historical managed vehicle":"Owner account",
+      city: row.vehicleId?vehicleById.get(row.vehicleId)?.city??"Unknown city":"All cities",
       ownership: "Managed" as const,
       ownerId: row.ownerId,
       owner: ownerById.get(row.ownerId)?.name ?? "Owner",
@@ -179,8 +187,9 @@ export function getReports(context: RequestContext): ReportsData {
       income: 0,
       expense: 0,
       ownerMovement: -row.amount,
-      operatingResult: 0,
+      operatingResult: -row.amount,
     })),
+    ...sourcePayouts.map(row=>{const booking=bookingById.get(row.bookingId);return {id:`SRC-${row.id}`,date:row.paidAt.slice(0,10),vehicleId:null,vehicle:booking?.externalVehicle??"Externally sourced vehicle",city:booking?.city??"Unknown city",ownership:"Managed" as const,ownerId:null,owner:row.supplierName,kind:"Source settlement" as const,reference:row.reference||row.id,description:`${row.method.replaceAll("_"," ")} source payment`,income:0,expense:0,ownerMovement:-row.amount,operatingResult:-row.amount}}),
   ].sort((a, b) => a.date.localeCompare(b.date) || a.kind.localeCompare(b.kind) || a.id.localeCompare(b.id));
 
   const today = new Date().toISOString().slice(0, 10);
@@ -192,6 +201,7 @@ export function getReports(context: RequestContext): ReportsData {
     ...costs.map((row) => row.date.slice(0, 7)),
     ...transactions.map((row) => row.date.slice(0, 7)),
     ...payouts.map((row) => row.paidAt.slice(0, 7)),
+    ...sourcePayouts.map((row) => row.paidAt.slice(0, 7)),
   ];
   const periods = [...new Set(dateKeys.length ? dateKeys : [today.slice(0, 7)])].sort().reverse().map((key) => {
     const { from, to } = periodBounds(key);

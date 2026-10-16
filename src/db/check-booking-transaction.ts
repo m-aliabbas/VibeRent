@@ -1,6 +1,6 @@
 import { sqlite } from "@/db/connection";
 import { DomainError } from "@/server/domain/errors";
-import { archiveBooking, cancelBooking, confirmBooking, startBooking } from "@/server/services/booking-service";
+import { archiveBooking, cancelBooking, checkInRental, confirmBooking, extendRental, getBooking, recordSourcePayout, startBooking } from "@/server/services/booking-service";
 import type { RequestContext } from "@/server/context/request-context";
 
 const context: RequestContext = {
@@ -40,7 +40,7 @@ if (!conflictProtected) throw new Error("Overlapping booking was not rejected.")
 const audit = sqlite.prepare("SELECT id FROM audit_events WHERE agency_id=? AND entity_id=? AND action='booking.confirmed'").get(context.agencyId, first.id);
 if (!audit) throw new Error("Booking audit event was not written.");
 
-import { getBooking, recordBookingPayment, reverseBookingTransaction } from "@/server/services/booking-service";
+import { recordBookingPayment, reverseBookingTransaction } from "@/server/services/booking-service";
 
 // Test recording a payment
 const paymentAmount = 10000;
@@ -102,6 +102,9 @@ const reversed = reverseBookingTransaction(context, first.id, {
 if (reversed.paid !== 0) {
   throw new Error(`After reversal, expected paid to be 0, got ${reversed.paid}`);
 }
+if (reversed.paymentStatus !== "Payment reversed") {
+  throw new Error(`After a full reversal, expected the payment status to be Payment reversed, got ${reversed.paymentStatus}.`);
+}
 
 const reversalTxn = reversed.transactions?.find(t => t.linkedTransactionId === paymentTxn.id && t.kind === "reversal");
 if (!reversalTxn || reversalTxn.reference !== "Test correction") {
@@ -125,12 +128,37 @@ if (!auditPayment) throw new Error("Payment audit event was not written.");
 const auditReversal = sqlite.prepare("SELECT id FROM audit_events WHERE agency_id=? AND entity_id=? AND action='booking.payment_reversed'").get(context.agencyId, first.id);
 if (!auditReversal) throw new Error("Reversal audit event was not written.");
 
+// Test the atomic immediate-booking handover and late-return charge.
+const immediateDraft=startBooking(context);
+const immediate=confirmBooking(context,{
+  bookingDraftId:immediateDraft.id,fulfillmentType:"external",external:{supplierName:"Test Supplier",supplierPhone:"03001234567",vehicleMake:"Honda",vehicleModel:"BR-V",vehiclePlate:"TST-101",pricingMode:"percentage",supplierSharePercent:80},
+  customerId:"cus-areeba",rentalMode:"self_drive",destinationCity:"Lahore",pickupAt:"2028-02-01T09:00:00.000Z",returnAt:"2028-02-02T09:00:00.000Z",extras:0,discount:0,depositRequired:0,source:"transaction-check",estimatedKm:0,dailyRateOverride:12000,
+  startImmediately:true,checkoutInspection:{odometer:42000,fuelLevel:"Full",conditionNotes:"Immediate rental handover test"},
+});
+if(immediate.status!=="checked_out")throw new Error("Immediate booking did not start the rental atomically.");
+const immediateBooking=getBooking(context,immediate.id);
+if(immediateBooking.status!=="Checked Out"||!immediateBooking.inspections?.some(item=>item.kind==="checkout"))throw new Error("Immediate rental checkout inspection was not persisted.");
+const extended=extendRental(context,immediate.id,{returnAt:"2028-02-03T09:00:00.000Z",version:immediateBooking.version});
+if(extended.returnAt!=="2028-02-03T09:00:00.000Z"||extended.dailyRate*extended.days+extended.extras-extended.discount!==24000||extended.supplierPayable!==19200)throw new Error("Rental extension did not persist the new return, total, and source payable.");
+const sourceSettled=recordSourcePayout(context,immediate.id,{amount:19200,method:"Bank transfer",reference:"SRC-CHECK",idempotencyKey:`source_check_${immediate.id}`});
+if(sourceSettled.supplierPaid!==19200||sourceSettled.supplierBalance!==0||sourceSettled.sourcePayouts?.length!==1)throw new Error("External source payout was not linked to the rental correctly.");
+sqlite.prepare("UPDATE bookings SET return_at=? WHERE agency_id=? AND id=?").run("2026-01-01T00:00:00.000Z",context.agencyId,immediate.id);
+const completedLate=checkInRental(context,immediate.id,{odometer:42120,fuelLevel:"3/4",conditionNotes:"Returned after agreed time",version:sourceSettled.version,lateReturnCharge:{amount:2500,method:"Cash"}});
+if(completedLate.status!=="Completed"||completedLate.extras!==2500||completedLate.paid!==2500)throw new Error("Late-return charge was not added to booking extras and income.");
+const lateTransaction=completedLate.transactions?.find(item=>item.kind==="late_return_charge");
+if(!lateTransaction||!lateTransaction.reference.includes("Late return"))throw new Error("Late-return transaction details were not preserved.");
+
 // Clean up test booking and related financial records
 sqlite.prepare("DELETE FROM financial_transactions WHERE booking_id = ?").run(first.id);
 sqlite.prepare("DELETE FROM audit_events WHERE entity_id = ?").run(first.id);
 sqlite.prepare("DELETE FROM bookings WHERE id = ?").run(first.id);
-sqlite.prepare("DELETE FROM audit_events WHERE entity_type='booking_draft' AND entity_id IN (?,?)").run(firstDraft.id, conflictDraftId);
-sqlite.prepare("DELETE FROM booking_drafts WHERE id IN (?,?)").run(firstDraft.id, conflictDraftId);
+sqlite.prepare("DELETE FROM financial_transactions WHERE booking_id = ?").run(immediate.id);
+sqlite.prepare("DELETE FROM source_payouts WHERE booking_id = ?").run(immediate.id);
+sqlite.prepare("DELETE FROM rental_inspections WHERE booking_id = ?").run(immediate.id);
+sqlite.prepare("DELETE FROM audit_events WHERE entity_id = ?").run(immediate.id);
+sqlite.prepare("DELETE FROM bookings WHERE id = ?").run(immediate.id);
+sqlite.prepare("DELETE FROM audit_events WHERE entity_type='booking_draft' AND entity_id IN (?,?,?)").run(firstDraft.id, conflictDraftId,immediateDraft.id);
+sqlite.prepare("DELETE FROM booking_drafts WHERE id IN (?,?,?)").run(firstDraft.id, conflictDraftId,immediateDraft.id);
 
 console.log(JSON.stringify({
   ok: true,
@@ -145,7 +173,12 @@ console.log(JSON.stringify({
   refreshRetainedPaid: true,
   overpaymentBlocked: true,
   reversalWorked: true,
+  fullyReversedStatusShown: true,
   reversalDetailsPreserved: true,
+  immediateRentalStartedAtomically:true,
+  rentalExtensionPersisted:true,
+  sourcePayoutLinked:true,
+  lateReturnChargeRecordedAsIncome:true,
   cancelledBookingArchivedAfterSettlement: true,
   auditWritten: true
 }, null, 2));

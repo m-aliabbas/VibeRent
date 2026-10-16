@@ -166,7 +166,7 @@ export function AppShell({ children, viewer }: { children: React.ReactNode; view
           >
             <Search size={18} className="text-[#26334D]" />
             <span className="flex-1 text-sm text-[#667085]">
-              Search vehicles, bookings, customers...
+              Search vehicles, bookings, customers, owners...
             </span>
             <kbd className="text-xs font-medium text-[#667085]">⌘ K</kbd>
           </button>

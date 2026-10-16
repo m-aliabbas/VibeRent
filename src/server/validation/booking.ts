@@ -32,6 +32,12 @@ export type ConfirmBookingInput = {
   estimatedKm: number;
   dailyRateOverride?: number;
   overrideReason?: string;
+  startImmediately?: boolean;
+  checkoutInspection?: {
+    odometer: number;
+    fuelLevel: string;
+    conditionNotes: string;
+  };
 };
 
 export type GuarantorInput = {
@@ -98,10 +104,19 @@ export function parseConfirmBookingInput(value: unknown): ConfirmBookingInput {
   if (input.dailyRateOverride !== undefined && (!Number.isInteger(input.dailyRateOverride) || input.dailyRateOverride < 1000)) errors.dailyRateOverride = "Enter a valid override rate.";
   if(fulfillmentType==="external"&&input.dailyRateOverride===undefined)errors.dailyRateOverride="Enter the customer daily rate.";
   if (fulfillmentType==="fleet"&&input.dailyRateOverride !== undefined && !input.overrideReason?.trim()) errors.overrideReason = "Explain why the destination rate is being changed.";
+  const startImmediately = Boolean(input.startImmediately);
+  const checkoutInspection = input.checkoutInspection;
+  if (startImmediately) {
+    if (!checkoutInspection || !Number.isInteger(checkoutInspection.odometer) || checkoutInspection.odometer < 0) errors["checkoutInspection.odometer"] = "Enter a valid handover odometer reading.";
+    if (!checkoutInspection?.fuelLevel?.trim()) errors["checkoutInspection.fuelLevel"] = "Select the handover fuel level.";
+    if (!checkoutInspection?.conditionNotes?.trim()) errors["checkoutInspection.conditionNotes"] = "Enter the vehicle condition at handover.";
+  }
   if (Object.keys(errors).length) throw new DomainError("VALIDATION_FAILED", "Review the booking details.", 400, errors);
   return {
     bookingDraftId: input.bookingDraftId?.trim() || undefined, vehicleId: input.vehicleId?.trim() || undefined, fulfillmentType, external:fulfillmentType==="external"&&external?{supplierName:external.supplierName.trim(),supplierPhone:external.supplierPhone.trim(),vehicleMake:external.vehicleMake.trim(),vehicleModel:external.vehicleModel.trim(),vehicleYear:external.vehicleYear,vehiclePlate:external.vehiclePlate.trim().toUpperCase(),vehicleColor:external.vehicleColor?.trim()||undefined,pricingMode:external.pricingMode,supplierSharePercent:external.supplierSharePercent,supplierFixedCost:external.supplierFixedCost}:undefined, customerId: input.customerId?.trim() || "", rentalMode, driverId:input.driverId?.trim()||undefined, renterSkipped:Boolean(input.renterSkipped), guarantor, destinationCity: input.destinationCity?.trim() || "Local", pickupAt: new Date(pickup).toISOString(), returnAt: new Date(returned).toISOString(),
     extras: input.extras!, discount: input.discount!, depositRequired: input.depositRequired!, source: input.source?.trim() || "counter", notes: input.notes?.trim() || undefined, estimatedKm: input.estimatedKm ?? 0, dailyRateOverride: input.dailyRateOverride, overrideReason: input.overrideReason?.trim() || undefined,
+    startImmediately,
+    checkoutInspection:startImmediately&&checkoutInspection?{odometer:checkoutInspection.odometer,fuelLevel:checkoutInspection.fuelLevel.trim(),conditionNotes:checkoutInspection.conditionNotes.trim()}:undefined,
   };
 }
 

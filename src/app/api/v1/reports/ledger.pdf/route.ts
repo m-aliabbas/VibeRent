@@ -19,8 +19,10 @@ export async function GET(request:Request){
     if(!["All ownership","Owned","Managed"].includes(ownership))throw new DomainError("VALIDATION_FAILED","Unknown ownership filter.",400);
     const scopeType=url.searchParams.get("scope")??"overall";
     const scope=resolveScope(scopeType,url,data);
-    const entries=buildLedgerEntries(data.ledgerEntries,{from,to,city,ownership,scope});
-    const accountLabel=labelForScope(scope,data);
+    const entry=url.searchParams.get("entry")??"all";
+    if(!["all","income","expense","owner-payment"].includes(entry))throw new DomainError("VALIDATION_FAILED","Unknown ledger entry filter.",400);
+    const entries=filterEntries(buildLedgerEntries(data.ledgerEntries,{from,to,city,ownership,scope}),entry);
+    const accountLabel=`${entryLabel(entry)} - ${labelForScope(scope,data)}`;
     const periodLabel=`${displayDate(from)} - ${displayDate(to)}`;
     const bytes=await createLedgerReportPdf({agencyName:data.agencyName,from,to,periodLabel,city,ownership,accountLabel,entries});
     const fileName=`viberent-${slug(accountLabel)}-${from}-to-${to}.pdf`;
@@ -52,6 +54,20 @@ function labelForScope(scope:LedgerScope,data:ReturnType<typeof getReports>){
   if(scope.type==="owner")return `Owner ledger - ${data.ledgerAccounts.owners.find(item=>item.id===scope.ownerId)?.label??"Owner"}`;
   if(scope.vehicleIds.length===1)return `Vehicle ledger - ${data.ledgerAccounts.vehicles.find(item=>item.id===scope.vehicleIds[0])?.label??"Vehicle"}`;
   return `Vehicle ledger - ${scope.vehicleIds.length} selected vehicles`;
+}
+
+function filterEntries(entries:ReturnType<typeof buildLedgerEntries>,entry:string){
+  if(entry==="income")return entries.filter(row=>row.income!==0);
+  if(entry==="expense")return entries.filter(row=>row.kind==="Expense");
+  if(entry==="owner-payment")return entries.filter(row=>["Owner settlement","Source settlement"].includes(row.kind));
+  return entries;
+}
+
+function entryLabel(entry:string){
+  if(entry==="income")return "Income";
+  if(entry==="expense")return "Expenses";
+  if(entry==="owner-payment")return "Owner and source payments";
+  return "All entries";
 }
 
 function requiredDate(value:string|null,name:string){const timestamp=value&&/^\d{4}-\d{2}-\d{2}$/.test(value)?Date.parse(`${value}T00:00:00Z`):Number.NaN;if(!value||Number.isNaN(timestamp)||new Date(timestamp).toISOString().slice(0,10)!==value)throw new DomainError("VALIDATION_FAILED",`A valid ${name} date is required.`,400);return value}

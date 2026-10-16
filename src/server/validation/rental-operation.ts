@@ -8,7 +8,13 @@ export type RentalInspectionInput = {
   version?: number;
 };
 
-export type CheckInRentalInput = RentalInspectionInput & { payment?: RecordPaymentInput };
+export type LateReturnChargeInput = {
+  amount: number;
+  method?: string;
+  reference?: string;
+};
+
+export type CheckInRentalInput = RentalInspectionInput & { payment?: RecordPaymentInput; lateReturnCharge?: LateReturnChargeInput };
 
 export function parseRentalInspectionInput(value: unknown): RentalInspectionInput {
   const input = value as Partial<RentalInspectionInput> | null;
@@ -24,6 +30,17 @@ export function parseRentalInspectionInput(value: unknown): RentalInspectionInpu
 
 export function parseCheckInRentalInput(value: unknown): CheckInRentalInput {
   const inspection = parseRentalInspectionInput(value);
-  const input = value as { payment?: unknown };
-  return { ...inspection, payment: input.payment === undefined ? undefined : parseRecordPaymentInput(input.payment) };
+  const input = value as { payment?: unknown; lateReturnCharge?: Partial<LateReturnChargeInput> };
+  const lateReturnCharge=input.lateReturnCharge;
+  if(lateReturnCharge!==undefined){
+    const errors:Record<string,string>={};
+    if(!Number.isInteger(lateReturnCharge.amount)||(lateReturnCharge.amount??0)<=0)errors.lateReturnCharge="Enter a positive whole PKR late-return charge.";
+    if(lateReturnCharge.method!==undefined&&!lateReturnCharge.method.trim())errors.lateReturnChargeMethod="Select a payment method.";
+    if(Object.keys(errors).length)throw new DomainError("VALIDATION_FAILED","Review the late-return charge.",400,errors);
+  }
+  return {
+    ...inspection,
+    payment: input.payment === undefined ? undefined : parseRecordPaymentInput(input.payment),
+    lateReturnCharge:lateReturnCharge===undefined?undefined:{amount:lateReturnCharge.amount!,method:lateReturnCharge.method?.trim()||"Cash",reference:lateReturnCharge.reference?.trim()||""},
+  };
 }

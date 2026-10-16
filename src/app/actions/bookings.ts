@@ -10,10 +10,12 @@ import {
   checkOutRental,
   confirmBooking,
   createAvailabilityBlock,
+  extendRental,
   listAvailabilityBlocks,
   listBookings,
   recordBookingDeposit,
   recordBookingPayment,
+  recordSourcePayout,
   reverseBookingTransaction,
   startBooking,
 } from "@/server/services/booking-service";
@@ -26,7 +28,7 @@ import { deliverRentalAgreement, type AgreementDeliveryResult } from "@/server/s
 import { deliverCheckinInvoice, deliverCheckoutNotice, deliverPaymentInvoice } from "@/server/services/notification-delivery-service";
 
 export type ConfirmBookingActionResult =
-  | { ok: true; data: ReturnType<typeof confirmBooking> & { agreementDelivery: AgreementDeliveryResult } }
+  | { ok: true; data: ReturnType<typeof confirmBooking> & { agreementDelivery: AgreementDeliveryResult; checkoutDelivery?: AgreementDeliveryResult } }
   | { ok: false; error: { code: string; message: string; fieldErrors: Record<string, string> } };
 
 export async function startBookingAction(existingDraftId?: string) {
@@ -46,7 +48,14 @@ export async function clearBookingAction(bookingDraftId:string) {
 }
 
 export async function confirmBookingAction(input: ConfirmBookingInput): Promise<ConfirmBookingActionResult> {
-  try { const context=await getWebRequestContext();const data=confirmBooking(context,input);const agreementDelivery=await deliverRentalAgreement(context,data.id);return { ok: true, data:{...data,agreementDelivery} }; }
+  try {
+    const context=await getWebRequestContext();
+    const data=confirmBooking(context,input);
+    const agreementDelivery=await deliverRentalAgreement(context,data.id);
+    const checkoutDelivery=data.status==="checked_out"?await deliverCheckoutNotice(context,data.id):undefined;
+    revalidatePath("/bookings");revalidatePath(`/bookings/${data.id}`);revalidatePath("/");revalidatePath("/reports");
+    return { ok: true, data:{...data,agreementDelivery,checkoutDelivery} };
+  }
   catch (error) { const issue = asDomainError(error); return { ok: false, error: { code: issue.code, message: issue.message, fieldErrors: issue.fieldErrors ?? {} } }; }
 }
 
@@ -75,6 +84,28 @@ export async function amendBookingAction(bookingId:string,input:{vehicleId:strin
   catch(error){const issue=asDomainError(error);return {ok:false as const,error:{code:issue.code,message:issue.message,fieldErrors:issue.fieldErrors??{}}};}
 }
 
+export async function extendRentalAction(bookingId:string,input:{returnAt:string;version:number}) {
+  try {
+    const data=extendRental(await getWebRequestContext(),bookingId,input);
+    revalidatePath("/bookings");
+    revalidatePath(`/bookings/${bookingId}`);
+    revalidatePath("/");
+    revalidatePath("/reports");
+    return {ok:true as const,data};
+  } catch(error) {
+    const issue=asDomainError(error);
+    return {ok:false as const,error:{code:issue.code,message:issue.message,fieldErrors:issue.fieldErrors??{}}};
+  }
+}
+
+export async function recordSourcePayoutAction(bookingId:string,input:{amount:number;method:string;reference:string;idempotencyKey:string}){
+  try{
+    const data=recordSourcePayout(await getWebRequestContext(),bookingId,input);
+    revalidatePath(`/bookings/${bookingId}`);revalidatePath("/");revalidatePath("/reports");
+    return {ok:true as const,data};
+  }catch(error){const issue=asDomainError(error);return {ok:false as const,error:{code:issue.code,message:issue.message,fieldErrors:issue.fieldErrors??{}}};}
+}
+
 export async function cancelBookingAction(bookingId:string,input:{reason:string;version:number}) {
   try {
     const data=cancelBooking(await getWebRequestContext(),bookingId,input);
@@ -100,12 +131,12 @@ export async function archiveBookingAction(bookingId:string,reason?:string) {
 }
 
 export async function checkOutRentalAction(bookingId: string, input: RentalInspectionInput) {
-  try { const context=await getWebRequestContext();const data=checkOutRental(context,bookingId,input);const notificationDelivery=await deliverCheckoutNotice(context,bookingId);return { ok: true as const, data:{...data,notificationDelivery} }; }
+  try { const context=await getWebRequestContext();const data=checkOutRental(context,bookingId,input);const notificationDelivery=await deliverCheckoutNotice(context,bookingId);revalidatePath("/bookings");revalidatePath(`/bookings/${bookingId}`);revalidatePath("/");return { ok: true as const, data:{...data,notificationDelivery} }; }
   catch (error) { const issue=asDomainError(error);return {ok:false as const,error:{code:issue.code,message:issue.message,fieldErrors:issue.fieldErrors??{}}}; }
 }
 
 export async function checkInRentalAction(bookingId: string, input: CheckInRentalInput) {
-  try { const context=await getWebRequestContext();const data=checkInRental(context,bookingId,input);const notificationDelivery=await deliverCheckinInvoice(context,bookingId);return { ok: true as const, data:{...data,notificationDelivery} }; }
+  try { const context=await getWebRequestContext();const data=checkInRental(context,bookingId,input);const notificationDelivery=await deliverCheckinInvoice(context,bookingId);revalidatePath("/bookings");revalidatePath(`/bookings/${bookingId}`);revalidatePath("/");revalidatePath("/reports");return { ok: true as const, data:{...data,notificationDelivery} }; }
   catch (error) { const issue=asDomainError(error);return {ok:false as const,error:{code:issue.code,message:issue.message,fieldErrors:issue.fieldErrors??{}}}; }
 }
 
@@ -114,6 +145,10 @@ export async function recordBookingPaymentAction(bookingId: string, input: Recor
     const context=await getWebRequestContext();
     const data = recordBookingPayment(context, bookingId, input);
     const notificationDelivery=await deliverPaymentInvoice(context,bookingId,{...input,receiptNumber:data.paymentReceiptNumber});
+    revalidatePath("/bookings");
+    revalidatePath(`/bookings/${bookingId}`);
+    revalidatePath("/");
+    revalidatePath("/reports");
     return { ok: true as const, data:{...data,notificationDelivery} };
   } catch (error) {
     const issue = asDomainError(error);
@@ -124,6 +159,10 @@ export async function recordBookingPaymentAction(bookingId: string, input: Recor
 export async function recordBookingDepositAction(bookingId: string, input: RecordDepositInput) {
   try {
     const data = recordBookingDeposit(await getWebRequestContext(), bookingId, input);
+    revalidatePath("/bookings");
+    revalidatePath(`/bookings/${bookingId}`);
+    revalidatePath("/");
+    revalidatePath("/reports");
     return { ok: true as const, data };
   } catch (error) {
     const issue = asDomainError(error);
@@ -136,7 +175,7 @@ export async function reverseBookingTransactionAction(bookingId: string, input: 
     const data = reverseBookingTransaction(await getWebRequestContext(), bookingId, input);
     revalidatePath("/bookings");
     revalidatePath(`/bookings/${bookingId}`);
-    revalidatePath("/dashboard");
+    revalidatePath("/");
     revalidatePath("/reports");
     return { ok: true as const, data };
   } catch (error) {
