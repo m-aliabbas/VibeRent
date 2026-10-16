@@ -1,4 +1,0 @@
-interface:
-  display_name: "Review VibeRent UI"
-  short_description: "Audit VibeRent UI quality and consistency"
-  default_prompt: "Use $review-viberent-ui to review the current VibeRent frontend."
