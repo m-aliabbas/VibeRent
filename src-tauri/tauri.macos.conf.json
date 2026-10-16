@@ -1,0 +1,9 @@
+{
+  "bundle": {
+    "resources": [
+      "../.next/standalone/**/*",
+      "bin/.env",
+      "bin/*.dylib"
+    ]
+  }
+}
