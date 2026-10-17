@@ -63,6 +63,16 @@ Use this file for durable product and architecture decisions. Do not record casu
 - **Consequences:** The supported production topology is one application instance with the database on durable local storage. Multiple app instances must not share the SQLite file over a network filesystem. Moving to horizontally scaled writes requires migration to a server database.
 - **Follow-up tickets:** Authentication/authorization, secure files, audit coverage, backup/restore, and release review remain required.
 
+### D-115 — Flutter mobile client using the existing web backend
+
+- **Status:** Accepted in principle; release details remain gated
+- **Date:** 17 October 2026
+- **Decision:** Build the VibeRent staff mobile application in Flutter. The existing Next.js modular monolith remains the canonical backend and exposes mobile capabilities through versioned `/api/v1` HTTPS Route Handlers. Flutter must not access SQLite directly or duplicate server-owned business rules.
+- **Context:** The mobile product is intended for field operations while the web/desktop product remains the complete administrative surface.
+- **Reason:** Flutter provides one Android/iOS client, while reusing the existing services preserves availability, pricing, authorization, transactions, and audit behavior across web and mobile.
+- **Consequences:** Native authentication, hosted HTTPS reachability, private object storage, idempotency, OpenAPI contracts, and mobile traffic readiness are release gates. The first release is online-first with read-only caching; high-risk offline writes are excluded.
+- **Follow-up artifact:** `docs/MOBILE_APP_PRD.md`.
+
 ## Open decisions
 
 ### D-114 — Local Windows desktop distribution and recovery

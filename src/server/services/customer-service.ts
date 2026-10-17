@@ -7,23 +7,46 @@ import { DomainError } from "@/server/domain/errors";
 import { parseCreateCustomerInput } from "@/server/validation/customer";
 import { attachCustomerCnicDraft } from "@/server/services/customer-cnic-service";
 
-export type CustomerDto = { id: string; name: string; fatherName: string | null; phone: string; cnic: string; email: string | null; dateOfBirth: string | null; address: string | null; cnicExpiresAt: string | null; licenseNumber: string | null; licenseExpiresAt: string | null; status: string; version: number; updatedAt: string };
+export type CustomerDto = { id: string; name: string; fatherName: string | null; phone: string; cnic: string; email: string | null; dateOfBirth: string | null; address: string | null; cnicExpiresAt: string | null; licenseNumber: string | null; licenseExpiresAt: string | null; status: string; version: number; updatedAt: string; bookingCount: number; paidAmount: number; outstanding: number };
 
 export type CustomerDetailDto = CustomerDto & {
-  bookingCount: number;
   lifetimeValue: number;
-  outstanding: number;
   lastRentalAt: string | null;
   bookings: Array<{ id: string; vehicle: string; plate: string; status: string; pickupAt: string; returnAt: string; totalAmount: number }>;
 };
 
+const customerListSelect = `
+  SELECT c.id, c.name, c.father_name AS fatherName, c.phone_normalized AS phone,
+    substr(c.cnic_normalized,1,5) || '-' || substr(c.cnic_normalized,6,7) || '-' || substr(c.cnic_normalized,-1) AS cnic,
+    c.email, c.date_of_birth AS dateOfBirth, c.address, c.cnic_expires_at AS cnicExpiresAt,
+    c.license_number AS licenseNumber, c.license_expires_at AS licenseExpiresAt, c.status, c.version, c.updated_at AS updatedAt,
+    (SELECT count(*) FROM bookings bk WHERE bk.agency_id=c.agency_id AND bk.customer_id=c.id AND bk.archived_at IS NULL) AS bookingCount,
+    coalesce((
+      SELECT sum(CASE WHEN lower(ft.kind) IN ('refund','reversal') THEN -ft.amount ELSE ft.amount END)
+      FROM financial_transactions ft
+      WHERE ft.agency_id=c.agency_id AND ft.customer_id=c.id AND ft.status='posted'
+        AND lower(ft.kind) IN ('payment','late_return_charge','deposit_applied','reversal','refund')
+    ), 0) AS paidAmount,
+    coalesce((
+      SELECT sum(max(0, bk.total_amount - coalesce((
+        SELECT sum(CASE WHEN lower(ft.kind) IN ('refund','reversal') THEN -ft.amount ELSE ft.amount END)
+        FROM financial_transactions ft
+        WHERE ft.agency_id=bk.agency_id AND ft.booking_id=bk.id AND ft.status='posted'
+          AND lower(ft.kind) IN ('payment','late_return_charge','deposit_applied','reversal','refund')
+      ), 0)))
+      FROM bookings bk
+      WHERE bk.agency_id=c.agency_id AND bk.customer_id=c.id AND bk.archived_at IS NULL
+        AND bk.status NOT IN ('cancelled','no_show')
+    ), 0) AS outstanding
+  FROM customers c`;
+
 function getCustomerRow(context: RequestContext, id: string) {
-  return sqlite.prepare(`SELECT id, name, father_name AS fatherName, phone_normalized AS phone, substr(cnic_normalized,1,5) || '-' || substr(cnic_normalized,6,7) || '-' || substr(cnic_normalized,-1) AS cnic, email, date_of_birth AS dateOfBirth, address, cnic_expires_at AS cnicExpiresAt, license_number AS licenseNumber, license_expires_at AS licenseExpiresAt, status, version, updated_at AS updatedAt FROM customers WHERE agency_id=? AND id=? AND archived_at IS NULL LIMIT 1`).get(context.agencyId, id) as CustomerDto | undefined;
+  return sqlite.prepare(`${customerListSelect} WHERE c.agency_id=? AND c.id=? AND c.archived_at IS NULL LIMIT 1`).get(context.agencyId, id) as CustomerDto | undefined;
 }
 
 export function listCustomers(context: RequestContext) {
   requireRole(context, ["agency_owner", "fleet_manager", "rental_agent", "accountant"]);
-  return sqlite.prepare(`SELECT id, name, father_name AS fatherName, phone_normalized AS phone, substr(cnic_normalized,1,5) || '-' || substr(cnic_normalized,6,7) || '-' || substr(cnic_normalized,-1) AS cnic, email, date_of_birth AS dateOfBirth, address, cnic_expires_at AS cnicExpiresAt, license_number AS licenseNumber, license_expires_at AS licenseExpiresAt, status, version, updated_at AS updatedAt FROM customers WHERE agency_id=? AND archived_at IS NULL ORDER BY name`).all(context.agencyId) as CustomerDto[];
+  return sqlite.prepare(`${customerListSelect} WHERE c.agency_id=? AND c.archived_at IS NULL ORDER BY c.name`).all(context.agencyId) as CustomerDto[];
 }
 
 export function getCustomer(context: RequestContext, id: string) {

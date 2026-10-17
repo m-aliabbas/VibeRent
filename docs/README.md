@@ -16,6 +16,8 @@ This directory is the working source of truth for planning, building, and verify
 | [DEVELOPMENT_TRACKER.md](./DEVELOPMENT_TRACKER.md) | Current build status, active milestone, verification, and blockers | Every meaningful development session |
 | [QA_CHECKLIST.md](./QA_CHECKLIST.md) | Functional, responsive, accessibility, and release checks | Features or quality standards change |
 | [DECISIONS.md](./DECISIONS.md) | Accepted decisions and unresolved questions | A durable technical/product decision is made |
+| [MOBILE_APP_PRD.md](./MOBILE_APP_PRD.md) | Flutter mobile product requirements, component choices, API gaps, architecture, security, and delivery plan | Mobile scope, contracts, architecture, or release gates change |
+| [MOBILE_APP_TODO.md](./MOBILE_APP_TODO.md) | Dependency-ordered implementation checklist for the Flutter mobile application | A mobile task starts, completes, changes, or becomes blocked |
 
 ## Requirement identifiers
 
