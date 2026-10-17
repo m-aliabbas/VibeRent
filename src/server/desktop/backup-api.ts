@@ -1,7 +1,7 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import { sqlite } from "@/db/connection";
+import { execute } from "@/db/query";
 import { requireRole } from "@/server/auth/authorize";
 import { getApiRequestContext } from "@/server/auth/session";
 
@@ -11,13 +11,14 @@ export async function requireBackupAdministrator(request: Request) {
   return context;
 }
 
-export function recordBackupAudit(
+export async function recordBackupAudit(
   context: { agencyId: string; userId: string },
   action: string,
   metadata: Record<string, unknown>,
 ) {
-  sqlite.prepare("INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)")
-    .run(
+  await execute(
+    "INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)",
+    [
       `aud_${randomUUID()}`,
       context.agencyId,
       context.userId,
@@ -26,5 +27,6 @@ export function recordBackupAudit(
       context.agencyId,
       JSON.stringify(metadata),
       new Date().toISOString(),
-    );
+    ],
+  );
 }

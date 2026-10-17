@@ -8,7 +8,7 @@ export async function DELETE(request: Request) {
     const context = await requireBackupAdministrator(request);
     requestId = context.requestId;
     const result = await disconnectGoogleDrive();
-    recordBackupAudit(context, "backup.google_drive_disconnected", {});
+    await recordBackupAudit(context, "backup.google_drive_disconnected", {});
     return apiSuccess(result, requestId);
   } catch (error) {
     return apiFailure(error, requestId);

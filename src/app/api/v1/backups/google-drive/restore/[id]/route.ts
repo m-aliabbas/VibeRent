@@ -22,7 +22,7 @@ export async function POST(request: Request, route: { params: Promise<{ id: stri
     temporaryPath = path.join(temporaryDirectory, `${crypto.randomUUID()}.viberent-backup.tgz`);
     const downloaded = await downloadGoogleDriveBackup(id, temporaryPath);
     const result = await stageRestore(temporaryPath, downloaded.filename, context);
-    recordBackupAudit(context, "backup.restore_staged", { source: "google_drive", sourceFilename: downloaded.filename, safetyBackup: result.safetyBackup });
+    await recordBackupAudit(context, "backup.restore_staged", { source: "google_drive", sourceFilename: downloaded.filename, safetyBackup: result.safetyBackup });
     return apiSuccess(result, requestId);
   } catch (error) {
     return apiFailure(error, requestId);

@@ -31,7 +31,7 @@ export async function POST(request: Request) {
     temporaryPath = path.join(temporaryDirectory, `${crypto.randomUUID()}.viberent-backup.tgz`);
     await writeFile(temporaryPath, Buffer.from(await file.arrayBuffer()), { flag: "wx", mode: 0o600 });
     const result = await stageRestore(temporaryPath, file.name, context);
-    recordBackupAudit(context, "backup.restore_staged", { sourceFilename: file.name, safetyBackup: result.safetyBackup });
+    await recordBackupAudit(context, "backup.restore_staged", { sourceFilename: file.name, safetyBackup: result.safetyBackup });
     return apiSuccess(result, requestId);
   } catch (error) {
     return apiFailure(error, requestId);

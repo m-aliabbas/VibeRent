@@ -16,7 +16,7 @@ export async function POST(request: Request) {
       try { driveUpload = await uploadBackupToGoogleDrive(backup.path); }
       catch (error) { driveError = error instanceof Error ? error.message : "Drive upload failed."; }
     }
-    recordBackupAudit(context, "backup.created", {
+    await recordBackupAudit(context, "backup.created", {
       filename: backup.filename,
       size: backup.size,
       driveUploaded: Boolean(driveUpload),
