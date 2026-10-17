@@ -4,8 +4,8 @@
   "version": "1.0.17",
   "identifier": "com.vibeexe.viberent",
   "build": {
-    "beforeDevCommand": "npm run build && npm run desktop:prepare",
-    "beforeBuildCommand": "npm run build && npm run desktop:prepare",
+    "beforeDevCommand": "npm run build:desktop-server && npm run desktop:prepare",
+    "beforeBuildCommand": "npm run build:desktop-server && npm run desktop:prepare",
     "frontendDist": "static"
   },
   "bundle": {

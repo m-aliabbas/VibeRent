@@ -7,7 +7,7 @@ import { getBookingCnicIntake, uploadBookingCnic, type CnicSide } from "@/server
 function failure(error:unknown){const issue=asDomainError(error);return {ok:false as const,error:{code:issue.code,message:issue.message,fieldErrors:issue.fieldErrors??{}}};}
 
 export async function getBookingCnicAction(bookingDraftId:string){
-  try{return {ok:true as const,data:getBookingCnicIntake(await getWebRequestContext(),bookingDraftId)};}
+  try{return {ok:true as const,data:await getBookingCnicIntake(await getWebRequestContext(),bookingDraftId)};}
   catch(error){return failure(error);}
 }
 
@@ -22,7 +22,7 @@ export async function uploadBookingCnicAction(formData:FormData){
 }
 
 export async function getGuarantorCnicAction(bookingDraftId:string){
-  try{return {ok:true as const,data:getBookingCnicIntake(await getWebRequestContext(),bookingDraftId,"guarantor")};}
+  try{return {ok:true as const,data:await getBookingCnicIntake(await getWebRequestContext(),bookingDraftId,"guarantor")};}
   catch(error){return failure(error);}
 }
 

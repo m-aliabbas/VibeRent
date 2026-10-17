@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { sqlite } from "@/db/connection";
+import { execute, inTransaction, queryOne } from "@/db/query";
 import { requireRole } from "@/server/auth/authorize";
 import { MAX_CNIC_IMAGE_BYTES } from "@/server/cnic-ocr/cnic-ocr-service";
 import { extractStoredCnicPair } from "@/server/cnic-ocr/stored-cnic-pair";
@@ -37,13 +37,12 @@ function entityType(target: CustomerCnicTarget) {
   return target.type === "customer" ? "customer" : "customer_draft";
 }
 
-function assertTarget(context: RequestContext, target: CustomerCnicTarget) {
+async function assertTarget(context: RequestContext, target: CustomerCnicTarget) {
   if (target.type === "draft") {
     if (!/^cnd_[0-9a-f-]{36}$/.test(target.id)) throw new DomainError("VALIDATION_FAILED", "The customer document session is invalid.", 400);
     return;
   }
-  const customer = sqlite.prepare("SELECT id FROM customers WHERE agency_id=? AND id=? AND archived_at IS NULL LIMIT 1")
-    .get(context.agencyId, target.id);
+  const customer = await queryOne("SELECT id FROM customers WHERE agency_id=? AND id=? AND archived_at IS NULL LIMIT 1",[context.agencyId, target.id]);
   if (!customer) throw new DomainError("NOT_FOUND", "Customer not found.", 404);
 }
 
@@ -72,16 +71,14 @@ function fileDto(row: FileRow | undefined, side: CnicSide): BookingCnicFileDto |
   return { id: row.id, side, originalName: row.originalName, mimeType: row.mimeType, size: row.size, ocrStatus: row.ocrStatus ?? "failed", createdAt: row.createdAt, previewUrl: `/api/v1/files/${row.id}` };
 }
 
-function latestSide(agencyId: string, target: CustomerCnicTarget, side: CnicSide): FileRow | undefined {
-  return sqlite.prepare(`SELECT id,storage_key AS storageKey,original_name AS originalName,mime_type AS mimeType,size,ocr_status AS ocrStatus,ocr_result AS ocrResult,created_at AS createdAt
+function latestSide(agencyId: string, target: CustomerCnicTarget, side: CnicSide): Promise<FileRow | undefined> {
+  return queryOne<FileRow>(`SELECT id,storage_key AS storageKey,original_name AS originalName,mime_type AS mimeType,size,ocr_status AS ocrStatus,ocr_result AS ocrResult,created_at AS createdAt
     FROM private_files WHERE agency_id=? AND entity_type=? AND entity_id=? AND classification=? AND status='ready'
-    ORDER BY created_at DESC LIMIT 1`)
-    .get(agencyId, entityType(target), target.id, `customer_cnic_${side}`) as FileRow | undefined;
+    ORDER BY created_at DESC LIMIT 1`,[agencyId, entityType(target), target.id, `customer_cnic_${side}`]);
 }
 
-function buildIntake(agencyId: string, target: CustomerCnicTarget): BookingCnicIntakeDto {
-  const front = latestSide(agencyId, target, "front");
-  const back = latestSide(agencyId, target, "back");
+async function buildIntake(agencyId: string, target: CustomerCnicTarget): Promise<BookingCnicIntakeDto> {
+  const [front,back] = await Promise.all([latestSide(agencyId, target, "front"),latestSide(agencyId, target, "back")]);
   const frontResult = parseResult(front?.ocrResult ?? null);
   const backResult = parseResult(back?.ocrResult ?? null);
   return {
@@ -104,15 +101,15 @@ export function createCustomerCnicDraft(context: RequestContext) {
   return { id: `cnd_${randomUUID()}` };
 }
 
-export function getCustomerCnicIntake(context: RequestContext, target: CustomerCnicTarget) {
+export async function getCustomerCnicIntake(context: RequestContext, target: CustomerCnicTarget) {
   requireRole(context, ["agency_owner", "fleet_manager", "rental_agent"]);
-  assertTarget(context, target);
+  await assertTarget(context, target);
   return buildIntake(context.agencyId, target);
 }
 
 export async function uploadCustomerCnic(context: RequestContext, target: CustomerCnicTarget, side: CnicSide, file: File) {
   requireRole(context, ["agency_owner", "fleet_manager", "rental_agent"]);
-  assertTarget(context, target);
+  await assertTarget(context, target);
   if (side !== "front" && side !== "back") throw new DomainError("VALIDATION_FAILED", "Choose the front or back CNIC side.", 400);
   if (!imageTypes.includes(file.type)) throw new DomainError("VALIDATION_FAILED", "Use a JPEG, PNG, WEBP, or non-animated GIF image.", 415, { image: "Unsupported image type." });
   if (file.size <= 0 || file.size > MAX_CNIC_IMAGE_BYTES) throw new DomainError("VALIDATION_FAILED", "The image must be 10 MiB or smaller.", 413, { image: "Choose a smaller image." });
@@ -131,14 +128,11 @@ export async function uploadCustomerCnic(context: RequestContext, target: Custom
 
   const now = new Date().toISOString();
   try {
-    sqlite.transaction(() => {
-      sqlite.prepare(`UPDATE private_files SET status='replaced',updated_at=? WHERE agency_id=? AND entity_type=? AND entity_id=? AND classification=? AND status='ready'`)
-        .run(now, context.agencyId, targetType, target.id, `customer_cnic_${side}`);
-      sqlite.prepare(`INSERT INTO private_files (id,agency_id,entity_type,entity_id,storage_key,original_name,mime_type,size,classification,status,ocr_status,ocr_result,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,'ready',?,?,?,?)`)
-        .run(id, context.agencyId, targetType, target.id, storageKey, safeName(file.name), file.type, file.size, `customer_cnic_${side}`, ocrStatus, null, now, now);
-      sqlite.prepare(`INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)`)
-        .run(randomUUID(), context.agencyId, context.userId, "customer.cnic_received", targetType, target.id, JSON.stringify({ fileId: id, side, ocrStatus }), now);
-    })();
+    await inTransaction(async () => {
+      await execute(`UPDATE private_files SET status='replaced',updated_at=? WHERE agency_id=? AND entity_type=? AND entity_id=? AND classification=? AND status='ready'`,[now, context.agencyId, targetType, target.id, `customer_cnic_${side}`]);
+      await execute(`INSERT INTO private_files (id,agency_id,entity_type,entity_id,storage_key,original_name,mime_type,size,classification,status,ocr_status,ocr_result,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,'ready',?,?,?,?)`,[id, context.agencyId, targetType, target.id, storageKey, safeName(file.name), file.type, file.size, `customer_cnic_${side}`, ocrStatus, null, now, now]);
+      await execute(`INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)`,[randomUUID(), context.agencyId, context.userId, "customer.cnic_received", targetType, target.id, JSON.stringify({ fileId: id, side, ocrStatus }), now]);
+    });
   } catch (error) {
     await unlink(absolutePath).catch(() => undefined);
     throw error;
@@ -148,19 +142,16 @@ export async function uploadCustomerCnic(context: RequestContext, target: Custom
 }
 
 async function refreshCustomerCnicExtraction(agencyId: string, target: CustomerCnicTarget) {
-  const front = latestSide(agencyId, target, "front");
-  const back = latestSide(agencyId, target, "back");
+  const [front,back] = await Promise.all([latestSide(agencyId, target, "front"),latestSide(agencyId, target, "back")]);
   const extraction = await extractStoredCnicPair(
     front ? { absolutePath: path.join(storageRoot, front.storageKey), mimeType: front.mimeType as CnicImageMimeType } : undefined,
     back ? { absolutePath: path.join(storageRoot, back.storageKey), mimeType: back.mimeType as CnicImageMimeType } : undefined,
   );
-  sqlite.prepare(`UPDATE private_files SET ocr_status=?,ocr_result=?,updated_at=? WHERE agency_id=? AND entity_type=? AND entity_id=? AND classification IN ('customer_cnic_front','customer_cnic_back') AND status='ready'`)
-    .run(extraction.status, extraction.result ? JSON.stringify(extraction.result) : null, new Date().toISOString(), agencyId, entityType(target), target.id);
+  await execute(`UPDATE private_files SET ocr_status=?,ocr_result=?,updated_at=? WHERE agency_id=? AND entity_type=? AND entity_id=? AND classification IN ('customer_cnic_front','customer_cnic_back') AND status='ready'`,[extraction.status, extraction.result ? JSON.stringify(extraction.result) : null, new Date().toISOString(), agencyId, entityType(target), target.id]);
 }
 
-export function attachCustomerCnicDraft(context: RequestContext, draftId: string, customerId: string, now: string) {
+export async function attachCustomerCnicDraft(context: RequestContext, draftId: string, customerId: string, now: string) {
   if (!/^cnd_[0-9a-f-]{36}$/.test(draftId)) throw new DomainError("VALIDATION_FAILED", "The customer document session is invalid.", 400);
-  sqlite.prepare(`UPDATE private_files SET entity_type='customer',entity_id=?,updated_at=?
-    WHERE agency_id=? AND entity_type='customer_draft' AND entity_id=? AND classification IN ('customer_cnic_front','customer_cnic_back') AND status='ready'`)
-    .run(customerId, now, context.agencyId, draftId);
+  await execute(`UPDATE private_files SET entity_type='customer',entity_id=?,updated_at=?
+    WHERE agency_id=? AND entity_type='customer_draft' AND entity_id=? AND classification IN ('customer_cnic_front','customer_cnic_back') AND status='ready'`,[customerId, now, context.agencyId, draftId]);
 }

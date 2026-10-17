@@ -1,9 +1,9 @@
 import type { Vehicle } from "@/types/vehicle";
 
 export interface VehicleRepository {
-  list(agencyId: string): Vehicle[];
-  getById(agencyId: string, id: string): Vehicle | undefined;
-  save(agencyId: string, actorId: string, vehicle: Vehicle): Vehicle;
+  list(agencyId: string): Promise<Vehicle[]>;
+  getById(agencyId: string, id: string): Promise<Vehicle | undefined>;
+  save(agencyId: string, actorId: string, vehicle: Vehicle): Promise<Vehicle>;
 }
 
 export type BookingListItem = {

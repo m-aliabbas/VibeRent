@@ -58,10 +58,10 @@ export default async function SectionPage({
   if (!data) notFound();
   if (section === "customers") return <CustomersModule />;
   if (section === "bookings") return <BookingsWorkspace />;
-  if (section === "owners") return <OwnersWorkspace data={listOwners(await getWebRequestContext())} />;
-  if (section === "expenses") return <ExpensesWorkspace data={getExpenseWorkspace(await getWebRequestContext())} />;
-  if (section === "reports") return <ReportsWorkspace data={getReports(await getWebRequestContext())} />;
-  if (section === "drivers") return <DriversWorkspace initial={listDrivers(await getWebRequestContext())} />;
-  if (section === "settings") return <SettingsWorkspace initial={getOrganizationSettings(await getWebRequestContext())} />;
+  if (section === "owners") return <OwnersWorkspace data={await listOwners(await getWebRequestContext())} />;
+  if (section === "expenses") return <ExpensesWorkspace data={await getExpenseWorkspace(await getWebRequestContext())} />;
+  if (section === "reports") return <ReportsWorkspace data={await getReports(await getWebRequestContext())} />;
+  if (section === "drivers") return <DriversWorkspace initial={await listDrivers(await getWebRequestContext())} />;
+  if (section === "settings") return <SettingsWorkspace initial={await getOrganizationSettings(await getWebRequestContext())} />;
   notFound();
 }

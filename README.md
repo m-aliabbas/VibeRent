@@ -6,25 +6,27 @@ VibeRent now includes a Tauri v2 desktop service launcher, Firebase-backed signe
 
 See [`WINDOWS_RELEASE.md`](./WINDOWS_RELEASE.md) for Firebase, Google OAuth, installer, runtime-data, backup/restore, and release setup.
 
-## SQLite pilot database
+## Database targets
 
-The pilot uses SQLite in WAL mode through Drizzle ORM. It supports one deployed application instance with the database on durable local storage; do not place the database on a shared network filesystem or run multiple writers across app instances. In the desktop build, the database and private files live under the OS application-data directory and survive installer upgrades.
+Hosted web builds use PostgreSQL. The Windows desktop build remains SQLite in WAL mode and keeps the current self-contained installation and backup behavior. Both targets use the same application services and API routes through a shared async database adapter.
 
 ```bash
 npm run db:generate
 npm run db:migrate
 npm run db:seed
 npm run db:check
+npm run db:check:postgres
+npm run db:check:agency-backup
 npm run db:check:desktop-backup
 ```
 
-Set `DATABASE_URL` to an absolute SQLite file path in deployment. The default local file is `.data/viberent.db` and is ignored by Git.
+For hosted web, set `VIBERENT_DATABASE=postgres` and `POSTGRES_URL`, then run `npm run db:migrate:web` and `npm run build:web`. For Windows, run `npm run build:desktop-server`; SQLite uses `SQLITE_DATABASE_PATH` or defaults to `.data/viberent.db` outside the packaged app.
 
-The backend is a Next.js modular monolith: Server Actions and `/api/v1` Route Handlers call the same application services, which enforce tenant scope and use server-only SQLite repositories. Vehicle changes and booking confirmations append audit events. Booking confirmation uses an immediate transaction and half-open intervals (`[pickupAt, returnAt)`).
+The backend is a Next.js modular monolith: Server Actions and `/api/v1` Route Handlers call the same application services and enforce tenant scope. Vehicle changes and booking confirmations append audit events. Booking confirmation uses a database transaction and half-open intervals (`[pickupAt, returnAt)`). `GET|POST /api/v1/agency-backup` exports and restores one agency as a validated SQLite package; this is separate from PostgreSQL platform backups.
 
 ## Authentication and organizations
 
-VibeRent uses Better Auth with SQLite/Drizzle for verified email/password accounts, secure cookie sessions, password recovery, organizations, invitations, and custom staff roles. Copy `.env.example`, set a strong `BETTER_AUTH_SECRET`, and set the deployed `BETTER_AUTH_URL`.
+VibeRent uses Better Auth with the selected Drizzle database for verified email/password accounts, secure cookie sessions, password recovery, organizations, invitations, and custom staff roles. Copy `.env.example`, set a strong `BETTER_AUTH_SECRET`, and set the deployed `BETTER_AUTH_URL`.
 
 ```bash
 cp .env.example .env.local
@@ -61,7 +63,7 @@ The maintained endpoint inventory, completion criteria, and intentionally deferr
 
 API responses use consistent `{ data, meta }` and `{ error }` envelopes. Browser requests use the same secure session and application-service authorization as Server Actions. Native mobile access tokens remain a separate API phase.
 
-VibeRent is a responsive car-rental operations system for Pakistani agencies managing owned and third-party vehicles. Core fleet, customer, booking, rental-operation, expense, audit, authentication, and desktop backup flows now persist through the local SQLite backend; remaining product gaps are tracked separately.
+VibeRent is a responsive car-rental operations system for Pakistani agencies managing owned and third-party vehicles. Core workflows persist through PostgreSQL on hosted web and SQLite on Windows desktop; remaining product gaps are tracked separately.
 
 ## Run locally
 
@@ -85,7 +87,7 @@ VibeRent's frontend, Server Actions, `/api/v1` backend, and SQLite access run in
 npm run dev:lan
 ```
 
-For a built release, run `npm run build` once and then `npm run start:lan`. Both LAN commands bind to `0.0.0.0:4321` and apply database migrations before startup. Configure `.env.local` with the URL clients will use:
+For a built local SQLite release, run `npm run build:desktop-server` once and then `npm run start:lan`. Both LAN commands bind to `0.0.0.0:4321` and apply SQLite migrations before startup. Configure `.env.local` with the URL clients will use:
 
 ```dotenv
 BETTER_AUTH_URL=http://pos.local:4321

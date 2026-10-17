@@ -6,7 +6,7 @@ VibeRent is a responsive car-rental operations dashboard for local agencies. It 
 
 Read these source notes before changing product behavior or visual direction:
 
-- `Backend.md` for backend boundaries, SQLite rules, API design, and the future mobile path.
+- `Backend.md` for backend boundaries, dual-database rules, API design, and the future mobile path.
 - `Design2.md` for the agreed layout and design language.
 - `UI.md` for screen-specific requirements.
 - `Phases.md` for the larger product roadmap and domain scope.
@@ -29,7 +29,7 @@ Backend planning is now documented in `Backend.md`. Backend implementation still
 
 When bootstrapping the app, use Next.js App Router, TypeScript, Tailwind CSS, and shadcn/ui unless the user specifies otherwise. Use Lucide icons and a chart library only where data visualization adds real value. Keep business data and UI state typed.
 
-The current persistence decision is **SQLite with Drizzle ORM**. Do not migrate to PostgreSQL, Prisma, Supabase, or a separate backend service unless the user explicitly changes that decision. Keep database-specific code behind repositories so a future database migration does not affect UI or domain workflows.
+The current persistence decision is **PostgreSQL for the hosted web build and SQLite for the Windows desktop build**, both through Drizzle ORM and the shared async database adapter. Do not replace Drizzle, introduce Supabase, or split out a separate backend service unless the user explicitly changes that decision. Keep database-specific code behind repositories/adapters so UI and domain workflows remain identical on both targets.
 
 ## Backend and API rules
 
@@ -41,10 +41,11 @@ The current persistence decision is **SQLite with Drizzle ORM**. Do not migrate 
 - Scope every tenant-owned query by `agencyId`. Never trust an `agencyId`, role, price, total, or status supplied by a client without deriving or verifying it server-side.
 - Keep API contracts DTO-based and independent of Drizzle row types. Use stable IDs, ISO 8601 timestamps, PKR minor units, explicit pagination, and structured error codes.
 - Multi-record workflows such as booking confirmation, check-out, check-in, payment posting, and owner payout must be transactional and append audit events.
-- SQLite is the current prototype and early single-instance database. Use WAL mode, foreign keys, migrations, busy timeouts, a persistent disk, and tested backups. Do not deploy the database on an ephemeral or read-only filesystem.
-- Do not run multiple application instances against one local SQLite file. Reassess PostgreSQL when concurrency, horizontal scaling, hosted mobile traffic, or operational requirements exceed the thresholds in `Backend.md`.
-- Store uploaded file metadata in SQLite, but keep actual photos, receipts, CNIC/license images, and signed contracts in private object storage once uploads become live.
-- Never expose raw SQLite errors, SQL, secrets, internal paths, CNIC values, or private storage keys in API responses or logs.
+- Hosted web deployments must use PostgreSQL migrations from `drizzle-postgres/`, a managed connection URL, provider backups/PITR, and normal multi-instance deployment practices.
+- Windows desktop remains SQLite. Use WAL mode, foreign keys, migrations, busy timeouts, tested backups, and one application instance per local database. Do not place the SQLite file on a network share.
+- Per-agency web export/restore uses a validated portable SQLite package; it does not replace PostgreSQL platform backups.
+- Store uploaded file metadata in the selected database, but keep actual photos, receipts, CNIC/license images, and signed contracts in private object storage for hosted web deployments.
+- Never expose raw database errors, SQL, secrets, internal paths, CNIC values, or private storage keys in API responses or logs.
 
 ## Design direction
 

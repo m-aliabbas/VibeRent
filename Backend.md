@@ -2,10 +2,11 @@
 
 ## 1. Decision summary
 
-VibeRent will use a **Next.js modular monolith with SQLite and Drizzle ORM** for the current stage.
+VibeRent uses a **Next.js modular monolith with PostgreSQL for hosted web and SQLite for Windows desktop**, both through Drizzle ORM and shared application services.
 
 - Runtime: Next.js App Router on a Node.js runtime
-- Database: SQLite through `better-sqlite3`
+- Hosted web database: PostgreSQL through `pg` and Drizzle
+- Windows desktop database: SQLite through `better-sqlite3` and Drizzle
 - ORM and migrations: Drizzle ORM and Drizzle Kit
 - Web mutations: Server Actions where they improve the web workflow
 - Shared/public interface: versioned Next.js Route Handlers under `/api/v1`
@@ -13,7 +14,7 @@ VibeRent will use a **Next.js modular monolith with SQLite and Drizzle ORM** for
 - Files: local placeholders during prototyping; private object storage when uploads go live
 - Mobile: a future client of `/api/v1`, not a second implementation of business rules
 
-SQLite is an intentional current-stage choice, not an assumption that it will serve every future scale. PostgreSQL, Prisma, Supabase, and a separate NestJS service are out of scope unless the user explicitly changes the decision or an agreed migration trigger is reached.
+PostgreSQL is the authoritative hosted-web database. SQLite remains an intentional Windows desktop choice. Prisma, Supabase, and a separate NestJS service remain out of scope unless the user explicitly changes the decision.
 
 ## 2. Goals
 
@@ -34,7 +35,7 @@ The backend should:
 - Supporting multiple active backend instances against the same SQLite file
 - Implementing offline synchronization before mobile workflows are known
 - Adding production payments, e-signatures, WhatsApp, SMS, or accounting integrations without a separate scoped decision
-- Migrating to PostgreSQL preemptively
+- Making the Windows desktop build depend on a hosted PostgreSQL service
 
 ## 4. Architecture
 
@@ -49,7 +50,9 @@ Web UI                         Future mobile app
                          |
                     Repositories
                          |
-                  Drizzle + SQLite
+             Shared async DB adapter
+                    /       \
+     PostgreSQL (hosted web) SQLite (Windows desktop)
 
 External integrations/webhooks ----> /api/v1 or dedicated webhook routes
 Private files ----------------------> object storage (when enabled)
@@ -88,7 +91,7 @@ The important boundary is the application service layer. A booking created from 
 - Encapsulate data access and query construction.
 - Always require agency scope for tenant-owned data.
 - Return domain records or DTO inputs, not UI-specific objects.
-- Keep SQLite-specific queries localized so PostgreSQL can replace them later.
+- Keep database-specific behavior in the shared adapter and target-specific schema/connection modules.
 
 #### Database
 
@@ -145,9 +148,11 @@ src/
 
 Existing repositories and `src/db/booking-service.ts` should be moved or adapted only when the corresponding backend work is actively implemented.
 
-## 6. SQLite operating rules
+## 6. Database operating rules
 
-SQLite is appropriate while VibeRent runs as a prototype or a small, single-instance installation.
+Hosted web uses PostgreSQL and may run multiple application instances. Use managed backups or equivalent automated snapshots, point-in-time recovery where available, connection pooling, TLS, and separate production credentials.
+
+Windows desktop uses SQLite as a self-contained, single-instance installation.
 
 Required settings and practices:
 
@@ -163,11 +168,11 @@ Required settings and practices:
 - Use integer minor units for PKR amounts. For example, `1250000` represents PKR 12,500.00 if paisa precision is required. If the product intentionally uses whole rupees, document that choice and keep it consistent.
 - Store timestamps as normalized UTC ISO 8601 strings and convert to `Asia/Karachi` only at presentation boundaries.
 
-### Deployment constraint
+### SQLite deployment constraint
 
-The production process must have one writable application instance connected to one persistent SQLite file. Serverless or horizontally scaled deployments with an ephemeral local filesystem are not valid for this architecture.
+Each Windows installation must have one writable application instance connected to one persistent SQLite file. Do not share that file between computers or processes.
 
-If an early hosted pilot is required while retaining SQLite, deploy a long-running Node.js process on a host with a persistent volume, health checks, backups, and TLS termination.
+The hosted web deployment must set `VIBERENT_DATABASE=postgres` and `POSTGRES_URL`. The Windows build sets `VIBERENT_DESKTOP=1` and uses `SQLITE_DATABASE_PATH` or its application-data default.
 
 ## 7. Tenancy, identity, and authorization
 
@@ -412,14 +417,15 @@ Operational checks should cover:
 - Owner-share calculations
 - Money and date formatting helpers
 
-### Integration tests with a temporary SQLite database
+### Integration tests with temporary target databases
 
-- Migrations apply from an empty database.
+- PostgreSQL and SQLite migrations apply from empty databases.
 - Foreign keys and unique constraints reject invalid data.
 - Booking transactions reject overlaps.
 - Rollbacks leave no partial booking, payment, or audit data.
 - Every tenant query rejects cross-agency access.
 - Idempotency prevents duplicate payment and payout operations.
+- Agency export produces an integrity-checked SQLite package that restores only into the same agency.
 
 ### API contract tests
 
@@ -443,10 +449,10 @@ Backend changes must also run the repository's lint, typecheck, build, migration
 
 ### Phase B0 — Stabilize persistence
 
-- Treat the existing SQLite/Drizzle schema as the starting point.
+- Treat the existing SQLite/Drizzle schema as the compatibility baseline and keep the PostgreSQL schema behaviorally aligned.
 - Review identifiers, tenant columns, foreign keys, indexes, timestamps, and money units.
 - Make migrations authoritative and ensure a clean database can migrate and seed.
-- Create temporary-database integration test helpers.
+- Maintain temporary-database integration checks for both PostgreSQL web and SQLite desktop targets.
 - Document backup, restore, and local environment setup.
 
 Exit criteria: a fresh database can migrate, seed, pass integrity checks, and run the booking conflict test reproducibly.
@@ -504,9 +510,9 @@ Exit criteria: sensitive files remain private, tenant-isolated, auditable, and r
 
 Exit criteria: mobile can launch without direct database access or duplicated business rules.
 
-## 16. PostgreSQL reassessment triggers
+## 16. Database evolution triggers
 
-Keeping SQLite now does not mean waiting for an outage before reconsidering it. Start a migration decision when one or more of these becomes real:
+PostgreSQL is already selected for hosted web. Reassess whether a Windows installation should remain standalone SQLite when one or more of these becomes real:
 
 - More than one backend instance is required.
 - SQLite write-lock contention appears under measured workload.
@@ -517,7 +523,7 @@ Keeping SQLite now does not mean waiting for an outage before reconsidering it. 
 - Database-enforced range/exclusion constraints become necessary for booking safety at scale.
 - External integrations or workers need independent concurrent database access.
 
-If migration is approved, preserve application services and repository contracts, add a PostgreSQL Drizzle implementation, migrate and reconcile data, dual-test critical workflows, and cut over through a documented maintenance plan. Do not change ORM and database simultaneously unless there is a separately justified reason.
+If a desktop installation is moved to hosted PostgreSQL, preserve application services and repository contracts, migrate and reconcile data, dual-test critical workflows, and cut over through a documented maintenance plan. Do not change ORM and database simultaneously unless there is a separately justified reason.
 
 ## 17. Decisions that remain intentionally open
 

@@ -9,7 +9,7 @@ export async function GET(request:Request){
   try{
     const context=await getWebRequestContext();
     const url=new URL(request.url);
-    const data=getReports(context);
+    const data=await getReports(context);
     const from=requiredDate(url.searchParams.get("from"),"from");
     const to=requiredDate(url.searchParams.get("to"),"to");
     if(from>to)throw new DomainError("VALIDATION_FAILED","The from date must be on or before the to date.",400);
@@ -33,7 +33,7 @@ export async function GET(request:Request){
   }
 }
 
-function resolveScope(value:string,url:URL,data:ReturnType<typeof getReports>):LedgerScope{
+function resolveScope(value:string,url:URL,data:Awaited<ReturnType<typeof getReports>>):LedgerScope{
   if(value==="overall")return {type:"overall"};
   if(value==="owner"){
     const ownerId=url.searchParams.get("ownerId")??"";
@@ -49,7 +49,7 @@ function resolveScope(value:string,url:URL,data:ReturnType<typeof getReports>):L
   throw new DomainError("VALIDATION_FAILED","Unknown report scope.",400);
 }
 
-function labelForScope(scope:LedgerScope,data:ReturnType<typeof getReports>){
+function labelForScope(scope:LedgerScope,data:Awaited<ReturnType<typeof getReports>>){
   if(scope.type==="overall")return "Whole-system income and expense ledger";
   if(scope.type==="owner")return `Owner ledger - ${data.ledgerAccounts.owners.find(item=>item.id===scope.ownerId)?.label??"Owner"}`;
   if(scope.vehicleIds.length===1)return `Vehicle ledger - ${data.ledgerAccounts.vehicles.find(item=>item.id===scope.vehicleIds[0])?.label??"Vehicle"}`;

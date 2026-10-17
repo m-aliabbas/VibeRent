@@ -1,6 +1,6 @@
 import "server-only";
 
-import { sqlite } from "@/db/connection";
+import { queryAll, queryOne } from "@/db/query";
 import { buildLedgerEntries, summarizeLedger } from "@/lib/reports/ledger";
 import type { LedgerEntry, LedgerSummary } from "@/lib/reports/ledger";
 import { requireRole } from "@/server/auth/authorize";
@@ -80,18 +80,19 @@ function totalOwnerShare(rows: Booking[]) {
   return [...allocatedOwnerShares(rows).values()].reduce((sum, value) => sum + value, 0);
 }
 
-export function getReports(context: RequestContext): ReportsData {
+export async function getReports(context: RequestContext): Promise<ReportsData> {
   requireRole(context, ["agency_owner", "fleet_manager", "accountant"]);
-  const agency = (sqlite.prepare("SELECT name FROM agencies WHERE id=? LIMIT 1").get(context.agencyId) as { name: string } | undefined)?.name ?? "VibeRent agency";
-  const vehicles = sqlite.prepare(`
+  const [agencyRow,vehicles,bookings,costs,transactions,payouts,sourcePayouts,blocks,owners] = await Promise.all([
+    queryOne<{name:string}>("SELECT name FROM agencies WHERE id=? LIMIT 1",[context.agencyId]),
+    queryAll<Vehicle>(`
     SELECT v.id, v.make || ' ' || v.model || ' - ' || v.plate AS name, v.plate,
            b.city, v.ownership, v.owner_id AS ownerId, v.archived_at AS archivedAt
     FROM vehicles v
     JOIN branches b ON b.id=v.branch_id AND b.agency_id=v.agency_id
     WHERE v.agency_id=?
     ORDER BY v.archived_at IS NOT NULL, v.make, v.model
-  `).all(context.agencyId) as Vehicle[];
-  const bookings = sqlite.prepare(`
+  `,[context.agencyId]),
+    queryAll<Booking>(`
     SELECT b.id, b.vehicle_id AS vehicleId, v.owner_id AS ownerId, b.source,
            b.pickup_at AS pickupAt, b.return_at AS returnAt, b.completed_at AS completedAt,
            b.status, b.total_amount AS totalAmount, a.share_basis AS shareBasis,
@@ -104,23 +105,20 @@ export function getReports(context: RequestContext): ReportsData {
     LEFT JOIN management_agreements a ON a.id=v.agreement_id AND a.agency_id=v.agency_id
     JOIN branches br ON br.id=b.branch_id AND br.agency_id=b.agency_id
     WHERE b.agency_id=?
-  `).all(context.agencyId) as Booking[];
-  const costs = sqlite.prepare(`
+  `,[context.agencyId]),
+    queryAll<Cost>(`
     SELECT e.id, e.vehicle_id AS vehicleId, e.owner_id AS ownerId, e.occurred_on AS date,
            e.category, e.description, e.amount, e.status,
            EXISTS(SELECT 1 FROM private_files pf WHERE pf.agency_id=e.agency_id AND pf.entity_type='expense' AND pf.entity_id=e.id AND pf.status='ready') AS receipt
     FROM expenses e WHERE e.agency_id=?
-  `).all(context.agencyId) as Cost[];
-  const transactions = sqlite.prepare(`SELECT ft.id,ft.booking_id AS bookingId,ft.posted_at AS date,ft.amount,ft.kind,original.kind AS originalKind,ft.status,ft.method,ft.reference FROM financial_transactions ft LEFT JOIN financial_transactions original ON original.id=ft.linked_transaction_id AND original.agency_id=ft.agency_id WHERE ft.agency_id=?`)
-    .all(context.agencyId) as Transaction[];
-  const payouts = sqlite.prepare("SELECT id,owner_id AS ownerId,vehicle_id AS vehicleId,paid_at AS paidAt,amount,method,reference FROM owner_payouts WHERE agency_id=? AND status='posted'")
-    .all(context.agencyId) as Payout[];
-  const sourcePayouts=sqlite.prepare("SELECT id,booking_id AS bookingId,supplier_name AS supplierName,paid_at AS paidAt,amount,method,reference FROM source_payouts WHERE agency_id=? AND status='posted'")
-    .all(context.agencyId) as SourcePayout[];
-  const blocks = sqlite.prepare("SELECT vehicle_id AS vehicleId,start_at AS startAt,end_at AS endAt FROM availability_blocks WHERE agency_id=? AND archived_at IS NULL")
-    .all(context.agencyId) as Block[];
-  const owners = sqlite.prepare("SELECT id,name FROM owners WHERE agency_id=? ORDER BY name")
-    .all(context.agencyId) as Array<{ id: string; name: string }>;
+  `,[context.agencyId]),
+    queryAll<Transaction>(`SELECT ft.id,ft.booking_id AS bookingId,ft.posted_at AS date,ft.amount,ft.kind,original.kind AS originalKind,ft.status,ft.method,ft.reference FROM financial_transactions ft LEFT JOIN financial_transactions original ON original.id=ft.linked_transaction_id AND original.agency_id=ft.agency_id WHERE ft.agency_id=?`,[context.agencyId]),
+    queryAll<Payout>("SELECT id,owner_id AS ownerId,vehicle_id AS vehicleId,paid_at AS paidAt,amount,method,reference FROM owner_payouts WHERE agency_id=? AND status='posted'",[context.agencyId]),
+    queryAll<SourcePayout>("SELECT id,booking_id AS bookingId,supplier_name AS supplierName,paid_at AS paidAt,amount,method,reference FROM source_payouts WHERE agency_id=? AND status='posted'",[context.agencyId]),
+    queryAll<Block>("SELECT vehicle_id AS vehicleId,start_at AS startAt,end_at AS endAt FROM availability_blocks WHERE agency_id=? AND archived_at IS NULL",[context.agencyId]),
+    queryAll<{ id: string; name: string }>("SELECT id,name FROM owners WHERE agency_id=? ORDER BY name",[context.agencyId]),
+  ]);
+  const agency = agencyRow?.name ?? "VibeRent agency";
 
   const vehicleById = new Map(vehicles.map((vehicle) => [vehicle.id, vehicle]));
   const ownerById = new Map(owners.map((owner) => [owner.id, owner]));

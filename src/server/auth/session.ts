@@ -5,7 +5,7 @@ import type { RequestContext, StaffRole } from "@/server/context/request-context
 import { staffRoles } from "@/server/context/request-context";
 import { DomainError } from "@/server/domain/errors";
 import { auth } from "@/server/auth/auth";
-import { sqlite } from "@/db/connection";
+import { execute, inTransaction, queryAll, queryOne } from "@/db/query";
 import { assertDesktopLicense } from "@/server/desktop/license-service";
 
 type BetterSession = NonNullable<Awaited<ReturnType<typeof auth.api.getSession>>>;
@@ -64,8 +64,8 @@ function viewerToContext(viewer: SessionViewer | null): RequestContext {
   };
 }
 
-function resolveViewer(session: BetterSession): SessionViewer {
-  const memberships = sqlite.prepare(`
+async function resolveViewer(session: BetterSession): Promise<SessionViewer> {
+  const memberships = await queryAll<{ id: string; organizationId: string; role: string; name: string; slug: string; hasAgency: number }>(`
     SELECT m.id, m.organization_id AS organizationId, m.role, o.name, o.slug,
            CASE WHEN a.id IS NULL THEN 0 ELSE 1 END AS hasAgency
     FROM member m
@@ -73,7 +73,7 @@ function resolveViewer(session: BetterSession): SessionViewer {
     LEFT JOIN agencies a ON a.id = m.organization_id
     WHERE m.user_id = ?
     ORDER BY m.created_at ASC
-  `).all(session.user.id) as Array<{ id: string; organizationId: string; role: string; name: string; slug: string; hasAgency: number }>;
+  `, [session.user.id]);
 
   const organizations = memberships
     .filter(item => item.hasAgency === 1 && isStaffRole(item.role))
@@ -95,7 +95,7 @@ function resolveViewer(session: BetterSession): SessionViewer {
     };
   }
 
-  const staff = syncStaffProfile({
+  const staff = await syncStaffProfile({
     authUserId: session.user.id,
     membershipId: activeMembership.id,
     agencyId: activeMembership.organizationId,
@@ -103,8 +103,10 @@ function resolveViewer(session: BetterSession): SessionViewer {
     name: session.user.name,
     role: activeMembership.role,
   });
-  const branchIds = sqlite.prepare("SELECT branch_id AS branchId FROM member_branch_access WHERE membership_id=? ORDER BY branch_id")
-    .all(activeMembership.id).map(row => (row as { branchId: string }).branchId);
+  const branchIds = (await queryAll<{ branchId: string }>(
+    "SELECT branch_id AS branchId FROM member_branch_access WHERE membership_id=? ORDER BY branch_id",
+    [activeMembership.id],
+  )).map(row => row.branchId);
 
   return {
     authUserId: session.user.id,
@@ -123,30 +125,42 @@ function resolveViewer(session: BetterSession): SessionViewer {
   };
 }
 
-function syncStaffProfile(input: { authUserId: string; membershipId: string; agencyId: string; email: string; name: string; role: StaffRole }) {
-  const existing = sqlite.prepare("SELECT id, active, role FROM users WHERE agency_id=? AND (auth_user_id=? OR lower(email)=lower(?)) LIMIT 1")
-    .get(input.agencyId, input.authUserId, input.email) as { id: string; active: number; role: string } | undefined;
+async function syncStaffProfile(input: { authUserId: string; membershipId: string; agencyId: string; email: string; name: string; role: StaffRole }) {
+  const existing = await queryOne<{ id: string; active: number; role: string }>(
+    "SELECT id, active, role FROM users WHERE agency_id=? AND (auth_user_id=? OR lower(email)=lower(?)) LIMIT 1",
+    [input.agencyId, input.authUserId, input.email],
+  );
   const now = new Date().toISOString();
 
   if (existing) {
-    sqlite.prepare("UPDATE users SET auth_user_id=?, membership_id=?, email=?, name=?, role=?, updated_at=?, version=version+1 WHERE id=?")
-      .run(input.authUserId, input.membershipId, input.email.toLowerCase(), input.name, input.role, now, existing.id);
+    await execute(
+      "UPDATE users SET auth_user_id=?, membership_id=?, email=?, name=?, role=?, updated_at=?, version=version+1 WHERE id=?",
+      [input.authUserId, input.membershipId, input.email.toLowerCase(), input.name, input.role, now, existing.id],
+    );
     return { id: existing.id, active: existing.active };
   }
 
   const id = `usr_${randomUUID()}`;
-  sqlite.transaction(() => {
-    sqlite.prepare("INSERT INTO users (id, auth_user_id, membership_id, agency_id, branch_id, email, name, role, active, version, created_at, updated_at) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, 1, 1, ?, ?)")
-      .run(id, input.authUserId, input.membershipId, input.agencyId, input.email.toLowerCase(), input.name, input.role, now, now);
-    const invite = sqlite.prepare("SELECT id FROM invitation WHERE organization_id=? AND lower(email)=lower(?) AND status='accepted' ORDER BY created_at DESC LIMIT 1")
-      .get(input.agencyId, input.email) as { id: string } | undefined;
+  await inTransaction(async () => {
+    await execute(
+      "INSERT INTO users (id, auth_user_id, membership_id, agency_id, branch_id, email, name, role, active, version, created_at, updated_at) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, 1, 1, ?, ?)",
+      [id, input.authUserId, input.membershipId, input.agencyId, input.email.toLowerCase(), input.name, input.role, now, now],
+    );
+    const invite = await queryOne<{ id: string }>(
+      "SELECT id FROM invitation WHERE organization_id=? AND lower(email)=lower(?) AND status='accepted' ORDER BY created_at DESC LIMIT 1",
+      [input.agencyId, input.email],
+    );
     if (invite) {
-      sqlite.prepare("INSERT OR IGNORE INTO member_branch_access (membership_id, branch_id) SELECT ?, branch_id FROM invitation_branch_access WHERE invitation_id=?")
-        .run(input.membershipId, invite.id);
+      await execute(
+        "INSERT OR IGNORE INTO member_branch_access (membership_id, branch_id) SELECT ?, branch_id FROM invitation_branch_access WHERE invitation_id=?",
+        [input.membershipId, invite.id],
+      );
     }
-    sqlite.prepare("INSERT INTO audit_events (id, agency_id, actor_id, action, entity_type, entity_id, metadata, occurred_at) VALUES (?, ?, ?, 'staff.joined', 'user', ?, ?, ?)")
-      .run(`aud_${randomUUID()}`, input.agencyId, id, id, JSON.stringify({ role: input.role }), now);
-  })();
+    await execute(
+      "INSERT INTO audit_events (id, agency_id, actor_id, action, entity_type, entity_id, metadata, occurred_at) VALUES (?, ?, ?, 'staff.joined', 'user', ?, ?, ?)",
+      [`aud_${randomUUID()}`, input.agencyId, id, id, JSON.stringify({ role: input.role }), now],
+    );
+  });
   return { id, active: 1 };
 }
 

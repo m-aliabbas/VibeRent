@@ -10,10 +10,10 @@ export default async function BookingPage({ params }: { params: Promise<{ id: st
   const context=await getWebRequestContext();
   let booking;
   try {
-    booking = getBooking(context, id);
+    booking = await getBooking(context, id);
   } catch (error) {
     if (error instanceof DomainError && error.code === "NOT_FOUND") notFound();
     throw error;
   }
-  return <BookingDetail initial={booking} vehicles={listVehicles(context)} />;
+  return <BookingDetail initial={booking} vehicles={await listVehicles(context)} />;
 }

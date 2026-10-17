@@ -11,7 +11,7 @@ export default async function CustomerPage({
   const { id } = await params;
   let customer;
   try {
-    customer = getCustomerDetail(await getWebRequestContext(), id);
+    customer = await getCustomerDetail(await getWebRequestContext(), id);
   } catch (error) {
     if (error instanceof DomainError && error.code === "NOT_FOUND") notFound();
     throw error;

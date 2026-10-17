@@ -16,14 +16,14 @@ export type GlobalSearchResult = {
 
 export type GlobalSearchScope = "all" | "pages" | "vehicle" | "booking" | "customer" | "owner";
 
-export function searchAgencyRecords(context: RequestContext, rawQuery: string, scope: GlobalSearchScope = "all"): GlobalSearchResult[] {
+export async function searchAgencyRecords(context: RequestContext, rawQuery: string, scope: GlobalSearchScope = "all"): Promise<GlobalSearchResult[]> {
   const query = rawQuery.trim().toLocaleLowerCase("en");
   if (query.length < 2) return [];
   const matches = (value: Array<string | number | null | undefined>) =>
     value.some((item) => String(item ?? "").toLocaleLowerCase("en").includes(query));
   const resultLimit = scope === "all" ? 3 : 12;
 
-  const vehicles: GlobalSearchResult[] = scope === "all" || scope === "vehicle" ? listVehicles(context)
+  const vehicles: GlobalSearchResult[] = scope === "all" || scope === "vehicle" ? (await listVehicles(context))
     .filter((vehicle) => matches([vehicle.plate, vehicle.make, vehicle.model, vehicle.year, vehicle.city, vehicle.status]))
     .slice(0, resultLimit)
     .map((vehicle) => ({
@@ -34,7 +34,7 @@ export function searchAgencyRecords(context: RequestContext, rawQuery: string, s
       href: `/vehicles/${vehicle.id}`,
     })) : [];
 
-  const bookings: GlobalSearchResult[] = scope === "all" || scope === "booking" ? listBookings(context)
+  const bookings: GlobalSearchResult[] = scope === "all" || scope === "booking" ? (await listBookings(context))
     .filter((booking) => matches([booking.publicNumber, booking.customer, booking.vehicle, booking.plate, booking.status, booking.destinationCity]))
     .slice(0, resultLimit)
     .map((booking) => ({
@@ -45,7 +45,7 @@ export function searchAgencyRecords(context: RequestContext, rawQuery: string, s
       href: `/bookings/${booking.id}`,
     })) : [];
 
-  const customers: GlobalSearchResult[] = scope === "all" || scope === "customer" ? listCustomers(context)
+  const customers: GlobalSearchResult[] = scope === "all" || scope === "customer" ? (await listCustomers(context))
     .filter((customer) => matches([customer.name, customer.phone, customer.status]))
     .slice(0, resultLimit)
     .map((customer) => ({
@@ -56,7 +56,7 @@ export function searchAgencyRecords(context: RequestContext, rawQuery: string, s
       href: `/customers/${customer.id}`,
     })) : [];
 
-  const owners: GlobalSearchResult[] = scope === "all" || scope === "owner" ? listOwners(context).owners
+  const owners: GlobalSearchResult[] = scope === "all" || scope === "owner" ? (await listOwners(context)).owners
     .filter((owner) => matches([owner.id, owner.name, owner.phone, owner.email, owner.status, owner.share, owner.balanceStatus, owner.vehicleCount]))
     .slice(0, resultLimit)
     .map((owner) => ({

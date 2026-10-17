@@ -11,7 +11,10 @@ export function getDataDirectory() {
 }
 
 export function getDatabasePath() {
-  return resolveFromProcess(process.env.DATABASE_URL, path.join(getDataDirectory(), "viberent.db"));
+  const legacySqlitePath = process.env.DATABASE_URL?.trim().toLowerCase().startsWith("postgres")
+    ? undefined
+    : process.env.DATABASE_URL;
+  return resolveFromProcess(process.env.SQLITE_DATABASE_PATH ?? legacySqlitePath, path.join(getDataDirectory(), "viberent.db"));
 }
 
 export function getPrivateFileRoot() {

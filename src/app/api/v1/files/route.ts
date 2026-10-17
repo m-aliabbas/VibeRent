@@ -12,7 +12,7 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const vehicleId = url.searchParams.get("vehicleId");
     if (!vehicleId) throw new DomainError("VALIDATION_FAILED", "vehicleId is required.", 400);
-    return apiSuccess(listVehicleFiles(context, vehicleId), requestId);
+    return apiSuccess(await listVehicleFiles(context, vehicleId), requestId);
   } catch (error) { return apiFailure(error, requestId); }
 }
 

@@ -6,6 +6,6 @@ export const runtime = "nodejs";
 
 export async function GET(request: Request) {
   let requestId: string | undefined;
-  try { const context = await getApiRequestContext(request); requestId = context.requestId; return apiSuccess(getCurrentSession(context), requestId); }
+  try { const context = await getApiRequestContext(request); requestId = context.requestId; return apiSuccess(await getCurrentSession(context), requestId); }
   catch (error) { return apiFailure(error, requestId); }
 }

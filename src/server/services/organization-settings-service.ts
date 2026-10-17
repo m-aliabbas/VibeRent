@@ -1,7 +1,7 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import { sqlite } from "@/db/connection";
+import { execute, inTransaction, queryOne } from "@/db/query";
 import { composeTermsSnapshot, normalizeAgreementConfig, type AgreementDesignConfig } from "@/lib/agreement-config";
 import { requireRole } from "@/server/auth/authorize";
 import type { RequestContext } from "@/server/context/request-context";
@@ -36,8 +36,8 @@ type SettingsRow = {
   rentalTerms: string;
 };
 
-export function getOrganizationSettings(context: RequestContext): OrganizationSettingsDto {
-  const row = sqlite.prepare(`
+export async function getOrganizationSettings(context: RequestContext): Promise<OrganizationSettingsDto> {
+  const row = await queryOne<SettingsRow>(`
     SELECT a.name, a.phone, a.public_email AS publicEmail, a.address,
       a.registration_number AS registrationNumber, a.tax_number AS taxNumber,
       a.currency, a.timezone, a.agreement_config AS agreementConfig,
@@ -45,7 +45,7 @@ export function getOrganizationSettings(context: RequestContext): OrganizationSe
     FROM agencies a
     LEFT JOIN organization o ON o.id=a.id
     WHERE a.id=? LIMIT 1
-  `).get(context.agencyId) as SettingsRow | undefined;
+  `,[context.agencyId]);
   if (!row) throw new DomainError("NOT_FOUND", "Agency settings were not found.", 404);
   return {
     profile: {
@@ -63,7 +63,7 @@ export function getOrganizationSettings(context: RequestContext): OrganizationSe
   };
 }
 
-export function updateOrganizationProfile(context: RequestContext, rawInput: unknown): OrganizationSettingsDto["profile"] {
+export async function updateOrganizationProfile(context: RequestContext, rawInput: unknown): Promise<OrganizationSettingsDto["profile"]> {
   requireRole(context, ["agency_owner"]);
   const input = rawInput as Partial<OrganizationSettingsDto["profile"]>;
   const value = {
@@ -85,16 +85,15 @@ export function updateOrganizationProfile(context: RequestContext, rawInput: unk
   if (value.logoDataUrl && (!/^data:image\/(?:png|jpeg);base64,/.test(value.logoDataUrl) || value.logoDataUrl.length > 750_000)) fieldErrors.logoDataUrl = "Use a PNG or JPG logo smaller than 500 KB.";
   if (Object.keys(fieldErrors).length) throw new DomainError("VALIDATION_FAILED", "Check the highlighted organization details.", 400, fieldErrors);
   const now = new Date().toISOString();
-  sqlite.transaction(() => {
-    sqlite.prepare(`UPDATE agencies SET name=?,phone=?,public_email=?,address=?,registration_number=?,tax_number=?,version=version+1,updated_at=? WHERE id=?`)
-      .run(value.name, value.phone || null, value.publicEmail || null, value.address, value.registrationNumber || null, value.taxNumber || null, now, context.agencyId);
-    sqlite.prepare("UPDATE organization SET name=?,logo=coalesce(?,logo) WHERE id=?").run(value.name, value.logoDataUrl || null, context.agencyId);
-    audit(context, "agency.profile_updated", { logoUpdated: Boolean(value.logoDataUrl) });
-  })();
+  await inTransaction(async () => {
+    await execute(`UPDATE agencies SET name=?,phone=?,public_email=?,address=?,registration_number=?,tax_number=?,version=version+1,updated_at=? WHERE id=?`,[value.name, value.phone || null, value.publicEmail || null, value.address, value.registrationNumber || null, value.taxNumber || null, now, context.agencyId]);
+    await execute("UPDATE organization SET name=?,logo=coalesce(?,logo) WHERE id=?",[value.name, value.logoDataUrl || null, context.agencyId]);
+    await audit(context, "agency.profile_updated", { logoUpdated: Boolean(value.logoDataUrl) });
+  });
   return value;
 }
 
-export function updateAgreementDesigner(context: RequestContext, rawInput: unknown): AgreementDesignConfig {
+export async function updateAgreementDesigner(context: RequestContext, rawInput: unknown): Promise<AgreementDesignConfig> {
   requireRole(context, ["agency_owner", "fleet_manager"]);
   const config = normalizeAgreementConfig(rawInput);
   if (config.termsSource === "text" && (config.termsEn.some(item => item.length < 8) || config.termsUr.some(item => item.length < 8))) {
@@ -104,22 +103,20 @@ export function updateAgreementDesigner(context: RequestContext, rawInput: unkno
     throw new DomainError("VALIDATION_FAILED", "Keep the terms section enabled for rental agreements.", 400, { sections: "Terms and conditions are required." });
   }
   if (config.termsSource === "image") {
-    const image = sqlite.prepare(`SELECT id FROM private_files WHERE agency_id=? AND id=? AND entity_type='agency' AND entity_id=? AND classification='agreement_terms_image' AND status='ready' LIMIT 1`)
-      .get(context.agencyId, config.termsImage?.id, context.agencyId);
+    const image = await queryOne(`SELECT id FROM private_files WHERE agency_id=? AND id=? AND entity_type='agency' AND entity_id=? AND classification='agreement_terms_image' AND status='ready' LIMIT 1`,[context.agencyId, config.termsImage?.id, context.agencyId]);
     if (!image) throw new DomainError("VALIDATION_FAILED", "Upload a valid terms and conditions image.", 400, { termsImage: "Choose a JPG or PNG image." });
   }
   const legacyTerms = composeTermsSnapshot({ ...config, termsSource: "text", language: "en" });
   const now = new Date().toISOString();
-  sqlite.transaction(() => {
-    sqlite.prepare(`UPDATE agencies SET agreement_header=?,agreement_locale=?,agreement_config=?,rental_terms=?,version=version+1,updated_at=? WHERE id=?`)
-      .run(config.titleEn, config.language, JSON.stringify(config), legacyTerms, now, context.agencyId);
-    audit(context, "agreement.design_updated", { language: config.language, template: config.template, termsSource: config.termsSource, termsImageId: config.termsImage?.id, sections: config.sections.filter(item => item.enabled).map(item => item.id) });
-  })();
+  await inTransaction(async () => {
+    await execute(`UPDATE agencies SET agreement_header=?,agreement_locale=?,agreement_config=?,rental_terms=?,version=version+1,updated_at=? WHERE id=?`,[config.titleEn, config.language, JSON.stringify(config), legacyTerms, now, context.agencyId]);
+    await audit(context, "agreement.design_updated", { language: config.language, template: config.template, termsSource: config.termsSource, termsImageId: config.termsImage?.id, sections: config.sections.filter(item => item.enabled).map(item => item.id) });
+  });
   return config;
 }
 
-export function updateRentalTerms(context: RequestContext, terms: string, language: "en" | "ur" = "en") {
-  const current = getOrganizationSettings(context).agreement;
+export async function updateRentalTerms(context: RequestContext, terms: string, language: "en" | "ur" = "en") {
+  const current = (await getOrganizationSettings(context)).agreement;
   const clauses = terms.split(/\n+/).map(item => item.replace(/^\s*(?:[-•]|\d+[.)])\s*/, "").trim()).filter(Boolean);
   return updateAgreementDesigner(context, {
     ...current,
@@ -128,13 +125,12 @@ export function updateRentalTerms(context: RequestContext, terms: string, langua
   });
 }
 
-export function getTermsSnapshotForBooking(context: RequestContext) {
-  return composeTermsSnapshot(getOrganizationSettings(context).agreement);
+export async function getTermsSnapshotForBooking(context: RequestContext) {
+  return composeTermsSnapshot((await getOrganizationSettings(context)).agreement);
 }
 
 function audit(context: RequestContext, action: string, metadata: Record<string, unknown>) {
-  sqlite.prepare("INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)")
-    .run(`aud_${randomUUID()}`, context.agencyId, context.userId, action, "agency", context.agencyId, JSON.stringify(metadata), new Date().toISOString());
+  return execute("INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)",[`aud_${randomUUID()}`, context.agencyId, context.userId, action, "agency", context.agencyId, JSON.stringify(metadata), new Date().toISOString()]);
 }
 
 function text(value: unknown, max: number) {

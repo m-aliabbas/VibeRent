@@ -6,6 +6,6 @@ export const runtime = "nodejs";
 
 export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
   let requestId: string | undefined;
-  try { const auth = await getApiRequestContext(request); requestId = auth.requestId; const { id } = await context.params; return apiSuccess(getBooking(auth, id), requestId); }
+  try { const auth = await getApiRequestContext(request); requestId = auth.requestId; const { id } = await context.params; return apiSuccess(await getBooking(auth, id), requestId); }
   catch (error) { return apiFailure(error, requestId); }
 }

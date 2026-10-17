@@ -10,7 +10,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const auth = await getApiRequestContext(request);
     requestId = auth.requestId;
     const { id } = await context.params;
-    return apiSuccess(recordBookingPayment(auth, id, await parseJsonRequest(request)), requestId);
+    return apiSuccess(await recordBookingPayment(auth, id, await parseJsonRequest(request)), requestId);
   } catch (error) {
     return apiFailure(error, requestId);
   }

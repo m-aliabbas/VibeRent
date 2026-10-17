@@ -13,25 +13,25 @@ function failure(error: unknown): RepositoryResult<never> {
 }
 
 export async function listVehiclesAction(): Promise<RepositoryResult<Vehicle[]>> {
-  try { return { ok: true, data: listVehicles(await getWebRequestContext()) }; } catch (error) { return failure(error); }
+  try { return { ok: true, data: await listVehicles(await getWebRequestContext()) }; } catch (error) { return failure(error); }
 }
 
 export async function getVehicleAction(id: string): Promise<RepositoryResult<Vehicle>> {
-  try { return { ok: true, data: getVehicle(await getWebRequestContext(), id) }; } catch (error) { return failure(error); }
+  try { return { ok: true, data: await getVehicle(await getWebRequestContext(), id) }; } catch (error) { return failure(error); }
 }
 
 export async function getVehicleFinanceAction(id: string) {
-  try { return { ok: true as const, data: getVehicleFinance(await getWebRequestContext(), id) }; }
+  try { return { ok: true as const, data: await getVehicleFinance(await getWebRequestContext(), id) }; }
   catch (error) { return failure(error); }
 }
 
 export async function saveVehicleAction(vehicle: Vehicle): Promise<RepositoryResult<Vehicle>> {
-  try { return { ok: true, data: saveVehicle(await getWebRequestContext(), vehicle) }; } catch (error) { return failure(error); }
+  try { return { ok: true, data: await saveVehicle(await getWebRequestContext(), vehicle) }; } catch (error) { return failure(error); }
 }
 
 export async function transitionVehicleStatusAction(id: string, input: Parameters<typeof transitionVehicleStatus>[2]): Promise<RepositoryResult<Vehicle>> {
   try {
-    const data = transitionVehicleStatus(await getWebRequestContext(), id, input);
+    const data = await transitionVehicleStatus(await getWebRequestContext(), id, input);
     revalidatePath("/vehicles");
     revalidatePath(`/vehicles/${id}`);
     revalidatePath("/bookings/new");
@@ -41,7 +41,7 @@ export async function transitionVehicleStatusAction(id: string, input: Parameter
 
 export async function setVehicleArchivedAction(id:string,archived:boolean):Promise<RepositoryResult<Vehicle>> {
   try {
-    const data=setVehicleArchived(await getWebRequestContext(),id,archived);
+    const data=await setVehicleArchived(await getWebRequestContext(),id,archived);
     revalidatePath("/vehicles");
     revalidatePath(`/vehicles/${id}`);
     revalidatePath("/bookings/new");
@@ -51,6 +51,6 @@ export async function setVehicleArchivedAction(id:string,archived:boolean):Promi
 }
 
 export async function getVehicleFormOptionsAction() {
-  try { return { ok: true as const, data: getVehicleFormOptions(await getWebRequestContext()) }; }
+  try { return { ok: true as const, data: await getVehicleFormOptions(await getWebRequestContext()) }; }
   catch (error) { const issue=asDomainError(error); return { ok: false as const, error: {code:issue.code,message:issue.message} }; }
 }

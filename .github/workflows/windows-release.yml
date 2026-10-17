@@ -21,6 +21,8 @@ jobs:
       NODE_VERSION: "22.20.0"
       RUST_VERSION: "1.90.0"
       RELEASE_REPOSITORY: "m-aliabbas/viberent-releases"
+      VIBERENT_DATABASE: sqlite
+      VIBERENT_DESKTOP: "1"
 
     steps:
       - name: Check out the private source repository
@@ -55,7 +57,15 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
 
-      - name: Build NSIS installer
+      - name: Verify SQLite booking transactions
+        env:
+          NODE_OPTIONS: --conditions=react-server
+        run: npm exec -- tsx src/db/check-booking-transaction.ts
+
+      - name: Verify SQLite desktop backup and restore
+        run: npm run db:check:desktop-backup
+
+      - name: Build SQLite-backed NSIS installer
         run: npm run desktop:build -- --bundles nsis
 
       - name: Confirm JavaScript lock file did not change

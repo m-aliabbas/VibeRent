@@ -13,6 +13,20 @@ jobs:
   application:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: viberent
+          POSTGRES_PASSWORD: viberent
+          POSTGRES_DB: viberent_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U viberent -d viberent_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -22,15 +36,30 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
-      - run: npm run build
-      - name: Verify migrations and booking transaction on a temporary database
+      - name: Build hosted web target
+        env:
+          POSTGRES_URL: postgresql://viberent:viberent@127.0.0.1:5432/viberent_test
+        run: npm run build:web
+      - name: Verify PostgreSQL migrations and booking transaction
+        env:
+          VIBERENT_DATABASE: postgres
+          POSTGRES_URL: postgresql://viberent:viberent@127.0.0.1:5432/viberent_test
+          NODE_OPTIONS: --conditions=react-server
+        run: |
+          npm run db:migrate:web
+          npm exec -- tsx src/db/check-postgres.ts
+      - name: Verify SQLite migrations, booking transaction, and agency backup
         shell: bash
         run: |
           runtime_dir="${RUNNER_TEMP}/viberent-quality"
           mkdir -p "$runtime_dir"
+          export VIBERENT_DATABASE=sqlite
+          export SQLITE_DATABASE_PATH="$runtime_dir/viberent.db"
           export DATABASE_URL="$runtime_dir/viberent.db"
-          npm run db:migrate
+          export NODE_OPTIONS="--conditions=react-server"
+          npm run db:migrate:sqlite
           npm run db:seed
-          npm run db:check
+          npm exec -- tsx src/db/check-booking-transaction.ts
+          npm exec -- tsx src/db/check-agency-portable-backup.ts
       - name: Verify desktop backup and restart-only restore
         run: npm run db:check:desktop-backup

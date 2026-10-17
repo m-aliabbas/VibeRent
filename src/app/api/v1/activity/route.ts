@@ -10,6 +10,6 @@ export async function GET(request: Request) {
     const context = await getApiRequestContext(request); requestId = context.requestId;
     const params = new URL(request.url).searchParams;
     const rawLimit = params.get("limit");
-    return apiSuccess(listActivity(context, params.get("before") ?? undefined, rawLimit === null ? 30 : Number(rawLimit)), requestId);
+    return apiSuccess(await listActivity(context, params.get("before") ?? undefined, rawLimit === null ? 30 : Number(rawLimit)), requestId);
   } catch (error) { return apiFailure(error, requestId); }
 }

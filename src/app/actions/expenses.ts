@@ -6,6 +6,6 @@ import { deliverOwnerExpenseNotice } from "@/server/services/notification-delive
 import type { CreateExpenseInput, ExpenseStatus } from "@/server/validation/expense";
 
 function failure(error:unknown){const issue=asDomainError(error);return {ok:false as const,error:{code:issue.code,message:issue.message,fieldErrors:issue.fieldErrors??{}}};}
-export async function createExpenseAction(input:CreateExpenseInput){try{const context=await getWebRequestContext();const data=createExpense(context,input);const notificationDelivery=await deliverOwnerExpenseNotice(context,data.id);return {ok:true as const,data:{...data,notificationDelivery}};}catch(error){return failure(error)}}
-export async function transitionExpenseAction(id:string,status:ExpenseStatus){try{return {ok:true as const,data:transitionExpense(await getWebRequestContext(),id,status)};}catch(error){return failure(error)}}
-export async function getExpenseWorkspaceAction(){try{return {ok:true as const,data:getExpenseWorkspace(await getWebRequestContext())};}catch(error){return failure(error)}}
+export async function createExpenseAction(input:CreateExpenseInput){try{const context=await getWebRequestContext();const data=await createExpense(context,input);const notificationDelivery=await deliverOwnerExpenseNotice(context,data.id);return {ok:true as const,data:{...data,notificationDelivery}};}catch(error){return failure(error)}}
+export async function transitionExpenseAction(id:string,status:ExpenseStatus){try{return {ok:true as const,data:await transitionExpense(await getWebRequestContext(),id,status)};}catch(error){return failure(error)}}
+export async function getExpenseWorkspaceAction(){try{return {ok:true as const,data:await getExpenseWorkspace(await getWebRequestContext())};}catch(error){return failure(error)}}

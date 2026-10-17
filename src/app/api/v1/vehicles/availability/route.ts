@@ -9,6 +9,6 @@ export async function GET(request: Request) {
   try {
     const context = await getApiRequestContext(request); requestId = context.requestId;
     const params = new URL(request.url).searchParams;
-    return apiSuccess(listAvailableVehicles(context, params.get("pickupAt") ?? "", params.get("returnAt") ?? ""), requestId);
+    return apiSuccess(await listAvailableVehicles(context, params.get("pickupAt") ?? "", params.get("returnAt") ?? ""), requestId);
   } catch (error) { return apiFailure(error, requestId); }
 }

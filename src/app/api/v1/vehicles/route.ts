@@ -6,12 +6,12 @@ export const runtime = "nodejs";
 
 export async function GET(request: Request) {
   let requestId: string | undefined;
-  try { const context = await getApiRequestContext(request); requestId = context.requestId; return apiSuccess(listVehicles(context), requestId); }
+  try { const context = await getApiRequestContext(request); requestId = context.requestId; return apiSuccess(await listVehicles(context), requestId); }
   catch (error) { return apiFailure(error, requestId); }
 }
 
 export async function POST(request: Request) {
   let requestId: string | undefined;
-  try { const context = await getApiRequestContext(request); requestId = context.requestId; const vehicle = saveVehicle(context, await parseJsonRequest(request)); return apiSuccess(vehicle, requestId, { status: 201 }); }
+  try { const context = await getApiRequestContext(request); requestId = context.requestId; const vehicle = await saveVehicle(context, await parseJsonRequest(request)); return apiSuccess(vehicle, requestId, { status: 201 }); }
   catch (error) { return apiFailure(error, requestId); }
 }

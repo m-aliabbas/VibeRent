@@ -56,11 +56,11 @@ async function handleIncomingOwnerMessage(entry: RuntimeEntry, message: Incoming
   if (!entry.listeningEnabled || !entry.ownerNumber || message.senderNumber !== entry.ownerNumber) return;
   const command=parseCnicImageCommand(message.media?.caption??message.text);
   if(!command||message.media?.kind!=="image"){
-    const result=runOwnerCommand(entry.agencyId,message.text);
+    const result=await runOwnerCommand(entry.agencyId,message.text);
     if(result.handled&&result.reply)await entry.service.sendText(entry.ownerNumber,result.reply).catch(error=>{entry.lastError=error instanceof Error?error.message:"Could not send command reply."});
     return;
   }
-  const draft=findActiveDraftByNumber(entry.agencyId,command.bookingNumber);
+  const draft=await findActiveDraftByNumber(entry.agencyId,command.bookingNumber);
   if(!draft){await entry.service.sendText(entry.ownerNumber,`Booking ID #${command.bookingNumber} is not active. Open the booking form and use the ID shown there.`).catch(()=>undefined);return;}
   try{
     const bytes=await message.media.download();

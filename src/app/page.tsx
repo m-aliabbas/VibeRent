@@ -14,7 +14,7 @@ const actions = [
 
 export default async function Dashboard() {
   const [viewer, context] = await Promise.all([getSessionViewer(), getWebRequestContext()]);
-  const data = getDashboard(context);
+  const data = await getDashboard(context);
   const today=new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Karachi",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
   const ledgerHref=(entry:string)=>`/reports?tab=Ledger&from=${today}&to=${today}&entry=${entry}`;
   const activityIcon = { booking: CalendarDays, vehicle: CarFront, customer: Users, finance: CircleDollarSign, other: FileText };

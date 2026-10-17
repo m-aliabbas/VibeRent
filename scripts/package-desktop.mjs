@@ -11,7 +11,7 @@ async function requirePath(target, message) {
   catch { throw new Error(message); }
 }
 
-await requirePath(path.join(standalone, "server.js"), "Run `npm run build` before packaging the desktop server.");
+await requirePath(path.join(standalone, "server.js"), "Run `npm run build:desktop-server` before packaging the desktop server.");
 await requirePath(
   path.join(standalone, "node_modules", "pdfkit", "package.json"),
   "The standalone server is missing PDFKit. Rebuild after confirming `pdfkit` is listed in `serverExternalPackages`.",

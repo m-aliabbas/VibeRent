@@ -3,7 +3,7 @@ import "server-only";
 import fs from "node:fs";
 import path from "node:path";
 import PDFDocument from "pdfkit";
-import { sqlite } from "@/db/connection";
+import { queryOne } from "@/db/query";
 import { composeTermsSnapshot, normalizeAgreementConfig, parseTermsImageSnapshot, type AgreementDesignConfig, type AgreementSectionId } from "@/lib/agreement-config";
 import { guarantorFields } from "@/lib/agreement-guarantor";
 import type { RequestContext } from "@/server/context/request-context";
@@ -110,7 +110,7 @@ export async function getRentalAgreementPrintData(context:RequestContext,booking
 }
 
 async function loadAgreementSource(context:RequestContext,bookingId:string){
-  const row = sqlite.prepare(`
+  const row = await queryOne<AgreementRow>(`
     SELECT b.public_number AS publicNumber,b.pickup_at AS pickupAt,b.return_at AS returnAt,
       b.daily_rate AS dailyRate,b.total_amount AS totalAmount,b.deposit_required AS depositRequired,
       b.destination_city AS destinationCity,b.rental_mode AS rentalMode,b.renter_skipped AS renterSkipped,
@@ -131,7 +131,7 @@ async function loadAgreementSource(context:RequestContext,bookingId:string){
     LEFT JOIN vehicles v ON v.id=b.vehicle_id AND v.agency_id=b.agency_id
     LEFT JOIN drivers d ON d.id=b.driver_id AND d.agency_id=b.agency_id
     WHERE b.agency_id=? AND b.id=?
-  `).get(context.agencyId, bookingId) as AgreementRow | undefined;
+  `,[context.agencyId, bookingId]);
   if (!row) throw new DomainError("NOT_FOUND", "Booking not found.", 404);
 
   const config = normalizeAgreementConfig(parseConfig(row.agreementConfig), row.legacyTerms);

@@ -46,7 +46,7 @@ export async function listCustomersAction(): Promise<
   { ok: true; data: CustomerDto[] } | { ok: false; error: ActionError }
 > {
   try {
-    return { ok: true, data: listCustomers(await getWebRequestContext()) };
+    return { ok: true, data: await listCustomers(await getWebRequestContext()) };
   } catch (error) {
     return failure(error);
   }
@@ -56,7 +56,7 @@ export async function createCustomerAction(
   input: CreateCustomerInput,
 ): Promise<{ ok: true; data: CustomerDto } | { ok: false; error: ActionError }> {
   try {
-    return { ok: true, data: createCustomer(await getWebRequestContext(), input) };
+    return { ok: true, data: await createCustomer(await getWebRequestContext(), input) };
   } catch (error) {
     return failure(error);
   }
@@ -67,7 +67,7 @@ export async function updateCustomerAction(
   input: CreateCustomerInput & { status?: string },
 ): Promise<{ ok: true; data: CustomerDto } | { ok: false; error: ActionError }> {
   try {
-    return { ok: true, data: updateCustomer(await getWebRequestContext(), id, input) };
+    return { ok: true, data: await updateCustomer(await getWebRequestContext(), id, input) };
   } catch (error) {
     return failure(error);
   }
@@ -75,7 +75,7 @@ export async function updateCustomerAction(
 
 export async function archiveCustomerAction(id:string) {
   try {
-    const data=archiveCustomer(await getWebRequestContext(),id);
+    const data=await archiveCustomer(await getWebRequestContext(),id);
     revalidatePath("/customers");
     revalidatePath(`/customers/${id}`);
     return {ok:true as const,data};
@@ -88,7 +88,7 @@ export async function startCustomerCnicDraftAction() {
 }
 
 export async function getCustomerCnicAction(target: CustomerCnicTarget) {
-  try { return { ok: true as const, data: getCustomerCnicIntake(await getWebRequestContext(), target) }; }
+  try { return { ok: true as const, data: await getCustomerCnicIntake(await getWebRequestContext(), target) }; }
   catch (error) { return failure(error); }
 }
 

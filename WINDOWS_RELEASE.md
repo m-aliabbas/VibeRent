@@ -87,7 +87,7 @@ cp desktop/.env.example desktop/.env
 npm ci
 npm run lint
 npm run typecheck
-npm run build
+npm run build:desktop-server
 npm run desktop:prepare
 npm run desktop:build -- --bundles nsis
 ```

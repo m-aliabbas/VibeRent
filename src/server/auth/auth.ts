@@ -3,8 +3,8 @@ import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "@better-auth/drizzle-adapter";
 import { organization } from "better-auth/plugins";
 import { nextCookies } from "better-auth/next-js";
-import { db, sqlite } from "@/db/connection";
-import * as schema from "@/db/schema";
+import { getDatabaseTarget } from "@/db/database-target";
+import { queryOne } from "@/db/query";
 import { sendAuthEmail } from "@/server/auth/email";
 import { organizationAccess, organizationRoles } from "@/server/auth/permissions";
 
@@ -15,6 +15,21 @@ const trustedOrigins = [
   ...(process.env.BETTER_AUTH_TRUSTED_ORIGINS?.split(",").map(value => value.trim()).filter(Boolean) ?? []),
 ];
 
+const databaseAdapter = await (async () => {
+  if (getDatabaseTarget() === "postgres") {
+    const [{ postgresDb }, schema] = await Promise.all([
+      import("@/db/postgres/connection"),
+      import("@/db/postgres/schema"),
+    ]);
+    return drizzleAdapter(postgresDb, { provider: "pg", schema });
+  }
+  const [{ db }, schema] = await Promise.all([
+    import("@/db/connection"),
+    import("@/db/schema"),
+  ]);
+  return drizzleAdapter(db, { provider: "sqlite", schema });
+})();
+
 export const auth = betterAuth({
   appName: "VibeRent",
   baseURL: baseUrl,
@@ -24,10 +39,7 @@ export const auth = betterAuth({
       ? undefined
       : "viberent-development-secret-change-before-production"),
   trustedOrigins: [...new Set(trustedOrigins)],
-  database: drizzleAdapter(db, {
-    provider: "sqlite",
-    schema,
-  }),
+  database: databaseAdapter,
   databaseHooks: {
     user: {
       create: {
@@ -39,8 +51,10 @@ export const auth = betterAuth({
     session: {
       create: {
         before: async session => {
-          const firstMembership = sqlite.prepare("SELECT organization_id AS organizationId FROM member WHERE user_id=? ORDER BY created_at LIMIT 1")
-            .get(session.userId) as { organizationId: string } | undefined;
+          const firstMembership = await queryOne<{ organizationId: string }>(
+            "SELECT organization_id AS \"organizationId\" FROM member WHERE user_id=? ORDER BY created_at LIMIT 1",
+            [session.userId],
+          );
           return { data: { ...session, activeOrganizationId: firstMembership?.organizationId } };
         },
       },

@@ -1,7 +1,7 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import { sqlite } from "@/db/connection";
+import { execute, queryOne } from "@/db/query";
 import type { RequestContext } from "@/server/context/request-context";
 import { createTransactionInvoice, type InvoiceLine } from "@/server/documents/transaction-invoice";
 import { ensureWhatsAppRuntimeForDelivery } from "@/server/services/whatsapp-settings-service";
@@ -17,7 +17,7 @@ type BookingNoticeRow = {
 };
 
 export async function deliverCheckoutNotice(context: RequestContext, bookingId: string) {
-  const row = bookingNotice(context.agencyId, bookingId);
+  const row = await bookingNotice(context.agencyId, bookingId);
   if (!row) return failed("Checkout was saved, but its customer notice could not be prepared.");
   return deliverBookingPdf(context, bookingId, row, {
     action: "booking.checkout_notice",
@@ -36,7 +36,7 @@ export async function deliverCheckoutNotice(context: RequestContext, bookingId: 
 }
 
 export async function deliverCheckinInvoice(context: RequestContext, bookingId: string) {
-  const row = bookingNotice(context.agencyId, bookingId);
+  const row = await bookingNotice(context.agencyId, bookingId);
   if (!row) return failed("Check-in was saved, but its invoice could not be prepared.");
   return deliverBookingPdf(context, bookingId, row, {
     action: "booking.checkin_invoice",
@@ -58,7 +58,7 @@ export async function deliverCheckinInvoice(context: RequestContext, bookingId: 
 }
 
 export async function deliverPaymentInvoice(context: RequestContext, bookingId: string, payment: { amount: number; method: string; reference?: string; receiptNumber: number | null }) {
-  const row = bookingNotice(context.agencyId, bookingId);
+  const row = await bookingNotice(context.agencyId, bookingId);
   if (!row) return failed("Payment was posted, but its receipt could not be prepared.");
   if (payment.receiptNumber == null) return failed("Payment was posted, but its receipt number could not be prepared.");
   const receiptId = formatPaymentReceiptNumber(payment.receiptNumber);
@@ -83,8 +83,7 @@ export async function deliverPaymentInvoice(context: RequestContext, bookingId: 
 }
 
 export async function deliverOwnerPayoutInvoice(context: RequestContext, ownerId: string, payout: { amount: number; method: string; reference: string; periodFrom: string; periodTo: string }) {
-  const row = sqlite.prepare(`SELECT a.name AS agency,o.name AS owner,o.phone FROM owners o JOIN agencies a ON a.id=o.agency_id WHERE o.agency_id=? AND o.id=? LIMIT 1`)
-    .get(context.agencyId, ownerId) as { agency: string; owner: string; phone: string } | undefined;
+  const row = await queryOne<{ agency: string; owner: string; phone: string }>(`SELECT a.name AS agency,o.name AS owner,o.phone FROM owners o JOIN agencies a ON a.id=o.agency_id WHERE o.agency_id=? AND o.id=? LIMIT 1`,[context.agencyId, ownerId]);
   if (!row) return failed("Payout was posted, but the owner invoice could not be prepared.");
   return deliverPdf(context, row.phone, "owner_payout", ownerId, {
     agency: row.agency, title: "Owner payout receipt", reference: payout.reference, recipient: row.owner,
@@ -99,9 +98,9 @@ export async function deliverOwnerPayoutInvoice(context: RequestContext, ownerId
 }
 
 export async function deliverOwnerExpenseNotice(context: RequestContext, expenseId: string) {
-  const row = sqlite.prepare(`SELECT e.id,e.amount,e.category,e.description,e.occurred_on AS occurredOn,o.id AS ownerId,o.name AS owner,o.phone,v.make||' '||v.model||' · '||v.plate AS vehicle
+  const row = await queryOne<{ id:string;amount:number;category:string;description:string;occurredOn:string;ownerId:string;owner:string;phone:string;vehicle:string|null }>(`SELECT e.id,e.amount,e.category,e.description,e.occurred_on AS occurredOn,o.id AS ownerId,o.name AS owner,o.phone,v.make||' '||v.model||' · '||v.plate AS vehicle
     FROM expenses e JOIN owners o ON o.id=e.owner_id AND o.agency_id=e.agency_id LEFT JOIN vehicles v ON v.id=e.vehicle_id AND v.agency_id=e.agency_id
-    WHERE e.agency_id=? AND e.id=? LIMIT 1`).get(context.agencyId, expenseId) as { id:string;amount:number;category:string;description:string;occurredOn:string;ownerId:string;owner:string;phone:string;vehicle:string|null } | undefined;
+    WHERE e.agency_id=? AND e.id=? LIMIT 1`,[context.agencyId, expenseId]);
   if (!row) return skipped("Expense saved. No owner message was needed because the expense is not allocated to an owner.");
   try {
     await ensureWhatsAppRuntimeForDelivery(context.agencyId);
@@ -109,10 +108,10 @@ export async function deliverOwnerExpenseNotice(context: RequestContext, expense
       `VibeRent owner expense notice`, `Expense: ${row.id}`, `Date: ${row.occurredOn}`,
       `Category: ${row.category}`, `Vehicle: ${row.vehicle ?? "Not linked"}`, `Details: ${row.description}`, `Amount: ${money(row.amount)}`,
     ].join("\n"));
-    audit(context, "expense", expenseId, "expense.owner_notice_sent", { messageId: sent.id, ownerId: row.ownerId });
+    await audit(context, "expense", expenseId, "expense.owner_notice_sent", { messageId: sent.id, ownerId: row.ownerId });
     return sentResult(`Expense saved and details sent to ${row.owner} on WhatsApp.`);
   } catch (error) {
-    audit(context, "expense", expenseId, "expense.owner_notice_failed", { reason: safeReason(error) });
+    await audit(context, "expense", expenseId, "expense.owner_notice_failed", { reason: safeReason(error) });
     return failed("Expense saved, but the owner WhatsApp message failed. Check the connection and owner phone number.");
   }
 }
@@ -127,29 +126,27 @@ async function deliverPdf(context: RequestContext, phone: string, action: string
     const document = await createTransactionInvoice(input);
     await ensureWhatsAppRuntimeForDelivery(context.agencyId);
     const sent = await sendWhatsAppDocument(context.agencyId, phone, { document, mimeType:"application/pdf", fileName:input.fileName, caption:input.caption });
-    audit(context, action.startsWith("owner_") ? "owner" : "booking", entityId, `${action}_sent`, { messageId: sent.id });
+    await audit(context, action.startsWith("owner_") ? "owner" : "booking", entityId, `${action}_sent`, { messageId: sent.id });
     return sentResult(`${input.title} sent to ${input.recipient} on WhatsApp.`);
   } catch (error) {
-    audit(context, action.startsWith("owner_") ? "owner" : "booking", entityId, `${action}_failed`, { reason: safeReason(error) });
+    await audit(context, action.startsWith("owner_") ? "owner" : "booking", entityId, `${action}_failed`, { reason: safeReason(error) });
     return failed(`${input.title} could not be sent. Check the WhatsApp connection and recipient phone number.`);
   }
 }
 
 function bookingNotice(agencyId: string, bookingId: string) {
-  return sqlite.prepare(`SELECT b.public_number AS publicNumber,a.name AS agency,c.name AS customer,c.phone_normalized AS phone,CASE WHEN b.fulfillment_type='external' THEN b.external_vehicle_make||' '||b.external_vehicle_model||coalesce(' '||b.external_vehicle_year,'') ELSE v.make||' '||v.model||' '||v.year END AS vehicle,coalesce(b.external_vehicle_plate,v.plate) AS plate,b.total_amount AS totalAmount,
+  return queryOne<BookingNoticeRow>(`SELECT b.public_number AS publicNumber,a.name AS agency,c.name AS customer,c.phone_normalized AS phone,CASE WHEN b.fulfillment_type='external' THEN b.external_vehicle_make||' '||b.external_vehicle_model||coalesce(' '||b.external_vehicle_year,'') ELSE v.make||' '||v.model||' '||v.year END AS vehicle,coalesce(b.external_vehicle_plate,v.plate) AS plate,b.total_amount AS totalAmount,
     coalesce((SELECT sum(CASE WHEN lower(ft.kind) IN ('refund','reversal') THEN -ft.amount ELSE ft.amount END) FROM financial_transactions ft WHERE ft.agency_id=b.agency_id AND ft.booking_id=b.id AND ft.status='posted' AND lower(ft.kind) IN ('payment','late_return_charge','deposit_applied','reversal','refund')),0) AS paid,
     (SELECT odometer FROM rental_inspections ri WHERE ri.agency_id=b.agency_id AND ri.booking_id=b.id AND ri.kind='checkout') AS checkoutOdometer,
     (SELECT odometer FROM rental_inspections ri WHERE ri.agency_id=b.agency_id AND ri.booking_id=b.id AND ri.kind='checkin') AS checkinOdometer,
     (SELECT fuel_level FROM rental_inspections ri WHERE ri.agency_id=b.agency_id AND ri.booking_id=b.id AND ri.kind='checkout') AS checkoutFuel,
     (SELECT fuel_level FROM rental_inspections ri WHERE ri.agency_id=b.agency_id AND ri.booking_id=b.id AND ri.kind='checkin') AS checkinFuel,
     b.checked_out_at AS checkedOutAt,b.completed_at AS completedAt
-    FROM bookings b JOIN agencies a ON a.id=b.agency_id JOIN customers c ON c.id=b.customer_id AND c.agency_id=b.agency_id LEFT JOIN vehicles v ON v.id=b.vehicle_id AND v.agency_id=b.agency_id WHERE b.agency_id=? AND b.id=? LIMIT 1`)
-    .get(agencyId, bookingId) as BookingNoticeRow | undefined;
+    FROM bookings b JOIN agencies a ON a.id=b.agency_id JOIN customers c ON c.id=b.customer_id AND c.agency_id=b.agency_id LEFT JOIN vehicles v ON v.id=b.vehicle_id AND v.agency_id=b.agency_id WHERE b.agency_id=? AND b.id=? LIMIT 1`,[agencyId, bookingId]);
 }
 
 function audit(context: RequestContext, entityType: string, entityId: string, action: string, metadata: Record<string, unknown>) {
-  sqlite.prepare("INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)")
-    .run(`aud_${randomUUID()}`, context.agencyId, context.userId, action, entityType, entityId, JSON.stringify(metadata), new Date().toISOString());
+  return execute("INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)",[`aud_${randomUUID()}`, context.agencyId, context.userId, action, entityType, entityId, JSON.stringify(metadata), new Date().toISOString()]);
 }
 function safeReason(error: unknown) { const message=error instanceof Error?error.message:"unknown";if(message.includes("already active"))return "duplicate_session";if(message.includes("not connected")||message.includes("reconnect"))return "whatsapp_not_connected";if(message.includes("not registered"))return "recipient_not_registered";return "delivery_failed"; }
 function safeFilePart(value:string){return value.replace(/[^a-z0-9_-]/gi,"-").slice(0,40)||"receipt";}

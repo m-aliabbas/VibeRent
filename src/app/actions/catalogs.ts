@@ -10,21 +10,21 @@ function failure(error: unknown) {
 }
 
 export async function listExpenseCategoriesAction() {
-  try { return { ok: true as const, data: listExpenseCategories(await getWebRequestContext()) }; }
+  try { return { ok: true as const, data: await listExpenseCategories(await getWebRequestContext()) }; }
   catch (error) { return failure(error); }
 }
 
 export async function createExpenseCategoryAction(name: string) {
-  try { return { ok: true as const, data: createExpenseCategory(await getWebRequestContext(), name) }; }
+  try { return { ok: true as const, data: await createExpenseCategory(await getWebRequestContext(), name) }; }
   catch (error) { return failure(error); }
 }
 
 export async function listAgencyCitiesAction() {
-  try { return { ok: true as const, data: listAgencyCities(await getWebRequestContext()) }; }
+  try { return { ok: true as const, data: await listAgencyCities(await getWebRequestContext()) }; }
   catch (error) { return failure(error); }
 }
 
 export async function createAgencyCityAction(name: string) {
-  try { return { ok: true as const, data: createAgencyCity(await getWebRequestContext(), name) }; }
+  try { return { ok: true as const, data: await createAgencyCity(await getWebRequestContext(), name) }; }
   catch (error) { return failure(error); }
 }
