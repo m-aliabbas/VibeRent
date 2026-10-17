@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { bigint, customType, doublePrecision as real, index, integer, pgTable, text, uniqueIndex } from "drizzle-orm/pg-core";
+import { customType, doublePrecision as real, index, integer, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 import type { AgreementDesignConfig } from "@/lib/agreement-config";
 
 // Keep boolean storage compatible with the existing SQLite SQL while exposing
@@ -23,16 +23,16 @@ export const user = pgTable("user", {
   email: text("email").notNull().unique(),
   emailVerified: sqliteBoolean("email_verified").default(sql`0`).notNull(),
   image: text("image"),
-  createdAt: bigint("created_at", { mode: "number" }).default(sql`(extract(epoch from clock_timestamp()) * 1000)::bigint`).notNull(),
-  updatedAt: bigint("updated_at", { mode: "number" }).default(sql`(extract(epoch from clock_timestamp()) * 1000)::bigint`).$onUpdate(() => Date.now()).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().$onUpdate(() => new Date()).notNull(),
 });
 
 export const session = pgTable("session", {
   id: text("id").primaryKey(),
-  expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
   token: text("token").notNull().unique(),
-  createdAt: bigint("created_at", { mode: "number" }).default(sql`(extract(epoch from clock_timestamp()) * 1000)::bigint`).notNull(),
-  updatedAt: bigint("updated_at", { mode: "number" }).$onUpdate(() => Date.now()).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").$onUpdate(() => new Date()).notNull(),
   ipAddress: text("ip_address"),
   userAgent: text("user_agent"),
   userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
@@ -45,23 +45,23 @@ export const account = pgTable("account", {
   providerId: text("provider_id").notNull(),
   userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
   accessToken: text("access_token"), refreshToken: text("refresh_token"), idToken: text("id_token"),
-  accessTokenExpiresAt: bigint("access_token_expires_at", { mode: "number" }),
-  refreshTokenExpiresAt: bigint("refresh_token_expires_at", { mode: "number" }),
+  accessTokenExpiresAt: timestamp("access_token_expires_at"),
+  refreshTokenExpiresAt: timestamp("refresh_token_expires_at"),
   scope: text("scope"), password: text("password"),
-  createdAt: bigint("created_at", { mode: "number" }).default(sql`(extract(epoch from clock_timestamp()) * 1000)::bigint`).notNull(),
-  updatedAt: bigint("updated_at", { mode: "number" }).$onUpdate(() => Date.now()).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").$onUpdate(() => new Date()).notNull(),
 }, table => [index("account_userId_idx").on(table.userId)]);
 
 export const verification = pgTable("verification", {
   id: text("id").primaryKey(), identifier: text("identifier").notNull(), value: text("value").notNull(),
-  expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
-  createdAt: bigint("created_at", { mode: "number" }).default(sql`(extract(epoch from clock_timestamp()) * 1000)::bigint`).notNull(),
-  updatedAt: bigint("updated_at", { mode: "number" }).default(sql`(extract(epoch from clock_timestamp()) * 1000)::bigint`).$onUpdate(() => Date.now()).notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().$onUpdate(() => new Date()).notNull(),
 }, table => [index("verification_identifier_idx").on(table.identifier)]);
 
 export const organization = pgTable("organization", {
   id: text("id").primaryKey(), name: text("name").notNull(), slug: text("slug").notNull().unique(),
-  logo: text("logo"), createdAt: bigint("created_at", { mode: "number" }).notNull(), metadata: text("metadata"),
+  logo: text("logo"), createdAt: timestamp("created_at").notNull(), metadata: text("metadata"),
 });
 
 export const member = pgTable("member", {
@@ -69,15 +69,15 @@ export const member = pgTable("member", {
   organizationId: text("organization_id").notNull().references(() => organization.id, { onDelete: "cascade" }),
   userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
   role: text("role").default("rental_agent").notNull(),
-  createdAt: bigint("created_at", { mode: "number" }).notNull(),
+  createdAt: timestamp("created_at").notNull(),
 }, table => [index("member_organizationId_idx").on(table.organizationId), index("member_userId_idx").on(table.userId), uniqueIndex("member_org_user_uq").on(table.organizationId, table.userId)]);
 
 export const invitation = pgTable("invitation", {
   id: text("id").primaryKey(),
   organizationId: text("organization_id").notNull().references(() => organization.id, { onDelete: "cascade" }),
   email: text("email").notNull(), role: text("role"), status: text("status").default("pending").notNull(),
-  expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
-  createdAt: bigint("created_at", { mode: "number" }).default(sql`(extract(epoch from clock_timestamp()) * 1000)::bigint`).notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
   inviterId: text("inviter_id").notNull().references(() => user.id, { onDelete: "cascade" }),
 }, table => [index("invitation_organizationId_idx").on(table.organizationId), index("invitation_email_idx").on(table.email)]);
 

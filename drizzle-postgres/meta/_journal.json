@@ -8,6 +8,13 @@
       "when": 1792239499145,
       "tag": "0000_unknown_tana_nile",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1792250933012,
+      "tag": "0001_chunky_nightcrawler",
+      "breakpoints": true
     }
   ]
 }
