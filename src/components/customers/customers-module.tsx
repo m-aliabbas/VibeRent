@@ -17,13 +17,14 @@ import { Toast } from "@/components/shared/toast";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { Button } from "@/components/ui/button";
 import { cnicExtractionKey, mergeCnicExtraction, type CnicExtractedValues, type CnicIntake } from "@/lib/cnic-intake";
+import { formatPkr } from "@/lib/utils";
 import type { CustomerCnicTarget } from "@/server/services/customer-cnic-service";
 
 type CustomerRecord = {
   id: string; name: string; fatherName: string | null; phone: string; cnic: string; email: string | null;
   dateOfBirth: string | null; address: string | null; cnicExpiresAt: string | null;
   licenseNumber: string | null; licenseExpiresAt: string | null; status: string;
-  version: number; updatedAt: string;
+  version: number; updatedAt: string; bookingCount: number; paidAmount: number; outstanding: number;
 };
 
 const displayStatus = (value: string) => value.replaceAll("_", " ").replace(/\b\w/g, letter => letter.toUpperCase());
@@ -35,6 +36,7 @@ export function CustomersModule() {
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("All");
   const [license, setLicense] = useState("All");
+  const [payment, setPayment] = useState("All");
   const [editing, setEditing] = useState<CustomerRecord>();
   const [open, setOpen] = useState(false);
   const [notice, setNotice] = useState("");
@@ -65,13 +67,20 @@ export function CustomersModule() {
     const expiry=item.licenseExpiresAt?Date.parse(`${item.licenseExpiresAt}T23:59:59`):NaN;
     const licenseMatch=license==="All"||(license==="No license"&&!item.licenseNumber)||(license==="Expired"&&Number.isFinite(expiry)&&expiry<now)||(license==="Expiring soon"&&Number.isFinite(expiry)&&expiry>=now&&expiry<now+30*86_400_000);
     const statusMatch=status === "All" || (status==="Needs review"?["review","blacklisted"].includes(item.status):status==="Updated recently"?now-Date.parse(item.updatedAt)<30*86_400_000:displayStatus(item.status) === status);
-    return statusMatch && licenseMatch && (!term || `${item.name} ${item.fatherName ?? ""} ${item.phone} ${item.cnic} ${item.email ?? ""}`.toLowerCase().includes(term));
-  }), [items, search, status, license, now]);
+    const paymentMatch=payment==="All"||(payment==="Outstanding"&&item.outstanding>0)||(payment==="Paid"&&item.bookingCount>0&&item.outstanding===0)||(payment==="No rentals"&&item.bookingCount===0);
+    return statusMatch && licenseMatch && paymentMatch && (!term || `${item.name} ${item.fatherName ?? ""} ${item.phone} ${item.cnic} ${item.email ?? ""}`.toLowerCase().includes(term));
+  }), [items, search, status, license, payment, now]);
   const metrics = [
     ["Customers", String(items.length)],
     ["Preferred", String(items.filter(item => item.status === "preferred").length)],
     ["Needs review", String(items.filter(item => ["review", "blacklisted"].includes(item.status)).length)],
     ["Updated recently", String(items.filter(item => now - Date.parse(item.updatedAt) < 30 * 86_400_000).length)],
+  ];
+  const paymentFilters = [
+    { value: "All", label: "All", detail: `${items.length} customers` },
+    { value: "Paid", label: "Paid", detail: formatPkr(items.filter(item => item.bookingCount > 0 && item.outstanding === 0).reduce((sum,item) => sum + item.paidAmount, 0)) },
+    { value: "Outstanding", label: "Outstanding", detail: formatPkr(items.reduce((sum,item) => sum + item.outstanding, 0)) },
+    { value: "No rentals", label: "No rentals", detail: `${items.filter(item => item.bookingCount === 0).length} customers` },
   ];
 
   async function removeCustomer() {
@@ -88,9 +97,13 @@ export function CustomersModule() {
   return <div className="space-y-6">
     <Toast message={notice} onDismiss={() => setNotice("")} />
     <PageHeader eyebrow="Customer records" title="Customers" description="Manage renter identity, contact details, rental history, and operational warnings." actions={<Button onClick={() => { setEditing(undefined); setOpen(true); }}><Plus size={17}/>Add customer</Button>} />
-    <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">{metrics.map(([label,value]) => <button type="button" key={label} onClick={()=>{setLicense("All");setStatus(label==="Customers"?"All":label)}} className="rounded-xl border border-[#E8ECF2] bg-white p-4 text-left transition hover:border-[#84CAFF]"><p className="text-xs text-[#667085]">{label}</p><p className="mt-2 text-xl font-bold">{value}</p></button>)}</section>
-    <FilterBar search={search} onSearch={setSearch} placeholder="Search name, phone or CNIC…" hasFilters={Boolean(search || status !== "All" || license!=="All")} onClear={() => { setSearch(""); setStatus("All"); setLicense("All"); }}><FilterSelect label="Status" value={status} onChange={setStatus} options={["Active", "Preferred", "Needs review", "Updated recently", "Review", "Blacklisted"]}/><FilterSelect label="License" value={license} onChange={setLicense} options={["Expiring soon","Expired","No license"]}/></FilterBar>
-    {loading ? <LoadingState rows={4}/> : loadError ? <InlineError message={loadError} onRetry={() => void load()}/> : rows.length === 0 ? <EmptyState filtered={Boolean(search || status !== "All" || license!=="All")}/> : <div className="overflow-hidden rounded-xl border border-[#E4E7EC] bg-white"><div className="divide-y divide-[#EAECF0]">{rows.map(item => <article key={item.id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center"><span className="grid h-10 w-10 place-items-center rounded-lg bg-[#EFF8FF] text-[#006FE6]"><UserRound size={18}/></span><div className="min-w-0 flex-1"><Link href={`/customers/${item.id}`} className="text-sm font-bold hover:text-[#006FE6]">{item.name}</Link><p className="mt-1 text-xs text-[#667085]">{item.phone} · <span className="font-mono">{item.cnic}</span>{item.email ? ` · ${item.email}` : ""}</p></div><div className="flex items-center gap-2"><StatusBadge status={displayStatus(item.status)}/><Button size="sm" variant="ghost" onClick={() => { setEditing(item); setOpen(true); }}><Pencil size={15}/>Edit</Button><Button asChild size="sm" variant="secondary"><Link href={`/customers/${item.id}`}>View</Link></Button><Button size="sm" variant="ghost" aria-label={`Delete ${item.name}`} onClick={()=>setRemoving(item)}><Trash2 size={15}/>Delete</Button></div></article>)}</div></div>}
+    <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">{metrics.map(([label,value]) => <button type="button" key={label} onClick={()=>{setLicense("All");setPayment("All");setStatus(label==="Customers"?"All":label)}} className="rounded-xl border border-[#E8ECF2] bg-white p-4 text-left transition hover:border-[#84CAFF]"><p className="text-xs text-[#667085]">{label}</p><p className="mt-2 text-xl font-bold">{value}</p></button>)}</section>
+    <section className="flex items-center gap-2 overflow-x-auto rounded-xl border border-[#E4E7EC] bg-white p-3" aria-label="Payment status filter">
+      <span className="shrink-0 px-1 text-xs font-semibold uppercase tracking-[.08em] text-[#667085]">Payment</span>
+      {paymentFilters.map(option => <Button key={option.value} type="button" size="sm" variant={payment===option.value?"primary":"secondary"} className="h-auto shrink-0 gap-2 py-2" aria-pressed={payment===option.value} onClick={()=>setPayment(option.value)}><span>{option.label}</span><span className={payment===option.value?"text-white/80":"text-[#667085]"}>{option.detail}</span></Button>)}
+    </section>
+    <FilterBar search={search} onSearch={setSearch} placeholder="Search name, phone or CNIC…" hasFilters={Boolean(search || status !== "All" || license!=="All" || payment!=="All")} onClear={() => { setSearch(""); setStatus("All"); setLicense("All"); setPayment("All"); }}><FilterSelect label="Status" value={status} onChange={setStatus} options={["Active", "Preferred", "Needs review", "Updated recently", "Review", "Blacklisted"]}/><FilterSelect label="License" value={license} onChange={setLicense} options={["Expiring soon","Expired","No license"]}/></FilterBar>
+    {loading ? <LoadingState rows={4}/> : loadError ? <InlineError message={loadError} onRetry={() => void load()}/> : rows.length === 0 ? <EmptyState filtered={Boolean(search || status !== "All" || license!=="All" || payment!=="All")}/> : <div className="overflow-hidden rounded-xl border border-[#E4E7EC] bg-white"><div className="divide-y divide-[#EAECF0]">{rows.map(item => { const paymentStatus=item.bookingCount===0?"No rentals":item.outstanding>0?"Outstanding":"Paid"; const paymentAmount=paymentStatus==="Outstanding"?`${formatPkr(item.outstanding)} due`:paymentStatus==="Paid"?`${formatPkr(item.paidAmount)} paid`:"No amount"; return <article key={item.id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center"><span className="grid h-10 w-10 place-items-center rounded-lg bg-[#EFF8FF] text-[#006FE6]"><UserRound size={18}/></span><div className="min-w-0 flex-1"><Link href={`/customers/${item.id}`} className="text-sm font-bold hover:text-[#006FE6]">{item.name}</Link><p className="mt-1 text-xs text-[#667085]">{item.phone} · <span className="font-mono">{item.cnic}</span>{item.email ? ` · ${item.email}` : ""}</p></div><div className="flex min-w-[130px] items-center gap-2 sm:flex-col sm:items-end sm:gap-1"><StatusBadge status={paymentStatus}/><span className="text-xs font-semibold text-[#475467]">{paymentAmount}</span></div><div className="flex items-center gap-2"><StatusBadge status={displayStatus(item.status)}/><Button size="sm" variant="ghost" onClick={() => { setEditing(item); setOpen(true); }}><Pencil size={15}/>Edit</Button><Button asChild size="sm" variant="secondary"><Link href={`/customers/${item.id}`}>View</Link></Button><Button size="sm" variant="ghost" aria-label={`Delete ${item.name}`} onClick={()=>setRemoving(item)}><Trash2 size={15}/>Delete</Button></div></article> })}</div></div>}
     {open && <CustomerDialog
       record={editing}
       onOpenChange={(next) => { setOpen(next); if (!next) setEditing(undefined); }}

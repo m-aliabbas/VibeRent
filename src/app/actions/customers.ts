@@ -23,6 +23,9 @@ type CustomerDto = {
   status: string;
   version: number;
   updatedAt: string;
+  bookingCount: number;
+  paidAmount: number;
+  outstanding: number;
 };
 
 type ActionError = { code: string; message: string; fieldErrors: Record<string, string> };

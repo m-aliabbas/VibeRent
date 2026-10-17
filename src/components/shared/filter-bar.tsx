@@ -59,8 +59,8 @@ export function FilterSelect({
   options: Array<string | { label:string; value:string }>;
 }) {
   return (
-    <label className="sr-only">
-      {label}
+    <label>
+      <span className="sr-only">{label}</span>
       <select
         aria-label={label}
         value={value}

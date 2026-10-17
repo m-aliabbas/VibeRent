@@ -20,6 +20,8 @@ const tones: Record<string, string> = {
   due: "bg-[#FFFAEB] text-[#B54708] ring-[#FEDF89]",
   settled: "bg-[#ECFDF3] text-[#067647] ring-[#ABEFC6]",
   paid: "bg-[#ECFDF3] text-[#067647] ring-[#ABEFC6]",
+  outstanding: "bg-[#FFFAEB] text-[#B54708] ring-[#FEDF89]",
+  "no rentals": "bg-[#F2F4F7] text-[#475467] ring-[#D0D5DD]",
   unpaid: "bg-[#F2F4F7] text-[#475467] ring-[#D0D5DD]",
   "partially paid": "bg-[#FFFAEB] text-[#B54708] ring-[#FEDF89]",
   "payment reversed": "bg-[#FEF3F2] text-[#B42318] ring-[#FECDCA]",

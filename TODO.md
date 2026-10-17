@@ -1,5 +1,7 @@
 # Bug fixes and additions
 
+Mobile application work is tracked separately in [`docs/MOBILE_APP_TODO.md`](./docs/MOBILE_APP_TODO.md).
+
 Source: `BugFixsAndAddition.md`
 
 - [ ] 1. Make dashboard summary cards actionable and show today’s returns plus active rentals.
