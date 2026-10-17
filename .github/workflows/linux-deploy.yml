@@ -1,0 +1,149 @@
+name: Deploy Linux Web
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-linux-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: production
+    env:
+      DEPLOY_HOST: 169.58.79.57
+      DEPLOY_USER: vibeadmin
+      DEPLOY_PATH: /home/vibeadmin/viberent
+
+    steps:
+      - name: Check out the selected release
+        uses: actions/checkout@v7
+
+      - name: Install SSH deployment tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends sshpass rsync
+
+      - name: Configure trusted server identity
+        env:
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          if [ -z "$DEPLOY_KNOWN_HOSTS" ]; then
+            echo "DEPLOY_KNOWN_HOSTS is not configured in the production environment." >&2
+            exit 1
+          fi
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Validate deployment password
+        env:
+          SSHPASS: ${{ secrets.DEPLOY_PASSWORD }}
+        run: |
+          if [ -z "$SSHPASS" ]; then
+            echo "DEPLOY_PASSWORD is not configured in the production environment." >&2
+            exit 1
+          fi
+
+      - name: Create deployment directory
+        env:
+          SSHPASS: ${{ secrets.DEPLOY_PASSWORD }}
+        run: |
+          sshpass -e ssh "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$DEPLOY_PATH'"
+
+      - name: Upload application source
+        env:
+          SSHPASS: ${{ secrets.DEPLOY_PASSWORD }}
+        run: |
+          sshpass -e rsync -az --delete \
+            --exclude='.git/' \
+            --exclude='.github/' \
+            --include='.env.example' \
+            --include='.env.docker.example' \
+            --exclude='.env' \
+            --exclude='.env.*' \
+            --exclude='node_modules/' \
+            --exclude='.next/' \
+            --exclude='.data/' \
+            --exclude='backups/' \
+            --exclude='.deployed-commit' \
+            --exclude='release/' \
+            --exclude='src-tauri/bin/' \
+            --exclude='src-tauri/target/' \
+            ./ "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/"
+
+      - name: Back up and deploy containers
+        env:
+          SSHPASS: ${{ secrets.DEPLOY_PASSWORD }}
+          DEPLOY_COMMIT: ${{ github.sha }}
+        run: |
+          sshpass -e ssh "$DEPLOY_USER@$DEPLOY_HOST" \
+            "DEPLOY_PATH='$DEPLOY_PATH' DEPLOY_COMMIT='$DEPLOY_COMMIT' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd "$DEPLOY_PATH"
+
+          if [ ! -f .env.docker ]; then
+            echo "Missing $DEPLOY_PATH/.env.docker. Create it from .env.docker.example before deploying." >&2
+            exit 1
+          fi
+
+          chmod 600 .env.docker
+          mkdir -p backups
+          chmod 700 backups
+
+          running_services="$(docker compose --env-file .env.docker ps --status running --services 2>/dev/null || true)"
+          timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+
+          if printf '%s\n' "$running_services" | grep -qx postgres; then
+            docker compose --env-file .env.docker exec -T postgres \
+              sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom' \
+              > "backups/viberent-postgres-$timestamp.dump"
+          fi
+
+          if printf '%s\n' "$running_services" | grep -qx web; then
+            docker compose --env-file .env.docker exec -T web \
+              tar -C /app/.data/private-files -czf - . \
+              > "backups/viberent-private-files-$timestamp.tar.gz"
+          fi
+
+          docker compose --env-file .env.docker config --quiet
+          docker compose --env-file .env.docker up -d --build
+
+          app_port="$(sed -n 's/^APP_PORT=//p' .env.docker | tail -n 1)"
+          app_port="${app_port:-3000}"
+          case "$app_port" in
+            *[!0-9]*|'') echo "APP_PORT must be a numeric port." >&2; exit 1 ;;
+          esac
+
+          healthy=0
+          for attempt in $(seq 1 18); do
+            if curl --fail --silent "http://127.0.0.1:$app_port/health" >/dev/null; then
+              healthy=1
+              break
+            fi
+            sleep 5
+          done
+
+          if [ "$healthy" -ne 1 ]; then
+            docker compose --env-file .env.docker ps
+            docker compose --env-file .env.docker logs --no-color --tail 150 web
+            exit 1
+          fi
+
+          printf '%s\n' "$DEPLOY_COMMIT" > .deployed-commit
+          docker compose --env-file .env.docker ps
+          REMOTE
+
+      - name: Deployment summary
+        run: |
+          {
+            echo "## Linux deployment complete"
+            echo ""
+            echo "- Server: \`$DEPLOY_HOST\`"
+            echo "- Path: \`$DEPLOY_PATH\`"
+            echo "- Commit: \`$GITHUB_SHA\`"
+            echo "- PostgreSQL migrations and the VibeRent health check passed."
+          } >> "$GITHUB_STEP_SUMMARY"

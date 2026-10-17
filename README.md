@@ -24,6 +24,28 @@ For hosted web, set `VIBERENT_DATABASE=postgres` and `POSTGRES_URL`, then run `n
 
 The backend is a Next.js modular monolith: Server Actions and `/api/v1` Route Handlers call the same application services and enforce tenant scope. Vehicle changes and booking confirmations append audit events. Booking confirmation uses a database transaction and half-open intervals (`[pickupAt, returnAt)`). `GET|POST /api/v1/agency-backup` exports and restores one agency as a validated SQLite package; this is separate from PostgreSQL platform backups.
 
+### Docker Compose web deployment
+
+The Compose stack runs the hosted web target with PostgreSQL 17, persistent database storage, persistent private-file storage, health checks, and automatic migrations before the application starts.
+
+See [`LINUX_SERVER_DEPLOYMENT.md`](./LINUX_SERVER_DEPLOYMENT.md) for complete Linux server setup, HTTPS, upgrades, persistence, backup, and disaster-recovery instructions.
+
+```bash
+cp .env.docker.example .env.docker
+# Replace every CHANGE_ME value, then:
+docker compose --env-file .env.docker up -d --build
+docker compose --env-file .env.docker ps
+```
+
+Open `http://localhost:3000`, or the port configured by `APP_PORT`. For production, set `BETTER_AUTH_URL` and `BETTER_AUTH_TRUSTED_ORIGINS` to the public HTTPS URL and place the service behind a TLS reverse proxy. The PostgreSQL password must remain synchronized between `POSTGRES_PASSWORD` and `POSTGRES_URL`. Do not commit `.env.docker`.
+
+To view logs or stop the services without deleting their persistent volumes:
+
+```bash
+docker compose --env-file .env.docker logs -f web
+docker compose --env-file .env.docker down
+```
+
 ## Authentication and organizations
 
 VibeRent uses Better Auth with the selected Drizzle database for verified email/password accounts, secure cookie sessions, password recovery, organizations, invitations, and custom staff roles. Copy `.env.example`, set a strong `BETTER_AUTH_SECRET`, and set the deployed `BETTER_AUTH_URL`.

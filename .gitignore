@@ -5,6 +5,7 @@
 *.db-wal
 .env
 .env*.local
+.env.docker
 node_modules/
 .next/
 src-tauri/bin/*
