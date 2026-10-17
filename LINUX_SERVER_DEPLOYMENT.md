@@ -67,7 +67,6 @@ BETTER_AUTH_TRUSTED_ORIGINS=https://rent.example.com
 
 RESEND_API_KEY=YOUR_RESEND_API_KEY
 AUTH_EMAIL_FROM=VibeRent <auth@example.com>
-AUTH_REQUIRE_EMAIL_VERIFICATION=true
 ```
 
 `POSTGRES_PASSWORD` and the password inside `POSTGRES_URL` must match. Use an alphanumeric database password unless the password is properly URL-encoded in `POSTGRES_URL`.

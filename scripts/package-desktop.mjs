@@ -81,7 +81,6 @@ try {
     "LICENSE_ENFORCEMENT=true",
     "LICENSE_APPLICATION_ID=viberent",
     "FIREBASE_LICENSE_COLLECTION=viberent_licenses",
-    "AUTH_REQUIRE_EMAIL_VERIFICATION=false",
     "BACKUP_HOUR=12",
     "BACKUP_RETENTION_DAYS=7",
     "",

@@ -48,7 +48,7 @@ docker compose --env-file .env.docker down
 
 ## Authentication and organizations
 
-VibeRent uses Better Auth with the selected Drizzle database for verified email/password accounts, secure cookie sessions, password recovery, organizations, invitations, and custom staff roles. Copy `.env.example`, set a strong `BETTER_AUTH_SECRET`, and set the deployed `BETTER_AUTH_URL`.
+VibeRent uses Better Auth with the selected Drizzle database for email/password accounts, secure cookie sessions, password recovery, organizations, invitations, and custom staff roles. Email verification is intentionally disabled. Copy `.env.example`, set a strong `BETTER_AUTH_SECRET`, and set the deployed `BETTER_AUTH_URL`.
 
 ```bash
 cp .env.example .env.local
@@ -57,9 +57,9 @@ npm run db:seed
 npm run dev
 ```
 
-In development, verification, reset, and invitation URLs are printed to the server terminal when Resend is not configured. Production requires `RESEND_API_KEY` and a verified `AUTH_EMAIL_FROM` sender.
+In development, password-reset and invitation URLs are printed to the server terminal when Resend is not configured. Production requires `RESEND_API_KEY` and a verified `AUTH_EMAIL_FROM` sender for those messages.
 
-Public signup creates a personal account. After email verification, the user creates a new agency and becomes its `agency_owner`. Existing agencies can only be joined through an invitation from their Users & Roles settings. Every protected Server Action and `/api/v1` route derives the user, agency, role, and branch scope from the authenticated session.
+Public signup creates a personal account and signs the user in immediately. The user then creates a new agency and becomes its `agency_owner`. Existing agencies can only be joined through an invitation from their Users & Roles settings. Every protected Server Action and `/api/v1` route derives the user, agency, role, and branch scope from the authenticated session.
 
 To connect the fictional seeded agency to a local test login without committing credentials, provide both variables only for the seed command:
 

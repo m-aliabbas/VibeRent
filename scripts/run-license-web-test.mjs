@@ -20,7 +20,6 @@ const child = spawn(process.execPath, [nextBin, "dev"], {
     FIREBASE_LICENSE_COLLECTION: "viberent_licenses",
     VIBERENT_VERSION: `${packageDocument.version}-web-test`,
     VIBERENT_DATA_DIR: path.join(root, ".data", "license-web-test"),
-    AUTH_REQUIRE_EMAIL_VERIFICATION: "false",
   },
   stdio: "inherit",
 });

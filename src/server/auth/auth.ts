@@ -7,9 +7,9 @@ import { getDatabaseTarget } from "@/db/database-target";
 import { queryOne } from "@/db/query";
 import { sendAuthEmail } from "@/server/auth/email";
 import { organizationAccess, organizationRoles } from "@/server/auth/permissions";
+import { authPolicy } from "@/server/auth/policy";
 
 const baseUrl = process.env.BETTER_AUTH_URL ?? "http://localhost:3000";
-const requireEmailVerification = process.env.AUTH_REQUIRE_EMAIL_VERIFICATION === "true";
 const trustedOrigins = [
   baseUrl,
   ...(process.env.BETTER_AUTH_TRUSTED_ORIGINS?.split(",").map(value => value.trim()).filter(Boolean) ?? []),
@@ -44,7 +44,7 @@ export const auth = betterAuth({
     user: {
       create: {
         before: async user => {
-          return { data: { ...user, emailVerified: requireEmailVerification ? user.emailVerified : true } };
+          return { data: { ...user, emailVerified: true } };
         },
       },
     },
@@ -62,7 +62,7 @@ export const auth = betterAuth({
   },
   emailAndPassword: {
     enabled: true,
-    requireEmailVerification,
+    requireEmailVerification: authPolicy.requireEmailVerification,
     minPasswordLength: 10,
     maxPasswordLength: 128,
     revokeSessionsOnPasswordReset: true,
@@ -78,7 +78,7 @@ export const auth = betterAuth({
     },
   },
   emailVerification: {
-    sendOnSignUp: requireEmailVerification,
+    sendOnSignUp: authPolicy.requireEmailVerification,
     sendOnSignIn: false,
     autoSignInAfterVerification: true,
     sendVerificationEmail: async ({ user, url }) => {
