@@ -9,6 +9,7 @@ import {
 
 const DEFAULT_FIREBASE_FILENAME = "k1.json.enc";
 const DEFAULT_GOOGLE_DRIVE_FILENAME = "g1.json.enc";
+const DEFAULT_GOOGLE_DRIVE_WEB_FILENAME = "g1-web.json.enc";
 const DEFAULT_OPENAI_FILENAME = "o1.json.enc";
 
 export type FirebaseServiceAccount = {
@@ -112,6 +113,23 @@ export function loadGoogleDriveClient() {
     return client;
   });
   return googleClientPromise;
+}
+
+let googleWebClientPromise: Promise<GoogleOAuthClient> | undefined;
+
+export function loadGoogleDriveWebClient() {
+  googleWebClientPromise ??= loadEncryptedJson<GoogleOAuthDocument>(
+    process.env.GOOGLE_DRIVE_WEB_CLIENT_CONFIG_ENC_PATH,
+    DEFAULT_GOOGLE_DRIVE_WEB_FILENAME,
+    "Google Drive web",
+  ).then(document => {
+    const client = document.web;
+    if (!client?.client_id || !client.client_secret || !client.auth_uri || !client.token_uri) {
+      throw new EncryptedCredentialError("Google Drive web credentials are incomplete.");
+    }
+    return client;
+  });
+  return googleWebClientPromise;
 }
 
 let openAiApiKeyPromise: Promise<string> | undefined;
