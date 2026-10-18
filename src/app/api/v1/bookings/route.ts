@@ -1,17 +1,16 @@
-import { getApiRequestContext } from "@/server/auth/session";
-import { apiFailure, apiSuccess, parseJsonRequest } from "@/server/api/response";
+import { apiHandler } from "@/server/api/route";
+import { parseJsonRequest } from "@/server/api/response";
 import { confirmBooking, listBookings } from "@/server/services/booking-service";
+import { deliverRentalAgreement } from "@/server/services/agreement-delivery-service";
+import { deliverCheckoutNotice } from "@/server/services/notification-delivery-service";
 
 export const runtime = "nodejs";
 
-export async function GET(request: Request) {
-  let requestId: string | undefined;
-  try { const context = await getApiRequestContext(request); requestId = context.requestId; return apiSuccess(await listBookings(context), requestId); }
-  catch (error) { return apiFailure(error, requestId); }
-}
+export const GET = apiHandler(({ context }) => listBookings(context));
 
-export async function POST(request: Request) {
-  let requestId: string | undefined;
-  try { const context = await getApiRequestContext(request); requestId = context.requestId; return apiSuccess(await confirmBooking(context, await parseJsonRequest(request)), requestId, { status: 201 }); }
-  catch (error) { return apiFailure(error, requestId); }
-}
+export const POST = apiHandler(async ({ request, context }) => {
+  const data = await confirmBooking(context, await parseJsonRequest(request));
+  const agreementDelivery = await deliverRentalAgreement(context, data.id);
+  const checkoutDelivery = data.status === "checked_out" ? await deliverCheckoutNotice(context, data.id) : undefined;
+  return { ...data, agreementDelivery, checkoutDelivery };
+}, { status: 201, revalidate: true });

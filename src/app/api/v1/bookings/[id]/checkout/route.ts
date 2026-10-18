@@ -1,11 +1,11 @@
-import { getApiRequestContext } from "@/server/auth/session";
-import { apiFailure, apiSuccess, parseJsonRequest } from "@/server/api/response";
+import { apiHandler } from "@/server/api/route";
+import { parseJsonRequest } from "@/server/api/response";
 import { checkOutRental } from "@/server/services/booking-service";
+import { deliverCheckoutNotice } from "@/server/services/notification-delivery-service";
 
 export const runtime = "nodejs";
 
-export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
-  let requestId: string | undefined;
-  try { const auth = await getApiRequestContext(request); requestId = auth.requestId; const { id } = await context.params; return apiSuccess(await checkOutRental(auth, id, await parseJsonRequest(request)), requestId); }
-  catch (error) { return apiFailure(error, requestId); }
-}
+export const POST = apiHandler<{ id: string }>(async ({ request, context, params }) => {
+  const data = await checkOutRental(context, params.id, await parseJsonRequest(request));
+  return { ...data, notificationDelivery: await deliverCheckoutNotice(context, params.id) };
+}, { revalidate: true });

@@ -1,17 +1,14 @@
-import { getApiRequestContext } from "@/server/auth/session";
-import { apiFailure, apiSuccess, parseJsonRequest } from "@/server/api/response";
+import { apiHandler } from "@/server/api/route";
+import { parseJsonRequest } from "@/server/api/response";
 import { recordBookingPayment } from "@/server/services/booking-service";
+import { deliverPaymentInvoice } from "@/server/services/notification-delivery-service";
+import { parseRecordPaymentInput } from "@/server/validation/booking";
 
 export const runtime = "nodejs";
 
-export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
-  let requestId: string | undefined;
-  try {
-    const auth = await getApiRequestContext(request);
-    requestId = auth.requestId;
-    const { id } = await context.params;
-    return apiSuccess(await recordBookingPayment(auth, id, await parseJsonRequest(request)), requestId);
-  } catch (error) {
-    return apiFailure(error, requestId);
-  }
-}
+export const POST = apiHandler<{ id: string }>(async ({ request, context, params }) => {
+  const input = parseRecordPaymentInput(await parseJsonRequest(request));
+  const data = await recordBookingPayment(context, params.id, input);
+  const notificationDelivery = await deliverPaymentInvoice(context, params.id, { ...input, receiptNumber: data.paymentReceiptNumber });
+  return { ...data, notificationDelivery };
+}, { revalidate: true });

@@ -1,26 +1,16 @@
-import { getApiRequestContext } from "@/server/auth/session";
-import { apiFailure, apiSuccess, parseJsonRequest } from "@/server/api/response";
-import { getVehicle, saveVehicle } from "@/server/services/vehicle-service";
+import { apiHandler, readJsonObject } from "@/server/api/route";
+import { getVehicle, saveVehicle, setVehicleArchived } from "@/server/services/vehicle-service";
 
 export const runtime = "nodejs";
 
-type VehicleRouteContext = { params: Promise<{ id: string }> };
+export const GET = apiHandler<{ id: string }>(({ context, params }) => getVehicle(context, params.id));
 
-export async function GET(request: Request, context: VehicleRouteContext) {
-  let requestId: string | undefined;
-  try { const auth = await getApiRequestContext(request); requestId = auth.requestId; const { id } = await context.params; return apiSuccess(await getVehicle(auth, id), requestId); }
-  catch (error) { return apiFailure(error, requestId); }
-}
+/** Partial update: changed fields are merged onto the current vehicle, then the whole record is revalidated. */
+export const PATCH = apiHandler<{ id: string }>(async ({ request, context, params }) => {
+  const current = await getVehicle(context, params.id);
+  const changes = await readJsonObject(request);
+  return saveVehicle(context, { ...current, ...changes, id: params.id });
+}, { revalidate: true });
 
-export async function PATCH(request: Request, context: VehicleRouteContext) {
-  let requestId: string | undefined;
-  try {
-    const auth = await getApiRequestContext(request); requestId = auth.requestId;
-    const { id } = await context.params;
-    const current = await getVehicle(auth, id);
-    const changes = await parseJsonRequest(request);
-    const input = changes && typeof changes === "object" ? { ...current, ...changes, id } : changes;
-    return apiSuccess(await saveVehicle(auth, input), requestId);
-  }
-  catch (error) { return apiFailure(error, requestId); }
-}
+/** Archives the vehicle (same as POST /vehicles/:id/archive). */
+export const DELETE = apiHandler<{ id: string }>(({ context, params }) => setVehicleArchived(context, params.id, true), { revalidate: true });

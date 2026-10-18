@@ -22,7 +22,7 @@ import { uploadAgreementTermsImage } from "@/server/services/private-file-servic
 
 export type OrganizationActionResult<T = undefined> =
   | { ok: true; data?: T; message?: string }
-  | { ok: false; message: string; fieldErrors?: Record<string, string> };
+  | { ok: false; message: string; fieldErrors?: Record<string, string>; code?: string; status?: number };
 
 export type TeamData = {
   members: Array<{ id: string; membershipId: string; name: string; email: string; role: StaffRole; active: boolean; branches: string[]; isCurrentUser: boolean }>;
@@ -547,8 +547,7 @@ function normalizeSlug(value: string) {
 function actionFailure(error: unknown): OrganizationActionResult<never> {
   const issue = asDomainError(error);
   if (issue.status >= 500) console.error(issue);
-  const message = issue.code === "INTERNAL_ERROR" && error instanceof Error && error.message.includes("UNIQUE")
-    ? "That agency slug or email is already in use."
-    : issue.message;
-  return { ok: false, message, fieldErrors: issue.fieldErrors };
+  const duplicate = issue.code === "INTERNAL_ERROR" && error instanceof Error && error.message.includes("UNIQUE");
+  const message = duplicate ? "That agency slug or email is already in use." : issue.message;
+  return { ok: false, message, fieldErrors: issue.fieldErrors, code: duplicate ? "VALIDATION_FAILED" : issue.code, status: duplicate ? 409 : issue.status };
 }

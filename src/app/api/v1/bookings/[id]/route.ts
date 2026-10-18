@@ -1,11 +1,15 @@
-import { getApiRequestContext } from "@/server/auth/session";
-import { apiFailure, apiSuccess } from "@/server/api/response";
-import { getBooking } from "@/server/services/booking-service";
+import { apiHandler, readJsonObject, readOptionalJsonObject } from "@/server/api/route";
+import { amendBooking, archiveBooking, getBooking } from "@/server/services/booking-service";
 
 export const runtime = "nodejs";
 
-export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
-  let requestId: string | undefined;
-  try { const auth = await getApiRequestContext(request); requestId = auth.requestId; const { id } = await context.params; return apiSuccess(await getBooking(auth, id), requestId); }
-  catch (error) { return apiFailure(error, requestId); }
-}
+export const GET = apiHandler<{ id: string }>(({ context, params }) => getBooking(context, params.id));
+
+export const PATCH = apiHandler<{ id: string }>(async ({ request, context, params }) =>
+  amendBooking(context, params.id, await readJsonObject(request)), { revalidate: true });
+
+export const DELETE = apiHandler<{ id: string }>(async ({ request, context, params }) => {
+  const body = await readOptionalJsonObject(request);
+  const reason = body.reason ?? new URL(request.url).searchParams.get("reason") ?? undefined;
+  return archiveBooking(context, params.id, reason);
+}, { revalidate: true });
