@@ -4,7 +4,7 @@ import { Readable } from "node:stream";
 import { CodeChallengeMethod, OAuth2Client, type Credentials } from "google-auth-library";
 import { drive as createDriveClient } from "googleapis/build/src/apis/drive";
 import { execute, queryOne } from "@/db/query";
-import { loadGoogleDriveWebClient } from "@/server/desktop/encrypted-credentials";
+import { loadGoogleDriveClient, loadGoogleDriveWebClient } from "@/server/desktop/encrypted-credentials";
 import { requireRole } from "@/server/auth/authorize";
 import type { RequestContext } from "@/server/context/request-context";
 import { DomainError } from "@/server/domain/errors";
@@ -17,11 +17,20 @@ type OAuthState={state:string;verifier:string;agencyId:string;authUserId:string;
 function key(){const secret=process.env.BETTER_AUTH_SECRET?.trim();if(!secret||secret.length<32)throw new DomainError("VALIDATION_FAILED","The server encryption secret is not configured.",503);return createHash("sha256").update(`viberent-web-drive:${secret}`).digest()}
 export function seal(value:unknown){const iv=randomBytes(12),cipher=createCipheriv("aes-256-gcm",key(),iv);const payload=Buffer.concat([cipher.update(JSON.stringify(value),"utf8"),cipher.final()]);return Buffer.concat([iv,cipher.getAuthTag(),payload]).toString("base64url")}
 export function unseal<T>(value:string):T{try{const bytes=Buffer.from(value,"base64url"),decipher=createDecipheriv("aes-256-gcm",key(),bytes.subarray(0,12));decipher.setAuthTag(bytes.subarray(12,28));return JSON.parse(Buffer.concat([decipher.update(bytes.subarray(28)),decipher.final()]).toString("utf8")) as T}catch{throw new DomainError("VALIDATION_FAILED","Google Drive connection data is invalid.",400)}}
+const LOOPBACK_HOSTS=["localhost","127.0.0.1"];
 async function configuration(){
+  const base=process.env.BETTER_AUTH_URL?.trim();if(!base)return null;
+  let url:URL;try{url=new URL("/api/v1/agency-backup/google-drive/callback",base)}catch{return null}
+  const loopback=url.protocol==="http:"&&LOOPBACK_HOSTS.includes(url.hostname);if(url.protocol!=="https:"&&!loopback)return null;
   let id=process.env.GOOGLE_DRIVE_WEB_CLIENT_ID?.trim(),secret=process.env.GOOGLE_DRIVE_WEB_CLIENT_SECRET?.trim();
-  if(!id||!secret){try{const encrypted=await loadGoogleDriveWebClient();id=encrypted.client_id;secret=encrypted.client_secret}catch{return null}}
-  const base=process.env.BETTER_AUTH_URL?.trim();if(!id||!secret||!base)return null;
-  try{const url=new URL("/api/v1/agency-backup/google-drive/callback",base);if(url.protocol!=="https:"&&!(url.protocol==="http:"&&["localhost","127.0.0.1"].includes(url.hostname)))return null;return {id,secret,redirectUri:url.toString()}}catch{return null}
+  if(!id||!secret){
+    // Prefer a Google "Web application" client (g1-web.json.enc). Google only accepts the desktop
+    // client from g1.json.enc on loopback redirects, so it is a fallback for localhost web runs.
+    const encrypted=await loadGoogleDriveWebClient().catch(()=>loopback?loadGoogleDriveClient().catch(()=>null):null);
+    id=encrypted?.client_id;secret=encrypted?.client_secret;
+  }
+  if(!id||!secret)return null;
+  return {id,secret,redirectUri:url.toString()}
 }
 async function client(){const config=await configuration();if(!config)throw new DomainError("VALIDATION_FAILED","Google Drive backup is not configured for this web deployment.",503);return new OAuth2Client(config.id,config.secret,config.redirectUri)}
 function owner(context:RequestContext){requireRole(context,["agency_owner"]);if(!context.authUserId)throw new DomainError("UNAUTHENTICATED","Sign in to connect Google Drive.",401);return context.authUserId}

@@ -21,7 +21,11 @@ if (!input || !output) {
   );
 }
 
-const plaintext = await readFile(path.resolve(input));
-JSON.parse(plaintext.toString("utf8"));
-await writeFile(path.resolve(output), encryptFernet(plaintext, key), { mode: 0o600 });
-console.log(`Encrypted credential written to ${path.resolve(output)}.`);
+async function main(inputPath: string, outputPath: string) {
+  const plaintext = await readFile(path.resolve(inputPath));
+  JSON.parse(plaintext.toString("utf8"));
+  await writeFile(path.resolve(outputPath), encryptFernet(plaintext, key), { mode: 0o600 });
+  console.log(`Encrypted credential written to ${path.resolve(outputPath)}.`);
+}
+
+void main(input, output);

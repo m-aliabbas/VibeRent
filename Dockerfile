@@ -37,6 +37,9 @@ COPY --from=builder --chown=node:node /app/.next ./.next
 COPY --from=builder --chown=node:node /app/public ./public
 COPY --from=builder --chown=node:node /app/drizzle-postgres ./drizzle-postgres
 COPY --from=builder --chown=node:node /app/scripts/migrate-postgres.mjs ./scripts/migrate-postgres.mjs
+# Encrypted integration credentials (o1 = OpenAI OCR, g1/g1-web = Google Drive OAuth) are read from
+# the working directory. package.json keeps the wildcard COPY valid when no .enc file is present.
+COPY --from=builder --chown=node:node /app/package.json /app/*.json.enc ./
 
 RUN mkdir -p /app/.data/private-files && chown -R node:node /app/.data
 

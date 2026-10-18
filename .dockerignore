@@ -20,5 +20,3 @@ desktop/.env
 *.tsbuildinfo
 
 k1.json.enc
-g1.json.enc
-o1.json.enc
