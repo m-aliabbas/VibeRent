@@ -8,6 +8,7 @@ import { auth } from "@/server/auth/auth";
 import { getOptionalWebSession, getWebRequestContext } from "@/server/auth/session";
 import { requireRole } from "@/server/auth/authorize";
 import { execute, inTransaction, queryAll, queryOne } from "@/db/query";
+import { authTimestamp } from "@/server/auth/auth-timestamp";
 import { asDomainError, DomainError } from "@/server/domain/errors";
 import { staffRoles, type StaffRole } from "@/server/context/request-context";
 import {
@@ -40,7 +41,7 @@ export async function updateMyProfileAction(input:{name:string;phone:string}):Pr
     const now=new Date().toISOString();
     await inTransaction(async ()=>{
       await execute("UPDATE users SET name=?,phone=?,version=version+1,updated_at=? WHERE agency_id=? AND id=?",[name,phone||null,now,context.agencyId,context.userId]);
-      await execute("UPDATE user SET name=?,updated_at=? WHERE id=?",[name,Date.now(),context.authUserId]);
+      await execute("UPDATE user SET name=?,updated_at=? WHERE id=?",[name,authTimestamp(new Date()),context.authUserId]);
       await writeAudit(context.agencyId,context.userId,"profile.updated","user",context.userId,{phoneUpdated:Boolean(phone)});
     },{immediate:true});
     revalidatePath("/","layout");
@@ -281,7 +282,7 @@ export async function addTeamMemberDirectAction(input: {
 
       await inTransaction(async () => {
         if (!existingMember) {
-          await execute("INSERT INTO member (id, organization_id, user_id, role, created_at) VALUES (?, ?, ?, ?, ?)",[resolvedMembershipId, context.agencyId, existingAuthUser.id, input.role, nowDate.getTime()]);
+          await execute("INSERT INTO member (id, organization_id, user_id, role, created_at) VALUES (?, ?, ?, ?, ?)",[resolvedMembershipId, context.agencyId, existingAuthUser.id, input.role, authTimestamp(nowDate)]);
         }
 
         await execute(
@@ -324,11 +325,11 @@ export async function addTeamMemberDirectAction(input: {
     const hashedPassword = await hashPassword(password);
 
     await inTransaction(async () => {
-      await execute("INSERT INTO user (id, name, email, email_verified, image, created_at, updated_at) VALUES (?, ?, ?, 1, NULL, ?, ?)",[authUserId, name, email, nowDate.getTime(), nowDate.getTime()]);
+      await execute("INSERT INTO user (id, name, email, email_verified, image, created_at, updated_at) VALUES (?, ?, ?, 1, NULL, ?, ?)",[authUserId, name, email, authTimestamp(nowDate), authTimestamp(nowDate)]);
 
-      await execute("INSERT INTO account (id, account_id, provider_id, user_id, password, created_at, updated_at) VALUES (?, ?, 'credential', ?, ?, ?, ?)",[`acc_${randomUUID()}`, authUserId, authUserId, hashedPassword, nowDate.getTime(), nowDate.getTime()]);
+      await execute("INSERT INTO account (id, account_id, provider_id, user_id, password, created_at, updated_at) VALUES (?, ?, 'credential', ?, ?, ?, ?)",[`acc_${randomUUID()}`, authUserId, authUserId, hashedPassword, authTimestamp(nowDate), authTimestamp(nowDate)]);
 
-      await execute("INSERT INTO member (id, organization_id, user_id, role, created_at) VALUES (?, ?, ?, ?, ?)",[membershipId, context.agencyId, authUserId, input.role, nowDate.getTime()]);
+      await execute("INSERT INTO member (id, organization_id, user_id, role, created_at) VALUES (?, ?, ?, ?, ?)",[membershipId, context.agencyId, authUserId, input.role, authTimestamp(nowDate)]);
 
       await execute(
         "INSERT INTO users (id, auth_user_id, membership_id, agency_id, branch_id, email, name, role, active, version, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?)"
@@ -388,7 +389,7 @@ export async function resetMemberPasswordDirectAction(input: {
     }
 
     const hashedPassword = await hashPassword(newPassword);
-    const now = Date.now();
+    const now = authTimestamp(new Date());
 
     await inTransaction(async () => {
       const existingAccount = await queryOne<{ id: string }>("SELECT id FROM account WHERE user_id=? AND provider_id='credential' LIMIT 1",[staff.authUserId]);

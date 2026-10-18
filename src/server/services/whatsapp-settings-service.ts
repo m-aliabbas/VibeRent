@@ -17,10 +17,11 @@ function sessionId(agencyId:string){return `agency-${agencyId.replace(/[^a-z0-9_
 function readRow(agencyId:string){return queryOne<SettingsRow>("SELECT session_id AS sessionId,owner_phone_normalized AS ownerNumber,listening_enabled AS listeningEnabled FROM whatsapp_settings WHERE agency_id=? LIMIT 1",[agencyId]);}
 
 export async function getWhatsAppSettings(context:RequestContext):Promise<WhatsAppSettingsDto> {
-  requireOwner(context);
   const row=await readRow(context.agencyId);
   const id=row?.sessionId??sessionId(context.agencyId);
-  return {ownerNumber:row?.ownerNumber??"",listeningEnabled:Boolean(row?.listeningEnabled),sessionId:id,runtime:getWhatsAppRuntimeSnapshot(context.agencyId)};
+  const canManage=context.roles.includes("agency_owner");
+  const runtime=getWhatsAppRuntimeSnapshot(context.agencyId);
+  return {ownerNumber:canManage?row?.ownerNumber??"":"",listeningEnabled:Boolean(row?.listeningEnabled),sessionId:id,runtime:canManage?runtime:{...runtime,qrDataUrl:null,linkedJid:null,ownerNumber:null,lastError:null}};
 }
 
 export async function saveWhatsAppSettings(context:RequestContext,input:{ownerNumber:string;listeningEnabled:boolean}) {
