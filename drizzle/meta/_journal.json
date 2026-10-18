@@ -141,6 +141,27 @@
       "when": 1792076279209,
       "tag": "0019_exotic_omega_red",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1792292434146,
+      "tag": "0020_absurd_leper_queen",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1792293961511,
+      "tag": "0021_bright_madame_masque",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "6",
+      "when": 1792294814666,
+      "tag": "0022_salty_wallflower",
+      "breakpoints": true
     }
   ]
 }

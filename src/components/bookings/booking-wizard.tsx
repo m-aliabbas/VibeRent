@@ -5,12 +5,15 @@ import { useEffect, useRef, useState, type Dispatch, type FormEvent, type SetSta
 import { ArrowLeft, CalendarClock, CarFront, Check, Loader2, MessageCircle, Plus, Search, ShieldAlert, X } from "lucide-react";
 
 import { clearBookingAction, confirmBookingAction, startBookingAction } from "@/app/actions/bookings";
-import { listCustomersAction, createCustomerAction } from "@/app/actions/customers";
+import { listCustomersAction, createCustomerAction, updateCustomerAction } from "@/app/actions/customers";
 import { listVehiclesAction } from "@/app/actions/vehicles";
 import { listBookingsAction } from "@/app/actions/bookings";
 import { createAgencyCityAction, listAgencyCitiesAction } from "@/app/actions/catalogs";
 import { getBookingCnicAction, getGuarantorCnicAction, uploadBookingCnicAction, uploadGuarantorCnicAction } from "@/app/actions/booking-cnic";
 import { listDriversAction } from "@/app/actions/drivers";
+import { listGuarantorsAction, saveGuarantorAction } from "@/app/actions/guarantors";
+import type { GuarantorDto } from "@/server/services/guarantor-service";
+import { ExternalVehiclePicker } from "@/components/bookings/external-vehicle-picker";
 import { CnicDocumentDrawer } from "@/components/customers/cnic-document-drawer";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { FormCombobox } from "@/components/forms/form-combobox";
@@ -57,7 +60,8 @@ type ConflictInfo = { bookingId: string; reason: string };
 type GuarantorDraft = GuarantorInput;
 
 function isGuarantorComplete(value: GuarantorDraft) {
-  return Boolean(value.name.trim() && value.parentage.trim() && /^\d{13}$/.test(value.cnic.replace(/\D/g,"")) && /^(?:92|0)?3\d{9}$/.test(value.phone.replace(/\D/g,"")) && value.address.trim() && Number.isInteger(value.carAmount) && value.carAmount > 0);
+  const cnic=value.cnic.replace(/\D/g,"");
+  return Boolean(value.name.trim() && value.parentage.trim() && (!cnic || /^\d{13}$/.test(cnic)) && /^(?:92|0)?3\d{9}$/.test(value.phone.replace(/\D/g,"")) && value.address.trim() && Number.isInteger(value.carAmount) && value.carAmount > 0);
 }
 
 // ─── Draft ──────────────────────────────────────────────────────────────────
@@ -344,7 +348,7 @@ export function BookingWizard() {
       <section className="rounded-xl border border-[#E4E7EC] bg-white p-5">
         {step === 0 && <ScheduleStep draft={draft} setDraft={setDraft} cities={cities} drivers={drivers} onCityCreated={city=>setSavedCities(current=>[...new Set([...current,city])].sort())} />}
         {step === 1 && <VehicleStep draft={draft} setDraft={setDraft} vehicles={eligibleVehicles} conflictMode={conflictMode} clearConflict={() => setConflictMode(false)} />}
-        {step === 2 && <CustomerStep draft={draft} setDraft={setDraft} customers={customers} bookingReference={bookingReference} onCustomerCreated={(c) => setCustomers((prev) => [...prev, c])} />}
+        {step === 2 && <CustomerStep draft={draft} setDraft={setDraft} customers={customers} bookingReference={bookingReference} onCustomerCreated={(c) => setCustomers((prev) => [c, ...prev.filter(item=>item.id!==c.id)])} />}
         {step === 3 && <PricingStep draft={draft} setDraft={setDraft} days={days} total={total} />}
         {step === 4 && <Review draft={draft} days={days} total={total} vehicle={vehicle} customers={customers} />}
         {step === 5 && draft.bookingMode==="rent_now" && <HandoverStep draft={draft} setDraft={setDraft}/>}
@@ -488,7 +492,7 @@ function VehicleStep({ draft, setDraft, vehicles, conflictMode, clearConflict }:
   );
 }
 
-function ExternalVehicleFields({draft,setDraft}:{draft:Draft;setDraft:(value:Draft)=>void}){const update=(values:Partial<Draft["external"]>)=>setDraft({...draft,external:{...draft.external,...values}});return <div className="mt-4 space-y-4"><div className="rounded-lg border border-[#B2DDFF] bg-[#EFF8FF] p-3 text-sm text-[#175CD3]"><strong>One booking only.</strong> This vehicle will not be added to your fleet or availability calendar.</div><div className="grid gap-4 sm:grid-cols-2"><FormInput label="Supplier / owner name" required value={draft.external.supplierName} onChange={e=>update({supplierName:e.target.value})}/><FormInput label="Supplier phone" required type="tel" value={draft.external.supplierPhone} onChange={e=>update({supplierPhone:e.target.value})}/><FormInput label="Vehicle make" required placeholder="Toyota" value={draft.external.vehicleMake} onChange={e=>update({vehicleMake:e.target.value})}/><FormInput label="Vehicle model" required placeholder="Corolla" value={draft.external.vehicleModel} onChange={e=>update({vehicleModel:e.target.value})}/><FormInput label="Registration number" required placeholder="LEA-4582" value={draft.external.vehiclePlate} onChange={e=>update({vehiclePlate:e.target.value.toUpperCase()})}/><FormInput label="Year" type="number" min={1980} max={new Date().getFullYear()+1} value={draft.external.vehicleYear} onChange={e=>update({vehicleYear:Number(e.target.value)})}/><FormInput label="Colour (optional)" value={draft.external.vehicleColor} onChange={e=>update({vehicleColor:e.target.value})}/></div></div>}
+function ExternalVehicleFields({draft,setDraft}:{draft:Draft;setDraft:(value:Draft)=>void}){const update=(values:Partial<Draft["external"]>)=>setDraft({...draft,external:{...draft.external,...values}});return <div className="mt-4 space-y-4"><ExternalVehiclePicker value={draft.external} onSelect={car=>setDraft({...draft,external:{...draft.external,supplierName:car.supplierName,supplierPhone:car.supplierPhone,vehicleMake:car.make,vehicleModel:car.model,vehicleYear:car.year,vehiclePlate:car.plate,vehicleColor:car.color}})}/><div className="rounded-lg border border-[#B2DDFF] bg-[#EFF8FF] p-3 text-sm text-[#175CD3]"><strong>Booking snapshot.</strong> Selecting a saved source car fills these fields. Changes here apply to this booking unless you save the car for reuse.</div><div className="grid gap-4 sm:grid-cols-2"><FormInput label="Supplier / owner name" required value={draft.external.supplierName} onChange={e=>update({supplierName:e.target.value})}/><FormInput label="Supplier phone" required type="tel" value={draft.external.supplierPhone} onChange={e=>update({supplierPhone:e.target.value})}/><FormInput label="Vehicle make" required placeholder="Toyota" value={draft.external.vehicleMake} onChange={e=>update({vehicleMake:e.target.value})}/><FormInput label="Vehicle model" required placeholder="Corolla" value={draft.external.vehicleModel} onChange={e=>update({vehicleModel:e.target.value})}/><FormInput label="Registration number" required placeholder="LEA-4582" value={draft.external.vehiclePlate} onChange={e=>update({vehiclePlate:e.target.value.toUpperCase()})}/><FormInput label="Year" type="number" min={1980} max={new Date().getFullYear()+1} value={draft.external.vehicleYear} onChange={e=>update({vehicleYear:Number(e.target.value)})}/><FormInput label="Colour (optional)" value={draft.external.vehicleColor} onChange={e=>update({vehicleColor:e.target.value})}/></div></div>}
 
 // ─── Customer step ───────────────────────────────────────────────────────────
 
@@ -502,7 +506,9 @@ function CustomerStep({ draft, setDraft, customers, bookingReference, onCustomer
   onCustomerCreated: (c: CustomerDto) => void;
 }) {
   const [customerSearch, setCustomerSearch] = useState("");
+  const [customerCnic, setCustomerCnic] = useState("");
   const [showNewForm, setShowNewForm] = useState(false);
+  const [updatingCustomer, setUpdatingCustomer] = useState<CustomerDto>();
   const [newForm, setNewForm] = useState<CreateCustomerInput>({ name: "", fatherName: "", phone: "", cnic: "", email: "", dateOfBirth:"", address:"", cnicExpiresAt:"", licenseNumber: "", licenseExpiresAt: "" });
   const [formErrors, setFormErrors] = useState<NewCustomerFormErrors>({});
   const [formSubmitting, setFormSubmitting] = useState(false);
@@ -515,7 +521,11 @@ function CustomerStep({ draft, setDraft, customers, bookingReference, onCustomer
   const lastExtractionKey=useRef("");
 
   const selected = customers.find((c) => c.id === draft.customerId);
-  const matches=customerSearch.trim()?customers.filter(customer=>`${customer.name} ${customer.phone}`.toLowerCase().includes(customerSearch.trim().toLowerCase())).slice(0,8):customers.slice(0,8);
+  const cnicDigits=customerCnic.replace(/\D/g,"");
+  const matchedCnic=cnicDigits.length===13?customers.find(customer=>customer.cnic.replace(/\D/g,"")===cnicDigits):undefined;
+  const matches=customerSearch.trim()?customers.filter(customer=>`${customer.name} ${customer.phone} ${customer.cnic}`.toLowerCase().includes(customerSearch.trim().toLowerCase())).slice(0,8):customers.slice(0,8);
+  const existingCnic=showNewForm&&newForm.cnic.replace(/\D/g,"").length===13?customers.find(customer=>customer.cnic.replace(/\D/g,"")===newForm.cnic.replace(/\D/g,"")):undefined;
+  function editExisting(customer:CustomerDto){setUpdatingCustomer(customer);setShowNewForm(true);setNewForm({name:customer.name,fatherName:customer.fatherName??"",phone:customer.phone,cnic:customer.cnic,email:customer.email??"",dateOfBirth:customer.dateOfBirth??"",address:customer.address??"",cnicExpiresAt:customer.cnicExpiresAt??"",licenseNumber:customer.licenseNumber??"",licenseExpiresAt:customer.licenseExpiresAt??""});}
 
   function applyExtracted(intake:CnicIntake){
     const key=cnicExtractionKey(intake.extracted);
@@ -560,7 +570,7 @@ function CustomerStep({ draft, setDraft, customers, bookingReference, onCustomer
     setFormSubmitting(true);
     setFormErrors({});
     setFormSubmitError("");
-    const result = await createCustomerAction({
+    const input = {
       name: newForm.name,
       fatherName: newForm.fatherName || undefined,
       phone: newForm.phone,
@@ -571,7 +581,8 @@ function CustomerStep({ draft, setDraft, customers, bookingReference, onCustomer
       cnicExpiresAt:newForm.cnicExpiresAt||undefined,
       licenseNumber: newForm.licenseNumber || undefined,
       licenseExpiresAt: newForm.licenseExpiresAt || undefined,
-    });
+    };
+    const result = updatingCustomer ? await updateCustomerAction(updatingCustomer.id, input) : await createCustomerAction(input);
     setFormSubmitting(false);
     if (!result.ok) {
       const fe = result.error.fieldErrors;
@@ -589,6 +600,7 @@ function CustomerStep({ draft, setDraft, customers, bookingReference, onCustomer
     onCustomerCreated(result.data);
     setDraft({ ...draft, customerId: result.data.id });
     setShowNewForm(false);
+    setUpdatingCustomer(undefined);
     setNewForm({ name: "", fatherName: "", phone: "", cnic: "", email: "", dateOfBirth:"", address:"", cnicExpiresAt:"", licenseNumber: "", licenseExpiresAt: "" });
   }
 
@@ -596,22 +608,27 @@ function CustomerStep({ draft, setDraft, customers, bookingReference, onCustomer
     <div>
       <h2 className="font-bold">Customer</h2>
       {draft.rentalMode==="with_driver"&&draft.renterSkipped&&<div className="mt-3 rounded-lg border border-[#B2DDFF] bg-[#EFF8FF] p-3 text-sm text-[#175CD3]">Renter details are skipped for this with-driver booking. Continue to pricing, or untick the option in Schedule to attach a customer.</div>}
-      <p className="mt-1 text-xs text-[#667085]">Use one search for name or phone, or add a new customer without leaving the booking.</p>
+      <p className="mt-1 text-xs text-[#667085]">Search by name, phone, or CNIC, or add a customer without leaving the booking.</p>
 
       <div className="mt-4 space-y-4">
+        <div className="rounded-xl border border-[#B2DDFF] bg-[#F5FAFF] p-4">
+          <FormInput label="Customer ID card (CNIC)" inputMode="numeric" placeholder="35202-1234567-1" value={customerCnic} onChange={e=>setCustomerCnic(e.target.value)} />
+          {matchedCnic?<div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-sm"><span><strong>{matchedCnic.name}</strong> · {matchedCnic.phone}</span><Button type="button" size="sm" onClick={()=>{setDraft(current=>({...current,customerId:matchedCnic.id}));setCustomerSearch(matchedCnic.name);setShowNewForm(false)}}>Use this customer</Button></div>:cnicDigits.length===13?<div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-sm"><span>No customer has this CNIC.</span><Button type="button" size="sm" variant="secondary" onClick={()=>{setUpdatingCustomer(undefined);setNewForm(current=>({...current,cnic:cnicDigits}));setShowNewForm(true)}}>Add customer with this CNIC</Button></div>:<p className="mt-2 text-xs text-[#667085]">Enter 13 digits to find an existing customer before creating a new one.</p>}
+        </div>
         <FormInput
           label="Existing customer"
-          placeholder="Search name or phone number"
+          placeholder="Search name, phone or CNIC"
           value={customerSearch}
           onChange={(e) => setCustomerSearch(e.target.value)}
         />
-        <div className="max-h-52 overflow-y-auto rounded-xl border border-[#E4E7EC] bg-white p-1" role="listbox" aria-label="Customer matches">{matches.map(customer=><button key={customer.id} type="button" role="option" aria-selected={draft.customerId===customer.id} onClick={()=>{setDraft({...draft,customerId:customer.id});setCustomerSearch(`${customer.name} · ${customer.phone}`)}} className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm ${draft.customerId===customer.id?"bg-[#EFF8FF] text-[#0058B8]":"hover:bg-[#F8FAFC]"}`}><span><strong>{customer.name}</strong><span className="ml-2 text-xs text-[#667085]">{customer.phone}</span></span><span className="text-xs capitalize">{customer.status}</span></button>)}{!matches.length&&<p className="p-3 text-sm text-[#667085]">No existing customer matches that name or phone.</p>}</div>
+        <div className="max-h-52 overflow-y-auto rounded-xl border border-[#E4E7EC] bg-white p-1" role="listbox" aria-label="Customer matches">{matches.map(customer=><button key={customer.id} type="button" role="option" aria-selected={draft.customerId===customer.id} onClick={()=>{setDraft({...draft,customerId:customer.id});setCustomerSearch(`${customer.name} · ${customer.phone}`)}} className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm ${draft.customerId===customer.id?"bg-[#EFF8FF] text-[#0058B8]":"hover:bg-[#F8FAFC]"}`}><span><strong>{customer.name}</strong><span className="ml-2 text-xs text-[#667085]">{customer.phone} · {customer.cnic}</span></span><span className="text-xs capitalize">{customer.status}</span></button>)}{!matches.length&&<p className="p-3 text-sm text-[#667085]">No existing customer matches your search.</p>}</div>
 
         {/* Selected customer info */}
         {selected && (
           <div className={`rounded-lg border p-3 text-sm ${selected.status === "review" ? "border-[#FEDF89] bg-[#FFFAEB] text-[#93370D]" : "border-[#ABEFC6] bg-[#ECFDF3] text-[#067647]"}`}>
             <strong>{selected.name} · {selected.status}</strong>
             <p className="mt-1 text-xs">CNIC on file{selected.status === "review" ? " · Manager review required" : ""}</p>
+            <Button type="button" size="sm" variant="secondary" className="mt-2" onClick={()=>editExisting(selected)}>Update customer details</Button>
           </div>
         )}
 
@@ -638,10 +655,11 @@ function CustomerStep({ draft, setDraft, customers, bookingReference, onCustomer
         ) : (
           <div className="rounded-xl border border-[#E4E7EC] bg-[#F8FAFC] p-4">
             <div className="mb-3 flex items-center justify-between">
-              <p className="text-sm font-bold">New customer</p>
+              <p className="text-sm font-bold">{updatingCustomer?"Update customer":"New customer"}</p>
               <button type="button" onClick={() => { setShowNewForm(false); setFormErrors({}); setFormSubmitError(""); }} className="text-[#667085] hover:text-[#19191F]"><X size={16} /></button>
             </div>
             {formSubmitError && <p className="mb-3 rounded-lg border border-[#FDA29B] bg-[#FEF3F2] p-2 text-xs text-[#B42318]">{formSubmitError}</p>}
+            {existingCnic && !updatingCustomer && <div className="mb-3 rounded-lg border border-[#B2DDFF] bg-[#EFF8FF] p-3 text-sm"><strong>{existingCnic.name}</strong> already has this CNIC. <div className="mt-2 flex gap-2"><Button type="button" size="sm" onClick={()=>{setDraft({...draft,customerId:existingCnic.id});setShowNewForm(false)}}>Use existing</Button><Button type="button" size="sm" variant="secondary" onClick={()=>editExisting(existingCnic)}>Update details</Button></div></div>}
             <div className="grid gap-3 sm:grid-cols-2">
               <FormInput autoFocus label="Full name" required value={newForm.name} onChange={(e) => setNewForm({ ...newForm, name: e.target.value })} error={formErrors.name} />
               <FormInput label="Father / husband name" value={newForm.fatherName ?? ""} onChange={(e) => setNewForm({ ...newForm, fatherName: e.target.value })} error={formErrors.fatherName} />
@@ -659,7 +677,7 @@ function CustomerStep({ draft, setDraft, customers, bookingReference, onCustomer
             </div>
             <div className="mt-3 flex justify-end gap-2">
               <Button type="button" variant="secondary" size="sm" onClick={() => { setShowNewForm(false); setFormErrors({}); setFormSubmitError(""); }}>Cancel</Button>
-              <Button type="button" size="sm" disabled={formSubmitting} onClick={handleCreateCustomer}>{formSubmitting ? "Saving…" : "Save customer"}</Button>
+              <Button type="button" size="sm" disabled={formSubmitting || Boolean(existingCnic&&!updatingCustomer)} onClick={handleCreateCustomer}>{formSubmitting ? "Saving…" : updatingCustomer ? "Update customer" : "Save customer"}</Button>
             </div>
           </div>
         )}
@@ -671,12 +689,18 @@ function CustomerStep({ draft, setDraft, customers, bookingReference, onCustomer
 
 function GuarantorSection({draft,setDraft,bookingReference}:{draft:Draft;setDraft:Dispatch<SetStateAction<Draft>>;bookingReference?:{id:string;publicNumber:number}}) {
   const guarantor=draft.guarantor;
+  const [savedGuarantors,setSavedGuarantors]=useState<GuarantorDto[]>([]);
+  const [savingGuarantor,setSavingGuarantor]=useState(false);
+  const [guarantorNotice,setGuarantorNotice]=useState("");
   const [intake,setIntake]=useState<CnicIntake>();
   const [loading,setLoading]=useState(false);
   const [uploading,setUploading]=useState<"front"|"back"|null>(null);
   const [error,setError]=useState("");
   const lastExtraction=useRef<CnicExtractedValues|undefined>(undefined);
   const lastExtractionKey=useRef("");
+  useEffect(()=>{let active=true;void listGuarantorsAction().then(result=>{if(active&&result.ok)setSavedGuarantors(result.data)});return()=>{active=false}},[]);
+
+  async function saveToDirectory(){if(!guarantor||!isGuarantorComplete(guarantor))return;setSavingGuarantor(true);const cnic=guarantor.cnic.replace(/\D/g,"");const existing=cnic?savedGuarantors.find(item=>item.cnic.replace(/\D/g,"")===cnic):undefined;const result=await saveGuarantorAction({...guarantor,id:existing?.id??""});setSavingGuarantor(false);if(result.ok){setSavedGuarantors(current=>[result.data,...current.filter(item=>item.id!==result.data.id)]);setGuarantorNotice("Guarantor saved for future bookings.")}else setGuarantorNotice(result.error.message)}
 
   function update(values:Partial<GuarantorDraft>){
     setDraft(current=>current.guarantor?{...current,guarantor:{...current.guarantor,...values}}:current);
@@ -727,7 +751,7 @@ function GuarantorSection({draft,setDraft,bookingReference}:{draft:Draft;setDraf
     const next=result.data as CnicIntake;setIntake(next);applyExtracted(next);
   }
 
-  if(!guarantor)return <section className="rounded-xl border border-dashed border-[#98A2B3] bg-white p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><h3 className="text-sm font-bold text-[#1D2939]">Guarantor</h3><p className="mt-1 text-xs text-[#667085]">Add a guarantor with CNIC OCR or enter the details manually.</p></div><Button type="button" size="sm" variant="secondary" onClick={()=>setDraft({...draft,guarantor:{name:"",parentage:"",cnic:"",phone:"",address:"",carAmount:0}})}><Plus size={15}/>Add guarantor</Button></div></section>;
+  if(!guarantor)return <section className="rounded-xl border border-dashed border-[#98A2B3] bg-white p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><h3 className="text-sm font-bold text-[#1D2939]">Guarantor</h3><p className="mt-1 text-xs text-[#667085]">Search a saved guarantor, use CNIC OCR, or enter details manually.</p></div><Button type="button" size="sm" variant="secondary" onClick={()=>setDraft({...draft,guarantor:{name:"",parentage:"",cnic:"",phone:"",address:"",carAmount:0}})}><Plus size={15}/>Add guarantor</Button></div>{savedGuarantors.length>0&&<div className="mt-3"><FormCombobox label="Existing guarantor" value="" onValueChange={id=>{const selected=savedGuarantors.find(item=>item.id===id);if(selected)setDraft(current=>({...current,guarantor:{name:selected.name,parentage:selected.parentage,cnic:selected.cnic,phone:selected.phone,address:selected.address,carAmount:selected.carAmount}}))}} options={[{label:"Select guarantor",value:""},...savedGuarantors.map(item=>({label:`${item.name} · ${item.cnic||item.phone}`,value:item.id,keywords:`${item.phone} ${item.cnic} ${item.parentage}`}))]} searchPlaceholder="Search name, phone or CNIC…"/></div>}</section>;
 
   return <section className="rounded-xl border border-[#B2DDFF] bg-[#F5FAFF] p-4">
     <div className="flex items-start justify-between gap-3"><div><h3 className="text-sm font-bold text-[#1D2939]">Guarantor details</h3><p className="mt-1 text-xs text-[#667085]">Upload the guarantor CNIC to fill identity fields, then review every value.</p></div><button type="button" onClick={()=>setDraft({...draft,guarantor:null})} className="grid h-8 w-8 place-items-center rounded-lg text-[#667085] hover:bg-white" aria-label="Remove guarantor"><X size={16}/></button></div>
@@ -735,12 +759,14 @@ function GuarantorSection({draft,setDraft,bookingReference}:{draft:Draft;setDraf
     <div className="mt-4 grid gap-3 sm:grid-cols-2">
       <FormInput label="Name" required value={guarantor.name} onChange={e=>update({name:e.target.value})}/>
       <FormInput label="Parentage" required value={guarantor.parentage} onChange={e=>update({parentage:e.target.value})}/>
-      <FormInput label="CNIC" required placeholder="35202-1234567-1" value={guarantor.cnic} onChange={e=>update({cnic:e.target.value})}/>
+      <FormInput label="CNIC (optional)" placeholder="35202-1234567-1" value={guarantor.cnic} onChange={e=>update({cnic:e.target.value})}/>
       <FormInput label="Phone" required type="tel" placeholder="03001234567" value={guarantor.phone} onChange={e=>update({phone:e.target.value})}/>
       <FormInput label="Amount of car (PKR)" required type="number" min={1} value={guarantor.carAmount||""} onChange={e=>update({carAmount:Number(e.target.value)})}/>
       <label className="text-sm font-semibold text-[#344054] sm:col-span-2">Address *<textarea required className="mt-1.5 min-h-20 w-full rounded-[9px] border border-[#D0D5DD] bg-white px-3 py-2 text-sm font-normal outline-none focus:border-[#006FE6] focus:ring-2 focus:ring-[#006FE6]/10" value={guarantor.address} onChange={e=>update({address:e.target.value})} placeholder="Address printed on CNIC"/></label>
     </div>
-    {!isGuarantorComplete(guarantor)&&<p className="mt-3 text-xs text-[#B54708]">Complete all six guarantor fields to continue.</p>}
+    {!isGuarantorComplete(guarantor)&&<p className="mt-3 text-xs text-[#B54708]">Complete the required guarantor fields to continue. CNIC is optional.</p>}
+    {isGuarantorComplete(guarantor)&&<div className="mt-3"><Button type="button" size="sm" variant="secondary" disabled={savingGuarantor} onClick={()=>void saveToDirectory()}>{savingGuarantor?"Saving…":"Save guarantor for future bookings"}</Button></div>}
+    {guarantorNotice&&<p role="status" className="mt-2 text-xs text-[#475467]">{guarantorNotice}</p>}
   </section>;
 }
 

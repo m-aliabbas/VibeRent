@@ -188,6 +188,10 @@ export function setVehicleArchived(context:RequestContext,id:string,archived:boo
     const vehicle=sqlite.prepare("SELECT id,status FROM vehicles WHERE agency_id=? AND id=? LIMIT 1")
       .get(context.agencyId,id) as {id:string;status:string}|undefined;
     if(!vehicle) throw new DomainError("NOT_FOUND","Vehicle not found.",404);
+    if(archived){
+      const activeBooking=sqlite.prepare("SELECT id FROM bookings WHERE agency_id=? AND vehicle_id=? AND archived_at IS NULL AND status IN ('confirmed','checked_out') LIMIT 1").get(context.agencyId,id);
+      if(activeBooking)throw new DomainError("INVALID_STATUS_TRANSITION","Cancel, complete, or reassign the active booking before archiving this vehicle.",409);
+    }
     const activeBooking=!archived && sqlite.prepare("SELECT id FROM bookings WHERE agency_id=? AND vehicle_id=? AND archived_at IS NULL AND status IN ('confirmed','checked_out') LIMIT 1")
       .get(context.agencyId,id);
     const now=new Date().toISOString();

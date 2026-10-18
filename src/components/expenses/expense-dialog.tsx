@@ -4,31 +4,32 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { useMemo, useState, useTransition } from "react";
 import { X } from "lucide-react";
 import { createExpenseCategoryAction } from "@/app/actions/catalogs";
-import { createExpenseAction } from "@/app/actions/expenses";
+import { createExpenseAction, updateExpenseAction } from "@/app/actions/expenses";
 import { FormCombobox } from "@/components/forms/form-combobox";
 import { FormInput, FormSelect } from "@/components/forms/form-controls";
 import { Button } from "@/components/ui/button";
-import type { ExpenseDto, ExpenseOption, ExpenseWorkspaceData } from "@/server/services/expense-service";
+import type { ExpenseDto, ExpenseOption, ExpenseSaveResult, ExpenseWorkspaceData } from "@/server/services/expense-service";
 
 type Props = {
   data: ExpenseWorkspaceData;
   initialVehicleId?: string;
+  record?: ExpenseDto;
   onClose: () => void;
-  onSave: (item: ExpenseDto) => void;
+  onSave: (item: ExpenseSaveResult) => void;
   onCategoryAdded?: (item: ExpenseOption) => void;
 };
 
-export function ExpenseDialog({ data, initialVehicleId = "", onClose, onSave, onCategoryAdded }: Props) {
+export function ExpenseDialog({ data, initialVehicleId = "", record, onClose, onSave, onCategoryAdded }: Props) {
   const [categories, setCategories] = useState(data.categories);
   const [form, setForm] = useState({
-    occurredOn: new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Karachi" }).format(new Date()),
-    amount: 0,
-    category: data.categories[0]?.label ?? "",
-    description: "",
-    vehicleId: initialVehicleId,
-    bookingId: "",
-    customerId: "",
-    ownerId: "",
+    occurredOn: record?.occurredOn ?? new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Karachi" }).format(new Date()),
+    amount: record?.amount ?? 0,
+    category: record?.category ?? data.categories[0]?.label ?? "",
+    description: record?.description ?? "",
+    vehicleId: record?.vehicleId ?? initialVehicleId,
+    bookingId: record?.bookingId ?? "",
+    customerId: record?.customerId ?? "",
+    ownerId: record?.ownerId ?? "",
   });
   const [newCategory, setNewCategory] = useState("");
   const [addingCategory, setAddingCategory] = useState(false);
@@ -67,13 +68,14 @@ export function ExpenseDialog({ data, initialVehicleId = "", onClose, onSave, on
   function submit() {
     startTransition(async () => {
       setError("");
-      const result = await createExpenseAction({
+      const payload = {
         ...form,
         vehicleId: form.vehicleId || undefined,
         bookingId: form.bookingId || undefined,
         customerId: form.customerId || undefined,
         ownerId: form.ownerId || undefined,
-      });
+      };
+      const result = record ? await updateExpenseAction(record.id, payload) : await createExpenseAction(payload);
       if (result.ok) onSave(result.data);
       else setError(result.error.message);
     });
@@ -86,7 +88,7 @@ export function ExpenseDialog({ data, initialVehicleId = "", onClose, onSave, on
         <Dialog.Content className="fixed inset-x-0 bottom-0 z-50 max-h-[94vh] overflow-y-auto rounded-t-2xl bg-white p-5 sm:left-1/2 sm:top-1/2 sm:bottom-auto sm:w-[calc(100%-32px)] sm:max-w-2xl sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-2xl">
           <div className="flex justify-between">
             <div>
-              <Dialog.Title className="font-bold">Record expense</Dialog.Title>
+              <Dialog.Title className="font-bold">{record ? "Edit expense" : "Record expense"}</Dialog.Title>
               <Dialog.Description className="mt-1 text-xs text-[#667085]">
                 Saved to the agency ledger with optional customer, vehicle, booking, and owner attribution.
               </Dialog.Description>
@@ -114,10 +116,11 @@ export function ExpenseDialog({ data, initialVehicleId = "", onClose, onSave, on
             <FormCombobox label="Owner allocation (optional)" value={form.ownerId} onValueChange={ownerId => setForm({ ...form, ownerId })} searchPlaceholder="Search owner…" options={[{ label: "Agency expense", value: "" }, ...data.owners.map(item => ({ label: item.label, value: item.id }))]} />
           </div>
           <p className="mt-3 text-xs leading-5 text-[#667085]">Choosing a booking automatically uses its vehicle and customer. The server verifies all links before saving.</p>
+          {record?.status==="approved"&&<p className="mt-3 rounded-lg border border-[#FEDF89] bg-[#FFFAEB] p-3 text-sm text-[#93370D]">Saving a correction reverses this approved expense and creates a new submitted expense for approval. The original remains in the audit trail.</p>}
           {error && <p role="alert" className="mt-3 text-sm text-[#B42318]">{error}</p>}
           <div className="mt-5 flex justify-end gap-2">
             <Button variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button disabled={!valid || pending} onClick={submit}>{pending ? "Submitting…" : "Submit expense"}</Button>
+            <Button disabled={!valid || pending} onClick={submit}>{pending ? "Saving…" : record?.status==="approved" ? "Save correction" : record ? "Save changes" : "Submit expense"}</Button>
           </div>
         </Dialog.Content>
       </Dialog.Portal>

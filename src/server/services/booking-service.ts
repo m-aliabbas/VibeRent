@@ -181,8 +181,8 @@ export function getBooking(context: RequestContext, id: string) {
   `).all(context.agencyId, id) as BookingTransactionDto[];
   const sourcePayouts=sqlite.prepare(`SELECT id,amount,method,reference,status,paid_at AS paidAt FROM source_payouts WHERE agency_id=? AND booking_id=? ORDER BY paid_at DESC,created_at DESC`)
     .all(context.agencyId,id) as SourcePayoutDto[];
-  const guarantor=renter?.guarantorName&&renter.guarantorParentage&&renter.guarantorCnic&&renter.guarantorPhone&&renter.guarantorAddress&&renter.guarantorCarAmount?{
-    name:renter.guarantorName,parentage:renter.guarantorParentage,cnic:renter.guarantorCnic,phone:renter.guarantorPhone,address:renter.guarantorAddress,carAmount:renter.guarantorCarAmount,
+  const guarantor=renter?.guarantorName&&renter.guarantorParentage&&renter.guarantorPhone&&renter.guarantorAddress&&renter.guarantorCarAmount?{
+    name:renter.guarantorName,parentage:renter.guarantorParentage,cnic:renter.guarantorCnic??"",phone:renter.guarantorPhone,address:renter.guarantorAddress,carAmount:renter.guarantorCarAmount,
   }:undefined;
   return { ...booking, customerCnic:renter?.customerCnic, customerPhone:renter?.customerPhone, guarantor, inspections, transactions, sourcePayouts };
 }

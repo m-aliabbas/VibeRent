@@ -10,6 +10,7 @@ import { expenseStatuses } from "@/server/validation/expense";
 import { listExpenseCategories } from "@/server/services/catalog-service";
 
 export type ExpenseDto = { id:string; amount:number; category:string; description:string; status:ExpenseStatus; occurredOn:string; version:number; createdAt:string; updatedAt:string; vehicleId:string|null; plate:string|null; bookingId:string|null; customerId:string|null; customer:string|null; ownerId:string|null; owner:string|null; receipt:boolean };
+export type ExpenseSaveResult = ExpenseDto & {replacesExpenseId?:string};
 export type ExpenseOption = { id:string; label:string };
 export type ExpenseBookingOption = ExpenseOption & { vehicleId:string|null; customerId:string };
 export type ExpenseWorkspaceData = { expenses:ExpenseDto[]; vehicles:ExpenseOption[]; bookings:ExpenseBookingOption[]; customers:ExpenseOption[]; owners:ExpenseOption[]; categories:ExpenseOption[] };
@@ -55,6 +56,47 @@ export function createExpense(context: RequestContext, rawInput: unknown) {
     sqlite.prepare(`INSERT INTO expenses (id,agency_id,vehicle_id,booking_id,customer_id,owner_id,amount,category,description,status,occurred_on,version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,'submitted',?,1,?,?)`).run(id, context.agencyId, vehicleId ?? null, input.bookingId ?? null, customerId ?? null, input.ownerId ?? null, input.amount, category.name, input.description, input.occurredOn, now, now);
     sqlite.prepare(`INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)`).run(randomUUID(), context.agencyId, context.userId, "expense.submitted", "expense", id, JSON.stringify({ amount: input.amount, category: category.name, vehicleId, customerId, bookingId: input.bookingId }), now);
     const row=sqlite.prepare(`${selectExpense} WHERE e.agency_id=? AND e.id=?`).get(context.agencyId, id) as ExpenseDto&{receipt:number|boolean};return {...row,receipt:Boolean(row.receipt)};
+  })();
+}
+
+export function updateExpense(context: RequestContext, id: string, rawInput: unknown): ExpenseSaveResult {
+  requireRole(context, ["agency_owner", "fleet_manager", "accountant"]);
+  const input = parseCreateExpenseInput(rawInput);
+  return sqlite.transaction(() => {
+    const current = sqlite.prepare("SELECT status FROM expenses WHERE agency_id=? AND id=?").get(context.agencyId, id) as {status:ExpenseStatus}|undefined;
+    if (!current) throw new DomainError("NOT_FOUND", "Expense not found.", 404);
+    if (current.status === "reversed") throw new DomainError("INVALID_STATUS_TRANSITION", "A reversed expense cannot be edited.", 409);
+    let vehicleId = input.vehicleId, customerId = input.customerId;
+    if (input.bookingId) {
+      const booking = sqlite.prepare("SELECT vehicle_id AS vehicleId,customer_id AS customerId FROM bookings WHERE agency_id=? AND id=? LIMIT 1").get(context.agencyId,input.bookingId) as {vehicleId:string|null;customerId:string}|undefined;
+      if (!booking) throw new DomainError("VALIDATION_FAILED", "The selected booking does not exist.", 400);
+      if (vehicleId && vehicleId !== booking.vehicleId || customerId && customerId !== booking.customerId) throw new DomainError("VALIDATION_FAILED", "Vehicle or customer does not match the selected booking.", 400);
+      vehicleId = booking.vehicleId ?? undefined; customerId = booking.customerId;
+    }
+    assertScopedReference(context.agencyId, "vehicles", vehicleId);
+    assertScopedReference(context.agencyId, "customers", customerId);
+    assertScopedReference(context.agencyId, "owners", input.ownerId);
+    const category = sqlite.prepare("SELECT name FROM expense_categories WHERE agency_id=? AND active=1 AND lower(name)=lower(?) LIMIT 1").get(context.agencyId,input.category) as {name:string}|undefined;
+    if (!category) throw new DomainError("VALIDATION_FAILED", "Choose an active expense category.", 400);
+    const now = new Date().toISOString();
+    if(current.status==="approved"){
+      const replacementId=`EXP-${randomUUID().slice(0,8).toUpperCase()}`;
+      sqlite.prepare("UPDATE expenses SET status='reversed',version=version+1,updated_at=? WHERE agency_id=? AND id=?").run(now,context.agencyId,id);
+      sqlite.prepare("INSERT INTO expenses (id,agency_id,vehicle_id,booking_id,customer_id,owner_id,amount,category,description,status,occurred_on,version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,'submitted',?,1,?,?)")
+        .run(replacementId,context.agencyId,vehicleId??null,input.bookingId??null,customerId??null,input.ownerId??null,input.amount,category.name,input.description,input.occurredOn,now,now);
+      sqlite.prepare("INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)")
+        .run(randomUUID(),context.agencyId,context.userId,"expense.corrected","expense",id,JSON.stringify({replacementId}),now);
+      sqlite.prepare("INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)")
+        .run(randomUUID(),context.agencyId,context.userId,"expense.submitted","expense",replacementId,JSON.stringify({corrects:id}),now);
+      const replacement=sqlite.prepare(`${selectExpense} WHERE e.agency_id=? AND e.id=?`).get(context.agencyId,replacementId) as ExpenseDto&{receipt:number|boolean};
+      return {...replacement,receipt:Boolean(replacement.receipt),replacesExpenseId:id};
+    }
+    sqlite.prepare("UPDATE expenses SET vehicle_id=?,booking_id=?,customer_id=?,owner_id=?,amount=?,category=?,description=?,occurred_on=?,version=version+1,updated_at=? WHERE agency_id=? AND id=?")
+      .run(vehicleId??null,input.bookingId??null,customerId??null,input.ownerId??null,input.amount,category.name,input.description,input.occurredOn,now,context.agencyId,id);
+    sqlite.prepare("INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)")
+      .run(randomUUID(),context.agencyId,context.userId,"expense.updated","expense",id,JSON.stringify({status:current.status,amount:input.amount}),now);
+    const row=sqlite.prepare(`${selectExpense} WHERE e.agency_id=? AND e.id=?`).get(context.agencyId,id) as ExpenseDto&{receipt:number|boolean};
+    return {...row,receipt:Boolean(row.receipt)};
   })();
 }
 

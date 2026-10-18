@@ -63,7 +63,7 @@ function parseGuarantor(value: unknown, errors: Record<string, string>): Guarant
   const address = input.address?.trim() ?? "";
   if (!name) errors["guarantor.name"] = "Enter the guarantor name.";
   if (!parentage) errors["guarantor.parentage"] = "Enter the guarantor parentage.";
-  if (!/^\d{13}$/.test(cnic)) errors["guarantor.cnic"] = "Enter a valid 13-digit CNIC.";
+  if (cnic && !/^\d{13}$/.test(cnic)) errors["guarantor.cnic"] = "Enter a valid 13-digit CNIC, or leave it blank.";
   if (!/^(?:92|0)?3\d{9}$/.test(phone)) errors["guarantor.phone"] = "Enter a valid Pakistani mobile number.";
   if (!address) errors["guarantor.address"] = "Enter the guarantor address.";
   if (!Number.isInteger(input.carAmount) || (input.carAmount ?? 0) <= 0) errors["guarantor.carAmount"] = "Enter a positive whole PKR amount.";
