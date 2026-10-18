@@ -7,6 +7,7 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import * as tar from "tar";
 import { queryAll, queryOne } from "@/db/query";
+import { getDatabaseTarget } from "@/db/database-target";
 import { requireRole } from "@/server/auth/authorize";
 import type { RequestContext } from "@/server/context/request-context";
 import { DomainError } from "@/server/domain/errors";
@@ -15,12 +16,18 @@ const maxArchiveBytes = 100 * 1024 * 1024;
 const maxExpandedBytes = 500 * 1024 * 1024;
 const maxEntries = 10_000;
 
-const operationalTables = [
+export const operationalTables = [
   "branches", "agency_cities", "owners", "customers", "drivers", "expense_categories",
   "vehicles", "management_agreements", "vehicle_rate_rules", "booking_number_counters",
   "payment_receipt_counters", "booking_drafts", "bookings", "availability_blocks",
   "rental_inspections", "expenses", "financial_transactions", "owner_payouts",
   "source_payouts", "private_files", "whatsapp_settings", "audit_events", "users",
+] as const;
+
+export const migrationBusinessTables = [
+  "owners", "customers", "drivers", "vehicles", "management_agreements", "vehicle_rate_rules",
+  "booking_drafts", "bookings", "availability_blocks", "rental_inspections", "expenses",
+  "financial_transactions", "owner_payouts", "source_payouts", "private_files",
 ] as const;
 
 const collisionKeys = [
@@ -44,7 +51,7 @@ function invalid(message: string): never {
   throw new DomainError("VALIDATION_FAILED", message, 400);
 }
 
-function safeStorageKey(key: string, agencyId: string) {
+export function safeStorageKey(key: string, agencyId: string) {
   return key.startsWith(`${agencyId}/`)
     && key.split("/").every(segment => segment !== "" && segment !== "." && segment !== "..");
 }
@@ -129,13 +136,17 @@ export async function previewDesktopMigration(context: RequestContext, file: Fil
         const row = await queryOne<{ count: number | string }>(`SELECT count(*) AS count FROM ${table} WHERE agency_id=?`, [context.agencyId]);
         targetCounts[table] = Number(row?.count ?? 0);
       }
+      const targetHasBusinessData = migrationBusinessTables.some(table => targetCounts[table] > 0);
       return {
         valid: true,
         sourceAgencies: source,
         targetAgencyId: context.agencyId,
         targetCounts,
-        importAvailable: false,
-        message: "Preview only. Windows archives contain multiple agencies and private files. Existing web records require a reviewed merge before any data can be imported.",
+        targetHasBusinessData,
+        fileStorageReady: getDatabaseTarget() !== "postgres" || Boolean(process.env.PRIVATE_FILE_STORAGE_ROOT?.trim()),
+        message: targetHasBusinessData
+          ? "This web agency already has business data. Import is disabled until those records can be merged safely."
+          : "Select one source agency to import. The current web login and organization stay in place; source staff are retained as historical records and need invitations for web access.",
       };
     } finally {
       database.close();

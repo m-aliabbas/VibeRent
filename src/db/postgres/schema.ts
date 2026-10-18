@@ -166,3 +166,13 @@ export const sourcePayouts = pgTable("source_payouts", {
   id:text("id").primaryKey(), agencyId:text("agency_id").notNull().references(()=>agencies.id), bookingId:text("booking_id").notNull().references(()=>bookings.id), supplierName:text("supplier_name").notNull(), amount:integer("amount").notNull(), method:text("method").notNull(), reference:text("reference").notNull(), idempotencyKey:text("idempotency_key").notNull(), status:text("status").notNull().default("posted"), paidAt:text("paid_at").notNull(), actorId:text("actor_id").notNull().references(()=>users.id), ...timestamps,
 }, t => [uniqueIndex("source_payouts_agency_idempotency_uq").on(t.agencyId,t.idempotencyKey), index("source_payouts_booking_idx").on(t.agencyId,t.bookingId,t.paidAt)]);
 
+export const legacyImportRecords = pgTable("legacy_import_records", {
+  id: text("id").primaryKey(),
+  agencyId: text("agency_id").notNull().references(() => agencies.id),
+  sourceAgencyId: text("source_agency_id").notNull(),
+  sourceTable: text("source_table").notNull(),
+  sourceId: text("source_id").notNull(),
+  rowJson: text("row_json").notNull(),
+  importedAt: text("imported_at").notNull(),
+}, t => [uniqueIndex("legacy_import_records_source_uq").on(t.agencyId,t.sourceAgencyId,t.sourceTable,t.sourceId)]);
+

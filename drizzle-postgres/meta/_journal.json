@@ -15,6 +15,13 @@
       "when": 1792250933012,
       "tag": "0001_chunky_nightcrawler",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792314443207,
+      "tag": "0002_lively_venom",
+      "breakpoints": true
     }
   ]
 }
