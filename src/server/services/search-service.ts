@@ -5,16 +5,17 @@ import { listBookings } from "@/server/services/booking-service";
 import { listCustomers } from "@/server/services/customer-service";
 import { listOwners } from "@/server/services/owner-service";
 import { listVehicles } from "@/server/services/vehicle-service";
+import { listExpenses } from "@/server/services/expense-service";
 
 export type GlobalSearchResult = {
   id: string;
-  kind: "vehicle" | "booking" | "customer" | "owner";
+  kind: "vehicle" | "booking" | "customer" | "owner" | "expense";
   label: string;
   detail: string;
   href: string;
 };
 
-export type GlobalSearchScope = "all" | "pages" | "vehicle" | "booking" | "customer" | "owner";
+export type GlobalSearchScope = "all" | "pages" | "vehicle" | "booking" | "customer" | "owner" | "expense";
 
 export async function searchAgencyRecords(context: RequestContext, rawQuery: string, scope: GlobalSearchScope = "all"): Promise<GlobalSearchResult[]> {
   const query = rawQuery.trim().toLocaleLowerCase("en");
@@ -67,5 +68,10 @@ export async function searchAgencyRecords(context: RequestContext, rawQuery: str
       href: `/owners/${owner.id}`,
     })) : [];
 
-  return [...vehicles, ...bookings, ...customers, ...owners].slice(0, 12);
+  const expenses: GlobalSearchResult[] = scope === "all" || scope === "expense" ? (await listExpenses(context))
+    .filter(expense=>matches([expense.id,expense.description,expense.category,expense.plate,expense.customer,expense.owner,expense.bookingId,expense.status]))
+    .slice(0,resultLimit)
+    .map(expense=>({id:expense.id,kind:"expense",label:expense.description,detail:`${expense.id} · ${expense.category} · ${expense.status}`,href:`/expenses?q=${encodeURIComponent(expense.id)}`})) : [];
+
+  return [...vehicles, ...bookings, ...customers, ...owners, ...expenses].slice(0, 12);
 }

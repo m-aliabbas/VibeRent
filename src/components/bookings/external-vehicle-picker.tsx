@@ -1,0 +1,26 @@
+"use client";
+import { useEffect, useState } from "react";
+import { Pencil, Plus, Search, Trash2 } from "lucide-react";
+import { archiveExternalVehicleAction, listExternalVehiclesAction, saveExternalVehicleAction } from "@/app/actions/external-vehicles";
+import { ConfirmDialog } from "@/components/shared/confirm-dialog";
+import { Button } from "@/components/ui/button";
+import type { ExternalVehicleDto } from "@/server/services/external-vehicle-service";
+
+type CarFields={supplierName:string;supplierPhone:string;vehicleMake:string;vehicleModel:string;vehicleYear:number;vehiclePlate:string;vehicleColor:string};
+export function ExternalVehiclePicker({value,onSelect}:{value:CarFields;onSelect:(car:ExternalVehicleDto)=>void}){
+  const [items,setItems]=useState<ExternalVehicleDto[]>([]),[search,setSearch]=useState(""),[editingId,setEditingId]=useState(""),[deleting,setDeleting]=useState<ExternalVehicleDto>();
+  const [loading,setLoading]=useState(true),[pending,setPending]=useState(false),[notice,setNotice]=useState("");
+  useEffect(()=>{let active=true;void listExternalVehiclesAction().then(result=>{if(!active)return;if(result.ok)setItems(result.data);else setNotice(result.error.message);setLoading(false)});return()=>{active=false}},[]);
+  const term=search.trim().toLocaleLowerCase("en");
+  const rows=items.filter(item=>`${item.supplierName} ${item.supplierPhone} ${item.make} ${item.model} ${item.year} ${item.plate}`.toLocaleLowerCase("en").includes(term));
+  async function save(){setPending(true);setNotice("");const result=await saveExternalVehicleAction({id:editingId||undefined,supplierName:value.supplierName,supplierPhone:value.supplierPhone,make:value.vehicleMake,model:value.vehicleModel,year:value.vehicleYear,plate:value.vehiclePlate,color:value.vehicleColor});setPending(false);if(!result.ok){setNotice(result.error.message);return}setItems(current=>[result.data,...current.filter(item=>item.id!==result.data.id)]);setEditingId("");setNotice(`${result.data.make} ${result.data.model} saved to source cars.`)}
+  async function remove(){if(!deleting)return;setPending(true);const result=await archiveExternalVehicleAction(deleting.id);setPending(false);if(!result.ok){setNotice(result.error.message);return}setItems(current=>current.filter(item=>item.id!==deleting.id));if(editingId===deleting.id)setEditingId("");setNotice(`${deleting.make} ${deleting.model} removed from source car search. Existing bookings keep their details.`);setDeleting(undefined)}
+  return <div className="rounded-xl border border-[#D0D5DD] bg-white p-4">
+    <div className="flex flex-wrap items-start justify-between gap-2"><div><h3 className="text-sm font-bold">Saved source cars</h3><p className="mt-1 text-xs text-[#667085]">Select a supplier car or enter a new one below. Saved cars stay outside your fleet availability calendar.</p></div><span className="text-xs text-[#667085]">{items.length} saved</span></div>
+    <label className="relative mt-3 block"><span className="sr-only">Search source cars</span><Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#667085]"/><input type="search" value={search} onChange={event=>setSearch(event.target.value)} placeholder="Search supplier, make, model or plate" className="h-10 w-full rounded-lg border border-[#D0D5DD] pl-9 pr-3 text-sm outline-none focus:border-[#006FE6]"/></label>
+    <div className="mt-3 max-h-56 space-y-2 overflow-y-auto">{loading?<p className="text-xs text-[#667085]">Loading source cars…</p>:rows.length?rows.map(item=><div key={item.id} className="flex flex-wrap items-center gap-2 rounded-lg border border-[#EAECF0] p-3"><div className="min-w-0 flex-1"><p className="text-sm font-semibold">{item.make} {item.model} {item.year} · {item.plate}</p><p className="text-xs text-[#667085]">{item.supplierName} · {item.supplierPhone}</p></div><Button type="button" size="sm" variant="secondary" onClick={()=>{onSelect(item);setEditingId("")}}>Use</Button><Button type="button" size="sm" variant="ghost" aria-label={`Edit ${item.plate}`} onClick={()=>{onSelect(item);setEditingId(item.id)}}><Pencil size={15}/></Button><Button type="button" size="sm" variant="ghost" aria-label={`Delete ${item.plate}`} onClick={()=>setDeleting(item)}><Trash2 size={15}/></Button></div>):<p className="text-xs text-[#667085]">{items.length?"No source cars match this search.":"No source cars saved yet. Enter details below and save the car for reuse."}</p>}</div>
+    <div className="mt-3 flex flex-wrap items-center gap-2"><Button type="button" size="sm" variant="secondary" disabled={pending} onClick={()=>void save()}><Plus size={15}/>{pending?"Saving…":editingId?"Save car changes":"Save current car for reuse"}</Button>{editingId&&<Button type="button" size="sm" variant="ghost" onClick={()=>setEditingId("")}>Cancel edit</Button>}</div>
+    {notice&&<p role="status" className="mt-2 text-xs text-[#B42318]">{notice}</p>}
+    <ConfirmDialog open={Boolean(deleting)} onOpenChange={next=>!next&&setDeleting(undefined)} title={`Remove ${deleting?.plate??"source car"}?`} description="This car will leave source search. Existing bookings keep their saved vehicle and supplier details." onConfirm={()=>void remove()} pending={pending} confirmLabel="Remove car" pendingLabel="Removing…"/>
+  </div>
+}

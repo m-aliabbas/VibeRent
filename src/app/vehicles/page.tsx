@@ -321,7 +321,7 @@ export default function VehiclesPage() {
       className: "w-12",
       cell: (v) => (
         <div className="flex items-center justify-end gap-1">
-          {v.status!=="Archived"&&<Button size="sm" variant="danger" onClick={event=>{event.stopPropagation();setRemoving(v)}}><Trash2 size={15}/>Delete</Button>}
+          {v.status!=="Archived"?<Button size="sm" variant="danger" onClick={event=>{event.stopPropagation();setRemoving(v)}}><Trash2 size={15}/>Delete</Button>:<Button asChild size="sm" variant="danger"><Link href={`/archive?q=${encodeURIComponent(v.plate)}`} onClick={event=>event.stopPropagation()}><Trash2 size={15}/>Delete permanently</Link></Button>}
           <ActionMenu
             onView={() => router.push(`/vehicles/${v.id}`)}
             onEdit={() => {
@@ -557,7 +557,7 @@ export default function VehiclesPage() {
                   onDelete={() => setRemoving(v)}
                   archived={v.status === "Archived"}
                 />
-                {v.status!=="Archived"&&<Button size="sm" variant="danger" onClick={()=>setRemoving(v)}><Trash2 size={15}/>Delete</Button>}
+                {v.status!=="Archived"?<Button size="sm" variant="danger" onClick={()=>setRemoving(v)}><Trash2 size={15}/>Delete</Button>:<Button asChild size="sm" variant="danger"><Link href={`/archive?q=${encodeURIComponent(v.plate)}`}><Trash2 size={15}/>Delete permanently</Link></Button>}
               </div>
               <div className="mt-4 flex items-center justify-between border-t border-[#EAECF0] pt-3">
                 <div className="flex gap-2">

@@ -11,7 +11,7 @@ const nextConfig: NextConfig = {
   images: { unoptimized: true },
   experimental: {
     serverActions: {
-      bodySizeLimit: "11mb",
+      bodySizeLimit: "22mb",
     },
   },
   outputFileTracingIncludes: {

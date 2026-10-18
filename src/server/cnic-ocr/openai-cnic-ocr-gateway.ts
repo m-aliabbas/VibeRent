@@ -82,7 +82,7 @@ export class OpenAiCnicOcrGateway implements CnicOcrGateway {
           schema: CNIC_OCR_SCHEMA,
         },
       },
-      max_output_tokens: 300,
+      max_output_tokens: 1000,
     });
 
     return response.output_text;

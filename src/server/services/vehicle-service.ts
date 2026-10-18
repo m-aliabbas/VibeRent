@@ -185,6 +185,7 @@ export async function setVehicleArchived(context:RequestContext,id:string,archiv
   return inTransaction(async()=>{
     const vehicle=await queryOne<{id:string;status:string}>("SELECT id,status FROM vehicles WHERE agency_id=? AND id=? LIMIT 1",[context.agencyId,id]);
     if(!vehicle) throw new DomainError("NOT_FOUND","Vehicle not found.",404);
+    if(archived){const blocking=await queryOne("SELECT id FROM bookings WHERE agency_id=? AND vehicle_id=? AND archived_at IS NULL AND status IN ('confirmed','checked_out') LIMIT 1",[context.agencyId,id]);if(blocking)throw new DomainError("INVALID_STATUS_TRANSITION","Cancel, complete, or reassign the active booking before archiving this vehicle.",409)}
     const activeBooking=!archived && await queryOne("SELECT id FROM bookings WHERE agency_id=? AND vehicle_id=? AND archived_at IS NULL AND status IN ('confirmed','checked_out') LIMIT 1",[context.agencyId,id]);
     const now=new Date().toISOString();
     await execute("UPDATE vehicles SET status=?,archived_at=?,version=version+1,updated_at=? WHERE agency_id=? AND id=?",[archived?"archived":activeBooking?"booked":"available",archived?now:null,now,context.agencyId,id]);

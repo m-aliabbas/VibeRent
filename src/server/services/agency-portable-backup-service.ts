@@ -24,6 +24,8 @@ const tables: TableSpec[] = [
   { name: "owners", tenantColumn: "agency_id", conflictKey: "id" },
   { name: "customers", tenantColumn: "agency_id", conflictKey: "id" },
   { name: "drivers", tenantColumn: "agency_id", conflictKey: "id" },
+  { name: "guarantors", tenantColumn: "agency_id", conflictKey: "id" },
+  { name: "external_vehicles", tenantColumn: "agency_id", conflictKey: "id" },
   { name: "expense_categories", tenantColumn: "agency_id", conflictKey: "id" },
   { name: "vehicles", tenantColumn: "agency_id", conflictKey: "id" },
   { name: "management_agreements", tenantColumn: "agency_id", conflictKey: "id" },

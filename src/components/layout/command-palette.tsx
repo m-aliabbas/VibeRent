@@ -31,13 +31,14 @@ const pages = [
   ["CNIC OCR", "Extract identity fields from a CNIC image", "/cnic-ocr", ScanText],
 ] as const;
 const pageEntries = pages.map(([label, detail, href, icon]) => ({ label, detail, href, icon }));
-const recordIcons = { vehicle: CarFront, booking: CalendarDays, customer: UsersRound, owner: HandCoins } as const;
+const recordIcons = { vehicle: CarFront, booking: CalendarDays, customer: UsersRound, owner: HandCoins, expense: FileText } as const;
 const searchScopes: Array<{ value: GlobalSearchScope; label: string; icon: LucideIcon; hint: string; placeholder: string }> = [
   { value: "all", label: "All", icon: Search, hint: "Search every page and agency record.", placeholder: "Search VibeRent…" },
   { value: "booking", label: "Bookings", icon: CalendarDays, hint: "Try a booking number, customer, vehicle, or status.", placeholder: "Search booking number, customer or vehicle…" },
   { value: "vehicle", label: "Vehicles", icon: CarFront, hint: "Try a plate number, make, model, city, or status.", placeholder: "Search plate, make, model or city…" },
   { value: "customer", label: "Customers", icon: UsersRound, hint: "Try a customer name, phone number, or status.", placeholder: "Search customer name or phone…" },
   { value: "owner", label: "Owners", icon: HandCoins, hint: "Try an owner name, phone number, agreement, or balance status.", placeholder: "Search owner name, phone or agreement…" },
+  { value: "expense", label: "Expenses", icon: FileText, hint: "Try an expense description, category, amount, vehicle, or customer.", placeholder: "Search expenses…" },
   { value: "pages", label: "Pages", icon: FileText, hint: "Jump directly to a VibeRent module.", placeholder: "Search dashboard pages and modules…" },
 ];
 

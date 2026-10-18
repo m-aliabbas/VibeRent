@@ -22,6 +22,20 @@
       "when": 1792314443207,
       "tag": "0002_lively_venom",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1792316454339,
+      "tag": "0003_nervous_karnak",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792316736672,
+      "tag": "0004_cuddly_true_believers",
+      "breakpoints": true
     }
   ]
 }

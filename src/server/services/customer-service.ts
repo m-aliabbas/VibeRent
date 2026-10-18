@@ -36,7 +36,7 @@ const customerListSelect = `
       ), 0)))
       FROM bookings bk
       WHERE bk.agency_id=c.agency_id AND bk.customer_id=c.id AND bk.archived_at IS NULL
-        AND bk.status NOT IN ('cancelled','no_show')
+        AND bk.status NOT IN ('cancelled','no_show','draft')
     ), 0) AS outstanding
   FROM customers c`;
 

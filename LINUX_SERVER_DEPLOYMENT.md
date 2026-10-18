@@ -332,3 +332,9 @@ docker volume ls --filter name=viberent
 - Backups are encrypted and copied off-server
 - A restore has been tested outside production
 - Monitoring alerts on container health, disk capacity, and failed backups
+
+## Agency owner Google Drive backups
+
+The hosted web Settings page includes a **Cloud backup** tab for agency owners. To enable Google Drive upload, create a Google OAuth **web** client, enable the Google Drive API, and add `https://YOUR_HOST/api/v1/agency-backup/google-drive/callback` as an authorized redirect URI. Set `GOOGLE_DRIVE_WEB_CLIENT_ID` and `GOOGLE_DRIVE_WEB_CLIENT_SECRET` in the private `.env.docker` file, then restart the web service. The OAuth scope is `drive.file`; each owner authorizes their own Google account. The refresh token is encrypted in the application database using `BETTER_AUTH_SECRET`, so keep that secret stable and backed up. Owners can always download a portable backup without Google configuration.
+
+The portable backup contains agency records, including guarantors and saved external vehicles. It excludes uploaded document bytes, authentication credentials, and WhatsApp state. Back up the private file volume separately for complete recovery. Set `OPENAI_API_KEY` in the same private environment file to enable hosted CNIC OCR; encrypted desktop credentials are intentionally excluded from the Docker image.

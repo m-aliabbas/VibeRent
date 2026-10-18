@@ -10,6 +10,7 @@ import { expenseStatuses } from "@/server/validation/expense";
 import { listExpenseCategories } from "@/server/services/catalog-service";
 
 export type ExpenseDto = { id:string; amount:number; category:string; description:string; status:ExpenseStatus; occurredOn:string; version:number; createdAt:string; updatedAt:string; vehicleId:string|null; plate:string|null; bookingId:string|null; customerId:string|null; customer:string|null; ownerId:string|null; owner:string|null; receipt:boolean };
+export type ExpenseSaveResult = ExpenseDto & {replacesExpenseId?:string};
 export type ExpenseOption = { id:string; label:string };
 export type ExpenseBookingOption = ExpenseOption & { vehicleId:string|null; customerId:string };
 export type ExpenseWorkspaceData = { expenses:ExpenseDto[]; vehicles:ExpenseOption[]; bookings:ExpenseBookingOption[]; customers:ExpenseOption[]; owners:ExpenseOption[]; categories:ExpenseOption[] };
@@ -59,6 +60,40 @@ export async function createExpense(context: RequestContext, rawInput: unknown) 
     await execute(`INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)`,[randomUUID(), context.agencyId, context.userId, "expense.submitted", "expense", id, JSON.stringify({ amount: input.amount, category: category.name, vehicleId, customerId, bookingId: input.bookingId }), now]);
     const row=(await queryOne<ExpenseDto&{receipt:number|boolean}>(`${selectExpense} WHERE e.agency_id=? AND e.id=?`,[context.agencyId, id]))!;return {...row,receipt:Boolean(row.receipt)};
   });
+}
+
+export async function updateExpense(context: RequestContext, id: string, rawInput: unknown): Promise<ExpenseSaveResult> {
+  requireRole(context, ["agency_owner", "fleet_manager", "accountant"]);
+  const input = parseCreateExpenseInput(rawInput);
+  return inTransaction(async () => {
+    const current = await queryOne<{status:ExpenseStatus}>("SELECT status FROM expenses WHERE agency_id=? AND id=?", [context.agencyId, id]);
+    if (!current) throw new DomainError("NOT_FOUND", "Expense not found.", 404);
+    if (current.status === "reversed") throw new DomainError("INVALID_STATUS_TRANSITION", "A reversed expense cannot be edited.", 409);
+    let vehicleId = input.vehicleId, customerId = input.customerId;
+    if (input.bookingId) {
+      const booking = await queryOne<{vehicleId:string|null;customerId:string}>("SELECT vehicle_id AS vehicleId,customer_id AS customerId FROM bookings WHERE agency_id=? AND id=? LIMIT 1", [context.agencyId,input.bookingId]);
+      if (!booking) throw new DomainError("VALIDATION_FAILED", "The selected booking does not exist.", 400);
+      if ((vehicleId && vehicleId !== booking.vehicleId) || (customerId && customerId !== booking.customerId)) throw new DomainError("VALIDATION_FAILED", "Vehicle or customer does not match the selected booking.", 400);
+      vehicleId = booking.vehicleId ?? undefined; customerId = booking.customerId;
+    }
+    await assertScopedReference(context.agencyId, "vehicles", vehicleId);
+    await assertScopedReference(context.agencyId, "customers", customerId);
+    await assertScopedReference(context.agencyId, "owners", input.ownerId);
+    const category = await queryOne<{name:string}>("SELECT name FROM expense_categories WHERE agency_id=? AND active=1 AND lower(name)=lower(?) LIMIT 1", [context.agencyId,input.category]);
+    if (!category) throw new DomainError("VALIDATION_FAILED", "Choose an active expense category.", 400);
+    const now = new Date().toISOString();
+    let savedId = id;
+    if (current.status === "approved") {
+      savedId = `EXP-${randomUUID().slice(0,8).toUpperCase()}`;
+      await execute("UPDATE expenses SET status='reversed',version=version+1,updated_at=? WHERE agency_id=? AND id=?", [now,context.agencyId,id]);
+      await execute("INSERT INTO expenses (id,agency_id,vehicle_id,booking_id,customer_id,owner_id,amount,category,description,status,occurred_on,version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,'submitted',?,1,?,?)", [savedId,context.agencyId,vehicleId??null,input.bookingId??null,customerId??null,input.ownerId??null,input.amount,category.name,input.description,input.occurredOn,now,now]);
+    } else {
+      await execute("UPDATE expenses SET vehicle_id=?,booking_id=?,customer_id=?,owner_id=?,amount=?,category=?,description=?,occurred_on=?,version=version+1,updated_at=? WHERE agency_id=? AND id=?", [vehicleId??null,input.bookingId??null,customerId??null,input.ownerId??null,input.amount,category.name,input.description,input.occurredOn,now,context.agencyId,id]);
+    }
+    await execute("INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)", [randomUUID(),context.agencyId,context.userId,current.status==="approved"?"expense.corrected":"expense.updated","expense",id,JSON.stringify({replacementId:savedId===id?undefined:savedId,amount:input.amount}),now]);
+    const row = (await queryOne<ExpenseDto&{receipt:number|boolean}>(`${selectExpense} WHERE e.agency_id=? AND e.id=?`, [context.agencyId,savedId]))!;
+    return {...row,receipt:Boolean(row.receipt),...(savedId!==id?{replacesExpenseId:id}:{})};
+  }, {immediate:true});
 }
 
 const transitions: Record<ExpenseStatus, ExpenseStatus[]> = {

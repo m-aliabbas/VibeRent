@@ -7,6 +7,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
   BarChart3,
+  Archive,
   Bell,
   Building2,
   CalendarDays,
@@ -42,6 +43,8 @@ const nav = [
   { label: "Reports", href: "/reports", icon: BarChart3 },
   { label: "Owners", href: "/owners", icon: UserSquare2 },
   { label: "Drivers", href: "/drivers", icon: UserRound },
+  { label: "Guarantors", href: "/guarantors", icon: UserRound },
+  { label: "Archive", href: "/archive", icon: Archive },
   { label: "WhatsApp", href: "/whatsapp", icon: MessageCircle },
   { label: "CNIC OCR", href: "/cnic-ocr", icon: ScanText },
   { label: "Settings", href: "/settings", icon: Settings },

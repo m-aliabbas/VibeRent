@@ -28,7 +28,7 @@ export type ReportPeriod = {
   ledger: { entries: LedgerEntry[]; summary: LedgerSummary };
   collections: { booked: number; collected: number; outstanding: number; overdue: number; channels: Array<{ name: string; count: number; collected: number }> };
   expenses: { approved: number; ownerResponsibility: number; receiptExceptions: number; categories: Array<{ name: string; amount: number }> };
-  owners: { managedRevenue: number; ownerShare: number; paid: number; payable: number; vehicleCount: number; rows: Array<{ id: string; name: string; revenue: number; share: number; paid: number; payable: number; openingBalance: number }> };
+  owners: { managedRevenue: number; ownerShare: number; paid: number; payable: number; vehicleCount: number; rows: Array<{ id: string; name: string; terms: string; revenue: number; share: number; paid: number; payable: number; openingBalance: number }> };
 };
 export type ReportsData = {
   agencyName: string;
@@ -82,7 +82,7 @@ function totalOwnerShare(rows: Booking[]) {
 
 export async function getReports(context: RequestContext): Promise<ReportsData> {
   requireRole(context, ["agency_owner", "fleet_manager", "accountant"]);
-  const [agencyRow,vehicles,bookings,costs,transactions,payouts,sourcePayouts,blocks,owners] = await Promise.all([
+  const [agencyRow,vehicles,bookings,costs,transactions,payouts,sourcePayouts,blocks,owners,agreementTerms] = await Promise.all([
     queryOne<{name:string}>("SELECT name FROM agencies WHERE id=? LIMIT 1",[context.agencyId]),
     queryAll<Vehicle>(`
     SELECT v.id, v.make || ' ' || v.model || ' - ' || v.plate AS name, v.plate,
@@ -117,6 +117,7 @@ export async function getReports(context: RequestContext): Promise<ReportsData> 
     queryAll<SourcePayout>("SELECT id,booking_id AS bookingId,supplier_name AS supplierName,paid_at AS paidAt,amount,method,reference FROM source_payouts WHERE agency_id=? AND status='posted'",[context.agencyId]),
     queryAll<Block>("SELECT vehicle_id AS vehicleId,start_at AS startAt,end_at AS endAt FROM availability_blocks WHERE agency_id=? AND archived_at IS NULL",[context.agencyId]),
     queryAll<{ id: string; name: string }>("SELECT id,name FROM owners WHERE agency_id=? ORDER BY name",[context.agencyId]),
+    queryAll<{ownerId:string;shareBasis:string;ownerSharePercent:number|null;ownerShareAmount:number|null}>("SELECT a.owner_id AS ownerId,a.share_basis AS shareBasis,a.owner_share_percent AS ownerSharePercent,a.owner_share_amount AS ownerShareAmount FROM management_agreements a WHERE a.agency_id=? AND a.version=(SELECT max(version) FROM management_agreements newer WHERE newer.agency_id=a.agency_id AND newer.owner_id=a.owner_id)",[context.agencyId]),
   ]);
   const agency = agencyRow?.name ?? "VibeRent agency";
 
@@ -252,12 +253,14 @@ export async function getReports(context: RequestContext): Promise<ReportsData> 
     })).sort((a, b) => b.amount - a.amount);
     const ownerRows = owners.map((owner) => {
       const rentals = periodBookings.filter((row) => row.ownerId === owner.id);
+      const agreement=agreementTerms.find(item=>item.ownerId===owner.id);
+      const terms=agreement?(agreement.shareBasis==="percentage"?`${agreement.ownerSharePercent??0}% share`:`${(agreement.ownerShareAmount??0).toLocaleString("en-PK")} PKR fixed monthly`):"No agreement";
       const revenue = rentals.reduce((sum, row) => sum + row.totalAmount, 0);
       const share = totalOwnerShare(rentals);
       const paid = periodPayouts.filter((row) => row.ownerId === owner.id).reduce((sum, row) => sum + row.amount, 0);
       const ownerLedger = buildLedgerEntries(ledgerEntries, { from: fromDate, to: toDate, city: "All cities", ownership: "All ownership", scope: { type: "owner", ownerId: owner.id } });
       const openingBalance = ownerLedger.filter((row) => row.kind === "Opening owner balance").reduce((sum, row) => sum + row.ownerMovement, 0);
-      return { id: owner.id, name: owner.name, revenue, share, paid, openingBalance, payable: openingBalance + share - periodCosts.filter((row) => row.ownerId === owner.id).reduce((sum, row) => sum + row.amount, 0) - paid };
+      return { id: owner.id, name: owner.name, terms, revenue, share, paid, openingBalance, payable: openingBalance + share - periodCosts.filter((row) => row.ownerId === owner.id).reduce((sum, row) => sum + row.amount, 0) - paid };
     }).filter((row) => row.revenue || row.share || row.paid || row.payable || row.openingBalance);
     const periodLedgerEntries = buildLedgerEntries(ledgerEntries, { from: fromDate, to: toDate, city: "All cities", ownership: "All ownership", scope: { type: "overall" } });
     return {

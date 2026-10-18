@@ -72,7 +72,14 @@ export function CnicOcrWorkspace() {
     const formData = new FormData();
     formData.set("frontImage", files.front);
     formData.set("backImage", files.back);
-    const response = await extractCnicAction(formData);
+    let response;
+    try {
+      response = await extractCnicAction(formData);
+    } catch {
+      setError("The images could not be uploaded. Try smaller files or check the connection.");
+      setPending(false);
+      return;
+    }
     setPending(false);
     if (!response.ok) {
       setError(response.error.message);

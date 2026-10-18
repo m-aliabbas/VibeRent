@@ -25,10 +25,13 @@ export async function saveDriver(context:RequestContext,raw:unknown):Promise<Dri
   if(!licenseNumber)errors.licenseNumber="Driving licence number is required.";
   if(Object.keys(errors).length)throw new DomainError("VALIDATION_FAILED","Review the driver details.",400,errors);
   const now=new Date().toISOString(),id=input.id?.trim()||`drv_${randomUUID()}`;
+  const current=input.id?await queryOne("SELECT id FROM drivers WHERE agency_id=? AND id=? AND archived_at IS NULL",[context.agencyId,id]):null;
+  if(input.id&&!current)throw new DomainError("NOT_FOUND","Driver not found.",404);
   const duplicate=await queryOne(`SELECT id FROM drivers WHERE agency_id=? AND cnic_normalized=? AND id<>?`,[context.agencyId,cnic,id]);
   if(duplicate)throw new DomainError("VALIDATION_FAILED","A driver with this CNIC already exists.",409,{cnic:"CNIC must be unique."});
   await inTransaction(async()=>{
-    await execute(`INSERT INTO drivers (id,agency_id,name,phone_normalized,cnic_normalized,address,license_number,license_expires_at,status,version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,1,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,phone_normalized=excluded.phone_normalized,cnic_normalized=excluded.cnic_normalized,address=excluded.address,license_number=excluded.license_number,license_expires_at=excluded.license_expires_at,status=excluded.status,version=drivers.version+1,updated_at=excluded.updated_at`,[id,context.agencyId,name,phone,cnic,address,licenseNumber,input.licenseExpiresAt||null,input.status==="inactive"?"inactive":"active",now,now]);
+    if(current)await execute("UPDATE drivers SET name=?,phone_normalized=?,cnic_normalized=?,address=?,license_number=?,license_expires_at=?,status=?,version=version+1,updated_at=? WHERE agency_id=? AND id=? AND archived_at IS NULL",[name,phone,cnic,address,licenseNumber,input.licenseExpiresAt||null,input.status==="inactive"?"inactive":"active",now,context.agencyId,id]);
+    else await execute("INSERT INTO drivers (id,agency_id,name,phone_normalized,cnic_normalized,address,license_number,license_expires_at,status,version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,1,?,?)",[id,context.agencyId,name,phone,cnic,address,licenseNumber,input.licenseExpiresAt||null,input.status==="inactive"?"inactive":"active",now,now]);
     await execute(`INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)`,[randomUUID(),context.agencyId,context.userId,"driver.saved","driver",id,JSON.stringify({status:input.status??"active"}),now]);
   });
   return (await listDrivers(context)).find(item=>item.id===id)!;
