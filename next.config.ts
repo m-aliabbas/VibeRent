@@ -9,6 +9,14 @@ const nextConfig: NextConfig = {
   // `#standard-fonts/*` imports can no longer be resolved.
   serverExternalPackages: ["@whiskeysockets/baileys", "pdfkit"],
   images: { unoptimized: true },
+  // Next's client reference manifest skips a "use client" module that webpack
+  // scope-hoists into its route's client entry. On the Linux web build this
+  // dropped BookingsWorkspace from /[section], so /bookings failed with
+  // "Could not find the module ... in the React Client Manifest".
+  webpack: (config, { isServer }) => {
+    if (!isServer) config.optimization.concatenateModules = false;
+    return config;
+  },
   experimental: {
     serverActions: {
       bodySizeLimit: "22mb",
