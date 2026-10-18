@@ -12,6 +12,7 @@ import { listOwners } from "@/server/services/owner-service";
 import { getReports } from "@/server/services/report-service";
 import { listDrivers } from "@/server/services/driver-service";
 import { getOrganizationSettings } from "@/server/services/organization-settings-service";
+import { isDesktopRuntime } from "@/server/desktop/runtime-paths";
 
 const sections: Record<string, { title: string; description: string }> = {
   bookings: {
@@ -62,6 +63,9 @@ export default async function SectionPage({
   if (section === "expenses") return <ExpensesWorkspace data={await getExpenseWorkspace(await getWebRequestContext())} />;
   if (section === "reports") return <ReportsWorkspace data={await getReports(await getWebRequestContext())} />;
   if (section === "drivers") return <DriversWorkspace initial={await listDrivers(await getWebRequestContext())} />;
-  if (section === "settings") return <SettingsWorkspace initial={await getOrganizationSettings(await getWebRequestContext())} />;
+  if (section === "settings") {
+    const context = await getWebRequestContext();
+    return <SettingsWorkspace initial={await getOrganizationSettings(context)} desktop={isDesktopRuntime()} canPreviewMigration={context.roles.includes("agency_owner")} />;
+  }
   notFound();
 }

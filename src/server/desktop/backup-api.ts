@@ -4,10 +4,15 @@ import { randomUUID } from "node:crypto";
 import { execute } from "@/db/query";
 import { requireRole } from "@/server/auth/authorize";
 import { getApiRequestContext } from "@/server/auth/session";
+import { isDesktopRuntime } from "@/server/desktop/runtime-paths";
+import { DomainError } from "@/server/domain/errors";
 
 export async function requireBackupAdministrator(request: Request) {
   const context = await getApiRequestContext(request);
   requireRole(context, ["agency_owner"]);
+  if (!isDesktopRuntime()) {
+    throw new DomainError("VALIDATION_FAILED", "Desktop backup and restore are available only in the Windows application. Use the web migration preview for Windows archives.", 400);
+  }
   return context;
 }
 

@@ -22,7 +22,7 @@ npm run db:check:desktop-backup
 
 For hosted web, set `VIBERENT_DATABASE=postgres` and `POSTGRES_URL`, then run `npm run db:migrate:web` and `npm run build:web`. For Windows, run `npm run build:desktop-server`; SQLite uses `SQLITE_DATABASE_PATH` or defaults to `.data/viberent.db` outside the packaged app.
 
-The backend is a Next.js modular monolith: Server Actions and `/api/v1` Route Handlers call the same application services and enforce tenant scope. Vehicle changes and booking confirmations append audit events. Booking confirmation uses a database transaction and half-open intervals (`[pickupAt, returnAt)`). `GET|POST /api/v1/agency-backup` exports and restores one agency as a validated SQLite package; this is separate from PostgreSQL platform backups.
+The backend is a Next.js modular monolith: Server Actions and `/api/v1` Route Handlers call the same application services and enforce tenant scope. Vehicle changes and booking confirmations append audit events. Booking confirmation uses a database transaction and half-open intervals (`[pickupAt, returnAt)`). `GET|POST /api/v1/agency-backup` exports and restores one agency as a validated SQLite package; this is separate from PostgreSQL platform backups. It is not a Windows `.viberent-backup.tgz` importer. On web, Settings → Data migration can validate and inventory a Windows archive without changing data. Existing web agency data must be merged with collision handling and durable private-file storage before a Windows-to-web import can be enabled.
 
 ### Docker Compose web deployment
 
