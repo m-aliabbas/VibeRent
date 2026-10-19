@@ -1,7 +1,7 @@
 import "server-only";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "@better-auth/drizzle-adapter";
-import { organization } from "better-auth/plugins";
+import { bearer, organization } from "better-auth/plugins";
 import { nextCookies } from "better-auth/next-js";
 import { getDatabaseTarget } from "@/db/database-target";
 import { queryOne } from "@/db/query";
@@ -120,6 +120,10 @@ export const auth = betterAuth({
         });
       },
     }),
+    // Native clients (mobile app): turns `Authorization: Bearer <token>` into
+    // the session cookie and returns the token in `set-auth-token`. Only
+    // signed tokens are accepted.
+    bearer({ requireSignature: true }),
     nextCookies(),
   ],
 });

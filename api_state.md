@@ -41,7 +41,7 @@ This file tracks the focused mobile/field-operations contract defined in `Backen
 | Resource | Planned capability | Why pending |
 | --- | --- | --- |
 | Cloud uploads | Authorize upload, finalize metadata, and issue signed downloads | The local desktop pilot keeps private files in the OS application-data directory and includes them in recovery archives. A hosted/mobile deployment still requires private object storage. |
-| Mobile authentication | Short-lived access tokens, refresh rotation, revocation, and device sessions | Web authentication now uses Better Auth secure cookie sessions. A native-token contract remains intentionally separate. |
+| Mobile authentication | Short-lived access tokens, refresh rotation, and reuse detection | Native clients use Better Auth's `bearer()` plugin for the internal pilot: the token is the signed 7-day sliding session token, not a short-lived access token. Revocation (`/api/auth/sign-out`, `/api/auth/revoke-session`) and device sessions (`/api/auth/list-sessions`) are available. Needs a security review, or a move to access + refresh tokens, before an external pilot. |
 | Rate limiting | Login, lookup, mutation, upload, and export limits | Requires the deployment/runtime decision and a shared limiter store. |
 
 ## Later backend phases (not part of the initial field API)
@@ -52,7 +52,7 @@ This file tracks the focused mobile/field-operations contract defined in `Backen
 
 ## Contract conventions
 
-- Authentication: secure Better Auth session cookie for browser clients. Native bearer access remains pending the mobile phase.
+- Authentication: secure Better Auth session cookie for browser clients. Native clients send `Authorization: Bearer <token>` (Better Auth `bearer()` plugin, signed tokens only). The token comes back in the `set-auth-token` response header on sign-in and whenever the session is refreshed; clients overwrite their stored copy. Every `/api/v1` route accepts either form.
 - Success: `{ "data": ..., "meta": { "requestId": "req_..." } }`.
 - Failure: `{ "error": { "code": "...", "message": "...", "fieldErrors": {}, "requestId": "req_..." } }`.
 - Mutation bodies must use `Content-Type: application/json`.

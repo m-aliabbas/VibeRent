@@ -6,6 +6,7 @@ This file records product-development milestones rather than package-level relea
 
 ### Added
 
+- Bearer-token sign-in for the mobile app: Better Auth `bearer()` plugin (signed tokens only). Sign-in and session refresh return `set-auth-token`; `/api/v1` routes accept `Authorization: Bearer`. Browser cookie sessions are unchanged.
 - Communication-template presentation for booking, pickup, return, payment, and owner-statement messages with editable previews and explicit no-delivery boundary.
 - Stakeholder release-readiness workspace and documented five-scenario walkthrough with a structured feedback log.
 - Cross-product accessibility polish for settings tabs and icon-only dialog close controls, plus a recorded frontend QA completion run.
