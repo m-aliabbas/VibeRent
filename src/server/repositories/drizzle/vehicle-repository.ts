@@ -34,13 +34,17 @@ type VehicleRow = {
   expense_responsibility: string | null;
   payout_frequency: string | null;
   archived_at: string | null;
+  last_odometer: number | null;
 };
 
 const selectSql = `
   SELECT v.*, b.city, o.name AS owner_name,
     a.effective_from, a.effective_to, a.share_basis,
     a.owner_share_percent, a.owner_share_amount,
-    a.expense_responsibility, a.payout_frequency
+    a.expense_responsibility, a.payout_frequency,
+    (SELECT ri.odometer FROM rental_inspections ri JOIN bookings bk ON bk.id = ri.booking_id AND bk.agency_id = ri.agency_id
+      WHERE ri.agency_id = v.agency_id AND bk.vehicle_id = v.id AND bk.archived_at IS NULL
+      ORDER BY ri.occurred_at DESC, ri.created_at DESC LIMIT 1) AS last_odometer
   FROM vehicles v
   JOIN branches b ON b.id = v.branch_id AND b.agency_id = v.agency_id
   LEFT JOIN owners o ON o.id = v.owner_id AND o.agency_id = v.agency_id
@@ -96,6 +100,7 @@ function mapVehicle(row: VehicleRow): Vehicle {
     ownerId: row.owner_id ?? undefined,
     owner: row.owner_name ?? undefined,
     agreement: mapAgreement(row),
+    lastOdometer: row.last_odometer ?? undefined,
   };
 }
 

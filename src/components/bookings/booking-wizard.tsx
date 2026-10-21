@@ -53,6 +53,7 @@ type FleetOption = {
   perKmRate: number;
   minimumDays: number;
   withDriverRate:number;
+  lastOdometer?:number;
 };
 type DriverOption={id:string;name:string;phone:string};
 
@@ -222,7 +223,7 @@ export function BookingWizard() {
   // Derived fleet options from live vehicle data
   const fleetOptions: FleetOption[] = vehicles.filter((v) => v.status === "Available").map((v) => {
     const rule=v.rateRules?.find(item=>item.destinationCity.toLowerCase()===draft.city.toLowerCase());
-    return {id:v.id,label:`${v.make} ${v.model} ${v.year}`,plate:v.plate,city:v.city,baseRate:v.dailyRate,rate:draft.rentalMode==="with_driver"?(v.withDriverRate??v.dailyRate):(rule?.dailyRate??v.dailyRate),withDriverRate:v.withDriverRate??v.dailyRate,perKmRate:draft.rentalMode==="with_driver"?0:(rule?.perKmRate??0),minimumDays:rule?.minimumDays??1};
+    return {id:v.id,label:`${v.make} ${v.model} ${v.year}`,plate:v.plate,city:v.city,baseRate:v.dailyRate,rate:draft.rentalMode==="with_driver"?(v.withDriverRate??v.dailyRate):(rule?.dailyRate??v.dailyRate),withDriverRate:v.withDriverRate??v.dailyRate,perKmRate:draft.rentalMode==="with_driver"?0:(rule?.perKmRate??0),minimumDays:rule?.minimumDays??1,lastOdometer:v.lastOdometer};
   });
 
   // Unique cities from loaded vehicles (+ Lahore as default fallback)
@@ -351,7 +352,7 @@ export function BookingWizard() {
         {step === 2 && <CustomerStep draft={draft} setDraft={setDraft} customers={customers} bookingReference={bookingReference} onCustomerCreated={(c) => setCustomers((prev) => [c, ...prev.filter(item=>item.id!==c.id)])} />}
         {step === 3 && <PricingStep draft={draft} setDraft={setDraft} days={days} total={total} />}
         {step === 4 && <Review draft={draft} days={days} total={total} vehicle={vehicle} customers={customers} />}
-        {step === 5 && draft.bookingMode==="rent_now" && <HandoverStep draft={draft} setDraft={setDraft}/>}
+        {step === 5 && draft.bookingMode==="rent_now" && <HandoverStep draft={draft} setDraft={setDraft} lastOdometer={draft.fulfillmentType==="fleet"?vehicle?.lastOdometer:undefined}/>}
       </section>
       {submitError && <p role="alert" className="rounded-lg border border-[#FDA29B] bg-[#FEF3F2] p-3 text-sm text-[#B42318]">{submitError}</p>}
       <div className="flex justify-between">
@@ -476,7 +477,7 @@ function VehicleStep({ draft, setDraft, vehicles, conflictMode, clearConflict }:
             type="button"
             key={item.id}
             disabled={item.conflicts.length > 0}
-            onClick={() => { setDraft({ ...draft, vehicleId: item.id, dailyRate: item.rate }); clearConflict(); }}
+            onClick={() => { setDraft({ ...draft, vehicleId: item.id, dailyRate: item.rate, checkout: { ...draft.checkout, odometer: item.lastOdometer ?? 0 } }); clearConflict(); }}
             className={`rounded-xl border p-4 text-left disabled:cursor-not-allowed disabled:opacity-55 ${draft.vehicleId === item.id ? "border-[#006FE6] bg-[#EFF8FF]" : "border-[#E4E7EC]"}`}
           >
             <strong className="text-sm">{item.label}</strong>
@@ -832,10 +833,10 @@ function Review({ draft, days, total, vehicle, customers }: {
   );
 }
 
-function HandoverStep({draft,setDraft}:{draft:Draft;setDraft:(value:Draft)=>void}){
+function HandoverStep({draft,setDraft,lastOdometer}:{draft:Draft;setDraft:(value:Draft)=>void;lastOdometer?:number}){
   const update=(values:Partial<Draft["checkout"]>)=>setDraft({...draft,checkout:{...draft.checkout,...values}});
   return <div>
     <div className="flex items-start gap-3 rounded-xl border border-[#B2DDFF] bg-[#EFF8FF] p-4"><CarFront className="mt-0.5 shrink-0 text-[#006FE6]" size={20}/><div><h2 className="font-bold text-[#175CD3]">Handover inspection</h2><p className="mt-1 text-xs text-[#475467]">Confirming this step creates the booking and checks the vehicle out atomically.</p></div></div>
-    <div className="mt-5 grid gap-4 sm:grid-cols-2"><FormInput label="Handover odometer (km)" type="number" min={0} value={draft.checkout.odometer||""} onChange={e=>update({odometer:Number(e.target.value)})}/><FormSelect label="Handover fuel" value={draft.checkout.fuelLevel} onChange={e=>update({fuelLevel:e.target.value})} options={["Full","3/4","1/2","1/4","Empty"]}/><label className="text-sm font-semibold text-[#344054] sm:col-span-2">Vehicle condition at handover<textarea className="mt-1.5 min-h-24 w-full rounded-[9px] border border-[#D0D5DD] p-3 text-sm font-normal outline-none focus:border-[#006FE6] focus:ring-2 focus:ring-[#006FE6]/10" value={draft.checkout.conditionNotes} onChange={e=>update({conditionNotes:e.target.value})}/></label></div>
+    <div className="mt-5 grid gap-4 sm:grid-cols-2"><FormInput label="Handover odometer (km)" type="number" min={0} value={draft.checkout.odometer||""} placeholder={lastOdometer!==undefined?String(lastOdometer):undefined} hint={lastOdometer!==undefined?`Last recorded reading: ${lastOdometer.toLocaleString("en-PK")} km`:undefined} error={lastOdometer!==undefined&&draft.checkout.odometer>0&&draft.checkout.odometer<lastOdometer?`Lower than the last recorded reading (${lastOdometer.toLocaleString("en-PK")} km).`:undefined} onChange={e=>update({odometer:Number(e.target.value)})}/><FormSelect label="Handover fuel" value={draft.checkout.fuelLevel} onChange={e=>update({fuelLevel:e.target.value})} options={["Full","3/4","1/2","1/4","Empty"]}/><label className="text-sm font-semibold text-[#344054] sm:col-span-2">Vehicle condition at handover<textarea className="mt-1.5 min-h-24 w-full rounded-[9px] border border-[#D0D5DD] p-3 text-sm font-normal outline-none focus:border-[#006FE6] focus:ring-2 focus:ring-[#006FE6]/10" value={draft.checkout.conditionNotes} onChange={e=>update({conditionNotes:e.target.value})}/></label></div>
   </div>;
 }
