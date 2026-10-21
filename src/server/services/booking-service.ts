@@ -13,7 +13,7 @@ import {
   parseReverseTransactionInput,
 } from "@/server/validation/booking";
 import { parseCheckInRentalInput, parseRentalInspectionInput, type CheckInRentalInput } from "@/server/validation/rental-operation";
-import { calculateLateReturn, formatLateReturnDuration } from "@/lib/rental-time";
+import { calculateEarlyReturn, calculateLateReturn, formatLateReturnDuration } from "@/lib/rental-time";
 
 async function allocatePaymentReceiptNumber(agencyId: string, now: string) {
   await execute(`INSERT INTO payment_receipt_counters (agency_id,next_number,created_at,updated_at)
@@ -178,7 +178,8 @@ export async function getBooking(context: RequestContext, id: string) {
   const guarantor=renter?.guarantorName&&renter.guarantorParentage&&renter.guarantorCnic&&renter.guarantorPhone&&renter.guarantorAddress&&renter.guarantorCarAmount?{
     name:renter.guarantorName,parentage:renter.guarantorParentage,cnic:renter.guarantorCnic,phone:renter.guarantorPhone,address:renter.guarantorAddress,carAmount:renter.guarantorCarAmount,
   }:undefined;
-  return { ...booking, customerCnic:renter?.customerCnic, customerPhone:renter?.customerPhone, guarantor, inspections, transactions, sourcePayouts };
+  const lastVehicleOdometer=booking.fulfillmentType==="fleet"?await getLastVehicleOdometer(context.agencyId,booking.vehicleId):undefined;
+  return { ...booking, customerCnic:renter?.customerCnic, customerPhone:renter?.customerPhone, guarantor, inspections, transactions, sourcePayouts, lastVehicleOdometer };
 }
 
 export async function listAvailabilityBlocks(context: RequestContext): Promise<AvailabilityBlockDto[]> {
@@ -223,26 +224,45 @@ async function transitionRental(context: RequestContext, bookingId: string, kind
   requireRole(context, ["agency_owner", "fleet_manager", "rental_agent"]);
   const input = kind === "checkin" ? parseCheckInRentalInput(rawInput) : parseRentalInspectionInput(rawInput);
   return inTransaction(async () => {
-    const booking = await queryOne<{ id: string; vehicleId: string|null; customerId: string; status: string; version: number; totalAmount: number; returnAt:string; paid: number; fulfillmentType:"fleet"|"external"; supplierPricingMode:"percentage"|"fixed"|null; supplierSharePercent:number|null; supplierPayable:number|null }>(`SELECT bk.id, bk.vehicle_id AS vehicleId, bk.customer_id AS customerId, bk.status, bk.version, bk.total_amount AS totalAmount,
-      bk.return_at AS returnAt,bk.fulfillment_type AS fulfillmentType,bk.supplier_pricing_mode AS supplierPricingMode,bk.supplier_share_percent AS supplierSharePercent,bk.supplier_payable AS supplierPayable,
+    const booking = await queryOne<{ id: string; vehicleId: string|null; customerId: string; status: string; version: number; totalAmount: number; pickupAt:string; returnAt:string; dailyRate:number; mileageRate:number; estimatedKm:number; extras:number; discount:number; paid: number; fulfillmentType:"fleet"|"external"; supplierPricingMode:"percentage"|"fixed"|null; supplierSharePercent:number|null; supplierFixedCost:number|null; supplierPayable:number|null }>(`SELECT bk.id, bk.vehicle_id AS vehicleId, bk.customer_id AS customerId, bk.status, bk.version, bk.total_amount AS totalAmount,
+      bk.pickup_at AS pickupAt,bk.return_at AS returnAt,bk.daily_rate AS dailyRate,bk.mileage_rate AS mileageRate,bk.estimated_km AS estimatedKm,bk.extras,bk.discount,bk.fulfillment_type AS fulfillmentType,bk.supplier_fixed_cost AS supplierFixedCost,bk.supplier_pricing_mode AS supplierPricingMode,bk.supplier_share_percent AS supplierSharePercent,bk.supplier_payable AS supplierPayable,
       coalesce((SELECT sum(CASE WHEN lower(ft.kind) IN ('refund','reversal') THEN -ft.amount ELSE ft.amount END) FROM financial_transactions ft WHERE ft.agency_id=bk.agency_id AND ft.booking_id=bk.id AND ft.status='posted' AND lower(ft.kind) IN ('payment','late_return_charge','deposit_applied','reversal','refund')),0) AS paid
       FROM bookings bk WHERE bk.agency_id=? AND bk.id=? LIMIT 1 /*postgres:for-update*/`,[context.agencyId, bookingId]);
     if (!booking) throw new DomainError("NOT_FOUND", "Booking not found.", 404);
     const expectedStatus = kind === "checkout" ? "confirmed" : "checked_out";
     if (booking.status !== expectedStatus) throw new DomainError("INVALID_STATUS_TRANSITION", `A ${booking.status} booking cannot be ${kind === "checkout" ? "checked out" : "checked in"}.`, 409);
     if (input.version !== undefined && input.version !== booking.version) throw new DomainError("VERSION_CONFLICT", "The booking changed since it was loaded.", 409);
+    const now = new Date().toISOString();
+    let returnedAt = now;
     if (kind === "checkin") {
-      const checkout = await queryOne<{ odometer: number }>(`SELECT odometer FROM rental_inspections WHERE agency_id=? AND booking_id=? AND kind='checkout' LIMIT 1`,[context.agencyId, bookingId]);
+      const checkout = await queryOne<{ odometer: number; occurredAt: string }>(`SELECT odometer, occurred_at AS occurredAt FROM rental_inspections WHERE agency_id=? AND booking_id=? AND kind='checkout' LIMIT 1`,[context.agencyId, bookingId]);
       if (!checkout) throw new DomainError("INVALID_STATUS_TRANSITION", "A check-out inspection is required before check-in.", 409);
       if (input.odometer < checkout.odometer) throw new DomainError("VALIDATION_FAILED", "Check-in odometer cannot be lower than check-out.", 400, { odometer: "Enter a reading at or above the check-out reading." });
+      const requestedReturn = (input as CheckInRentalInput).returnedAt;
+      if (requestedReturn) {
+        if (Date.parse(requestedReturn) > Date.now() + 5 * 60_000) throw new DomainError("VALIDATION_FAILED", "The return time cannot be in the future.", 400, { returnedAt: "Choose the time the vehicle actually came back." });
+        if (requestedReturn < checkout.occurredAt) throw new DomainError("VALIDATION_FAILED", "The return time cannot be before the vehicle was checked out.", 400, { returnedAt: "Choose a time after the check-out." });
+        returnedAt = requestedReturn;
+      }
     }
-    const now = new Date().toISOString();
-    await execute(`INSERT INTO rental_inspections (id,agency_id,booking_id,kind,odometer,fuel_level,condition_notes,actor_id,occurred_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,[randomUUID(), context.agencyId, bookingId, kind, input.odometer, input.fuelLevel, input.conditionNotes, context.userId, now, now, now]);
+    await execute(`INSERT INTO rental_inspections (id,agency_id,booking_id,kind,odometer,fuel_level,condition_notes,actor_id,occurred_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,[randomUUID(), context.agencyId, bookingId, kind, input.odometer, input.fuelLevel, input.conditionNotes, context.userId, returnedAt, now, now]);
     if (kind === "checkout") {
       await execute(`UPDATE bookings SET status='checked_out', checked_out_at=?, version=version+1, updated_at=? WHERE agency_id=? AND id=?`,[now, now, context.agencyId, bookingId]);
       if(booking.vehicleId)await execute(`UPDATE vehicles SET status='booked', version=version+1, updated_at=? WHERE agency_id=? AND id=?`,[now, context.agencyId, booking.vehicleId]);
     } else {
-      const lateDuration=calculateLateReturn(booking.returnAt,now);
+      const lateDuration=calculateLateReturn(booking.returnAt,returnedAt);
+      const earlyReturn=calculateEarlyReturn({...booking,returnedAt});
+      if(earlyReturn.early){
+        const nextSupplierPayable=booking.fulfillmentType==="external"
+          ? booking.supplierPricingMode==="percentage"
+            ? Math.round(earlyReturn.totalAmount*(booking.supplierSharePercent??83)/100)
+            : Math.min(booking.supplierFixedCost??0,earlyReturn.totalAmount)
+          : booking.supplierPayable;
+        await execute(`UPDATE bookings SET return_at=?,total_amount=?,supplier_payable=? WHERE agency_id=? AND id=?`,[returnedAt,earlyReturn.totalAmount,nextSupplierPayable,context.agencyId,bookingId]);
+        await execute(`INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)`,[randomUUID(),context.agencyId,context.userId,"booking.early_return_adjusted","booking",bookingId,JSON.stringify({agreedReturnAt:booking.returnAt,returnedAt,bookedDays:earlyReturn.bookedDays,usedDays:earlyReturn.usedDays,previousTotal:booking.totalAmount,totalAmount:earlyReturn.totalAmount,reduction:earlyReturn.reduction,supplierPayable:nextSupplierPayable}),now]);
+        booking.totalAmount=earlyReturn.totalAmount;
+        booking.supplierPayable=nextSupplierPayable;
+      }
       const lateReturnCharge=(input as CheckInRentalInput).lateReturnCharge;
       if(lateReturnCharge&&!lateDuration.late)throw new DomainError("VALIDATION_FAILED","A late-return charge can only be added after the agreed return time.",400,{lateReturnCharge:"This vehicle is not late."});
       if(lateReturnCharge){
@@ -255,13 +275,14 @@ async function transitionRental(context: RequestContext, bookingId: string, kind
           : booking.supplierPayable;
         await execute(`UPDATE bookings SET extras=extras+?,total_amount=total_amount+?,supplier_payable=? WHERE agency_id=? AND id=?`,[lateReturnCharge.amount,lateReturnCharge.amount,nextSupplierPayable,context.agencyId,bookingId]);
         await execute(`INSERT INTO financial_transactions (id,agency_id,receipt_number,booking_id,customer_id,kind,amount,method,reference,idempotency_key,status,actor_id,posted_at,created_at,updated_at) VALUES (?,?,?,?,?,'late_return_charge',?,?,?,?, 'posted',?,?,?,?)`,[transactionId,context.agencyId,receiptNumber,bookingId,booking.customerId,lateReturnCharge.amount,lateReturnCharge.method??"Cash",reference,`late_return_${bookingId}_${booking.version}`,context.userId,now,now,now]);
-        await execute(`INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)`,[randomUUID(),context.agencyId,context.userId,"booking.late_return_charge_posted","booking",bookingId,JSON.stringify({transactionId,receiptNumber,amount:lateReturnCharge.amount,lateMinutes:lateDuration.minutes,agreedReturnAt:booking.returnAt,checkedInAt:now,method:lateReturnCharge.method??"Cash",reference}),now]);
+        await execute(`INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)`,[randomUUID(),context.agencyId,context.userId,"booking.late_return_charge_posted","booking",bookingId,JSON.stringify({transactionId,receiptNumber,amount:lateReturnCharge.amount,lateMinutes:lateDuration.minutes,agreedReturnAt:booking.returnAt,checkedInAt:returnedAt,method:lateReturnCharge.method??"Cash",reference}),now]);
       }
       await execute(`UPDATE bookings SET status='completed', completed_at=?, version=version+1, updated_at=? WHERE agency_id=? AND id=?`,[now, now, context.agencyId, bookingId]);
       if(booking.vehicleId)await execute(`UPDATE vehicles SET status='available', version=version+1, updated_at=? WHERE agency_id=? AND id=?`,[now, context.agencyId, booking.vehicleId]);
       const payment = (input as CheckInRentalInput).payment;
       if (payment) {
-        const balance = booking.totalAmount + (lateReturnCharge?.amount??0) - booking.paid - (lateReturnCharge?.amount??0);
+        // The late charge is added to the total and posted as paid in the same step, so it nets out here.
+        const balance = booking.totalAmount - booking.paid;
         if (payment.amount > balance) throw new DomainError("VALIDATION_FAILED", "Check-in payment cannot exceed the outstanding balance.", 400, { amount: `Amount exceeds the outstanding balance of PKR ${balance.toLocaleString()}.` });
         const idempotencyKey = payment.idempotencyKey || `checkin_pay_${bookingId}_${booking.version}`;
         const existing = await queryOne("SELECT id FROM financial_transactions WHERE agency_id=? AND idempotency_key=?",[context.agencyId, idempotencyKey]);
@@ -273,7 +294,7 @@ async function transitionRental(context: RequestContext, bookingId: string, kind
         }
       }
     }
-    await execute(`INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)`,[randomUUID(), context.agencyId, context.userId, `booking.${kind === "checkout" ? "checked_out" : "checked_in"}`, "booking", bookingId, JSON.stringify({ odometer: input.odometer, fuelLevel: input.fuelLevel, ...(kind==="checkin"?{lateMinutes:calculateLateReturn(booking.returnAt,now).minutes}: {}) }), now]);
+    await execute(`INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)`,[randomUUID(), context.agencyId, context.userId, `booking.${kind === "checkout" ? "checked_out" : "checked_in"}`, "booking", bookingId, JSON.stringify({ odometer: input.odometer, fuelLevel: input.fuelLevel, ...(kind==="checkin"?{returnedAt,lateMinutes:calculateLateReturn(booking.returnAt,returnedAt).minutes}: {}) }), now]);
     return getBooking(context, bookingId);
   },{immediate:true});
 }
@@ -461,13 +482,14 @@ export async function cancelBooking(context:RequestContext, bookingId:string, ra
   const reason=typeof input.reason==="string"?input.reason.trim():"";
   if(reason.length<5) throw new DomainError("VALIDATION_FAILED","Enter a clear cancellation reason.",400,{reason:"Use at least 5 characters."});
   return inTransaction(async ()=>{
-    const booking=await queryOne<{id:string;status:string;version:number}>("SELECT id,status,version FROM bookings WHERE agency_id=? AND id=? AND archived_at IS NULL LIMIT 1",[context.agencyId,bookingId]);
+    const booking=await queryOne<{id:string;status:string;version:number;vehicleId:string|null}>("SELECT id,status,version,vehicle_id AS vehicleId FROM bookings WHERE agency_id=? AND id=? AND archived_at IS NULL LIMIT 1 /*postgres:for-update*/",[context.agencyId,bookingId]);
     if(!booking) throw new DomainError("NOT_FOUND","Booking not found.",404);
-    if(booking.status!=="confirmed") throw new DomainError("INVALID_STATUS_TRANSITION","Only confirmed bookings can be cancelled.",409);
+    if(!["confirmed","checked_out"].includes(booking.status)) throw new DomainError("INVALID_STATUS_TRANSITION","Only confirmed or checked-out bookings can be cancelled.",409);
     if(typeof input.version==="number"&&input.version!==booking.version) throw new DomainError("VERSION_CONFLICT","The booking changed since it was loaded.",409);
     const now=new Date().toISOString();
     await execute("UPDATE bookings SET status='cancelled',cancellation_reason=?,version=version+1,updated_at=? WHERE agency_id=? AND id=?",[reason,now,context.agencyId,bookingId]);
-    await execute("INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)",[randomUUID(),context.agencyId,context.userId,"booking.cancelled","booking",bookingId,JSON.stringify({reason}),now]);
+    if(booking.status==="checked_out"&&booking.vehicleId)await execute("UPDATE vehicles SET status='available',version=version+1,updated_at=? WHERE agency_id=? AND id=? AND status='booked'",[now,context.agencyId,booking.vehicleId]);
+    await execute("INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)",[randomUUID(),context.agencyId,context.userId,"booking.cancelled","booking",bookingId,JSON.stringify({reason,previousStatus:booking.status}),now]);
     return getBooking(context,bookingId);
   },{immediate:true});
 }
@@ -489,6 +511,47 @@ export async function archiveBooking(context:RequestContext, bookingId:string, r
     await execute("INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)",[randomUUID(),context.agencyId,context.userId,"booking.archived","booking",bookingId,JSON.stringify({previousStatus:booking.status,cancellationReason:reason||undefined}),now]);
     return {id:bookingId};
   },{immediate:true});
+}
+
+/**
+ * Removes a booking that should never have been recorded. Every live ledger entry gets a compensating
+ * reversal (income, collections and customer balance net to zero), source payouts are voided, and the
+ * booking is archived so its inspections no longer feed the vehicle's last odometer reading.
+ */
+export async function markBookingErroneous(context:RequestContext, bookingId:string, rawInput:unknown) {
+  requireRole(context,["agency_owner"]);
+  const input=rawInput as {reason?:unknown;version?:unknown};
+  const reason=typeof input.reason==="string"?input.reason.trim():"";
+  if(reason.length<5) throw new DomainError("VALIDATION_FAILED","Explain why this booking is erroneous.",400,{reason:"Use at least 5 characters."});
+  return inTransaction(async ()=>{
+    const booking=await queryOne<{id:string;status:string;version:number;customerId:string}>("SELECT id,status,version,customer_id AS customerId FROM bookings WHERE agency_id=? AND id=? AND archived_at IS NULL LIMIT 1 /*postgres:for-update*/",[context.agencyId,bookingId]);
+    if(!booking) throw new DomainError("NOT_FOUND","Booking not found.",404);
+    if(!["completed","cancelled","no_show"].includes(booking.status)) throw new DomainError("INVALID_STATUS_TRANSITION","Only completed, cancelled, or no-show bookings can be marked erroneous.",409);
+    if(typeof input.version==="number"&&input.version!==booking.version) throw new DomainError("VERSION_CONFLICT","The booking changed since it was loaded.",409);
+    const now=new Date().toISOString();
+    const open=await queryAll<{id:string;kind:string;amount:number;method:string}>(`SELECT ft.id,ft.kind,ft.amount,ft.method FROM financial_transactions ft
+      WHERE ft.agency_id=? AND ft.booking_id=? AND ft.status='posted' AND lower(ft.kind) NOT IN ('reversal','refund')
+        AND NOT EXISTS(SELECT 1 FROM financial_transactions adj WHERE adj.agency_id=ft.agency_id AND adj.linked_transaction_id=ft.id AND adj.status='posted')
+      ORDER BY ft.posted_at`,[context.agencyId,bookingId]);
+    const reversed:string[]=[];
+    for(const original of open){
+      const id=`TXN-${randomUUID().slice(0,8).toUpperCase()}`;
+      await execute(`INSERT INTO financial_transactions (id,agency_id,booking_id,customer_id,kind,amount,method,reference,idempotency_key,linked_transaction_id,status,actor_id,posted_at,created_at,updated_at) VALUES (?,?,?,?,'reversal',?,?,?,?,?,'posted',?,?,?,?)`,[id,context.agencyId,bookingId,booking.customerId,original.amount,original.method,`Erroneous booking: ${reason}`,`err_${original.id}`,original.id,context.userId,now,now,now]);
+      reversed.push(original.id);
+    }
+    const voidedPayouts=(await execute("UPDATE source_payouts SET status='voided',updated_at=? WHERE agency_id=? AND booking_id=? AND status='posted'",[now,context.agencyId,bookingId])).changes;
+    await execute("UPDATE bookings SET cancellation_reason=?,archived_at=?,version=version+1,updated_at=? WHERE agency_id=? AND id=?",[`Erroneous: ${reason}`,now,now,context.agencyId,bookingId]);
+    await execute("INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)",[randomUUID(),context.agencyId,context.userId,"booking.marked_erroneous","booking",bookingId,JSON.stringify({previousStatus:booking.status,reason,reversedTransactionIds:reversed,voidedSourcePayouts:voidedPayouts}),now]);
+    return {id:bookingId,reversedTransactions:reversed.length,voidedSourcePayouts:voidedPayouts};
+  },{immediate:true});
+}
+
+/** Latest odometer recorded for a fleet vehicle on any live booking, used to prefill the next handover. */
+export async function getLastVehicleOdometer(agencyId:string, vehicleId:string|null|undefined) {
+  if(!vehicleId)return undefined;
+  const row=await queryOne<{odometer:number}>(`SELECT ri.odometer FROM rental_inspections ri JOIN bookings bk ON bk.id=ri.booking_id AND bk.agency_id=ri.agency_id
+    WHERE ri.agency_id=? AND bk.vehicle_id=? AND bk.archived_at IS NULL ORDER BY ri.occurred_at DESC, ri.created_at DESC LIMIT 1`,[agencyId,vehicleId]);
+  return row?.odometer;
 }
 
 export async function recordBookingPayment(context: RequestContext, bookingId: string, rawInput: unknown) {

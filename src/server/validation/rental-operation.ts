@@ -14,7 +14,7 @@ export type LateReturnChargeInput = {
   reference?: string;
 };
 
-export type CheckInRentalInput = RentalInspectionInput & { payment?: RecordPaymentInput; lateReturnCharge?: LateReturnChargeInput };
+export type CheckInRentalInput = RentalInspectionInput & { payment?: RecordPaymentInput; lateReturnCharge?: LateReturnChargeInput; returnedAt?: string };
 
 export function parseRentalInspectionInput(value: unknown): RentalInspectionInput {
   const input = value as Partial<RentalInspectionInput> | null;
@@ -30,8 +30,17 @@ export function parseRentalInspectionInput(value: unknown): RentalInspectionInpu
 
 export function parseCheckInRentalInput(value: unknown): CheckInRentalInput {
   const inspection = parseRentalInspectionInput(value);
-  const input = value as { payment?: unknown; lateReturnCharge?: Partial<LateReturnChargeInput> };
+  const input = value as { payment?: unknown; lateReturnCharge?: Partial<LateReturnChargeInput>; returnedAt?: unknown };
   const lateReturnCharge=input.lateReturnCharge;
+  let returnedAt:string|undefined;
+  if(input.returnedAt!==undefined&&input.returnedAt!==null&&input.returnedAt!==""){
+    const parsed=typeof input.returnedAt==="string"?Date.parse(input.returnedAt):Number.NaN;
+    if(!Number.isFinite(parsed))throw new DomainError("VALIDATION_FAILED","Enter a valid return time.",400,{returnedAt:"Choose a valid date and time."});
+    returnedAt=new Date(parsed).toISOString();
+  }
+  // A zero payment means nothing was collected; the remainder stays on the customer's balance.
+  const payment=input.payment as {amount?:unknown}|undefined;
+  const skipPayment=payment===undefined||payment===null||payment.amount===0;
   if(lateReturnCharge!==undefined){
     const errors:Record<string,string>={};
     if(!Number.isInteger(lateReturnCharge.amount)||(lateReturnCharge.amount??0)<=0)errors.lateReturnCharge="Enter a positive whole PKR late-return charge.";
@@ -40,7 +49,8 @@ export function parseCheckInRentalInput(value: unknown): CheckInRentalInput {
   }
   return {
     ...inspection,
-    payment: input.payment === undefined ? undefined : parseRecordPaymentInput(input.payment),
+    payment: skipPayment ? undefined : parseRecordPaymentInput(input.payment),
+    returnedAt,
     lateReturnCharge:lateReturnCharge===undefined?undefined:{amount:lateReturnCharge.amount!,method:lateReturnCharge.method?.trim()||"Cash",reference:lateReturnCharge.reference?.trim()||""},
   };
 }

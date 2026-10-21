@@ -44,4 +44,6 @@ export type Vehicle = {
   owner?: string;
   agreement?: ManagementAgreement;
   rateRules?: VehicleRateRule[];
+  /** Latest odometer captured at a check-out or check-in for this vehicle. */
+  lastOdometer?: number;
 };

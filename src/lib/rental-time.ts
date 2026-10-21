@@ -22,3 +22,36 @@ export function formatLateReturnDuration(duration: LateReturnDuration) {
   if(duration.remainingMinutes)parts.push(`${duration.remainingMinutes} min`);
   return parts.join(" ") || "Less than 1 min";
 }
+
+export type EarlyReturnAdjustment = {
+  early: boolean;
+  bookedDays: number;
+  usedDays: number;
+  unusedDays: number;
+  totalAmount: number;
+  reduction: number;
+};
+
+/** Re-prices a rental on the days actually used when it comes back before the agreed return. */
+export function calculateEarlyReturn(input: {
+  pickupAt: string;
+  returnAt: string;
+  returnedAt: string | Date;
+  dailyRate: number;
+  mileageRate: number;
+  estimatedKm: number;
+  extras: number;
+  discount: number;
+  totalAmount: number;
+}): EarlyReturnAdjustment {
+  const pickup = Date.parse(input.pickupAt);
+  const agreed = Date.parse(input.returnAt);
+  const actual = input.returnedAt instanceof Date ? input.returnedAt.getTime() : Date.parse(input.returnedAt);
+  const bookedDays = Math.max(1, Math.ceil((agreed - pickup) / 86_400_000));
+  const usedDays = Number.isFinite(actual) ? Math.min(bookedDays, Math.max(1, Math.ceil((actual - pickup) / 86_400_000))) : bookedDays;
+  if (!Number.isFinite(actual) || actual >= agreed || usedDays >= bookedDays) {
+    return { early: false, bookedDays, usedDays: bookedDays, unusedDays: 0, totalAmount: input.totalAmount, reduction: 0 };
+  }
+  const totalAmount = Math.max(0, Math.min(input.totalAmount, input.dailyRate * usedDays + input.mileageRate * input.estimatedKm + input.extras - input.discount));
+  return { early: true, bookedDays, usedDays, unusedDays: bookedDays - usedDays, totalAmount, reduction: input.totalAmount - totalAmount };
+}

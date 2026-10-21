@@ -62,6 +62,7 @@ export type BookingListItem = {
   termsSnapshot: string;
   version: number;
   inspections?: BookingInspectionDto[];
+  lastVehicleOdometer?: number;
 };
 
 export type SourcePayoutDto = {

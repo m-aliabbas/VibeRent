@@ -13,6 +13,7 @@ import {
   extendRental,
   listAvailabilityBlocks,
   listBookings,
+  markBookingErroneous,
   recordBookingDeposit,
   recordBookingPayment,
   recordSourcePayout,
@@ -111,6 +112,8 @@ export async function cancelBookingAction(bookingId:string,input:{reason:string;
     const data=await cancelBooking(await getWebRequestContext(),bookingId,input);
     revalidatePath("/bookings");
     revalidatePath(`/bookings/${bookingId}`);
+    revalidatePath("/");
+    revalidatePath("/vehicles");
     return {ok:true as const,data};
   } catch(error) {
     const issue=asDomainError(error);
@@ -127,6 +130,21 @@ export async function archiveBookingAction(bookingId:string,reason?:string) {
   } catch(error) {
     const issue=asDomainError(error);
     return {ok:false as const,error:{code:issue.code,message:issue.message}};
+  }
+}
+
+export async function markBookingErroneousAction(bookingId:string,input:{reason:string;version:number}) {
+  try {
+    const data=await markBookingErroneous(await getWebRequestContext(),bookingId,input);
+    revalidatePath("/bookings");
+    revalidatePath(`/bookings/${bookingId}`);
+    revalidatePath("/");
+    revalidatePath("/reports");
+    revalidatePath("/customers");
+    return {ok:true as const,data};
+  } catch(error) {
+    const issue=asDomainError(error);
+    return {ok:false as const,error:{code:issue.code,message:issue.message,fieldErrors:issue.fieldErrors??{}}};
   }
 }
 

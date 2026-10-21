@@ -131,11 +131,11 @@ export function AppShell({ children, viewer }: { children: React.ReactNode; view
         <div className="px-2.5">
           <Brand />
         </div>
-        <div className="mt-7 flex-1">
+        <div className="-mx-1 mt-7 min-h-0 flex-1 overflow-y-auto overscroll-contain px-1 pb-3">
           <NavLinks />
         </div>
         <button
-          className="flex w-full items-center gap-3 rounded-xl border border-[#E4E7EC] bg-white p-3 text-left shadow-[0_2px_6px_rgba(16,24,40,.04)] hover:border-[#B9D9FF]"
+          className="flex w-full shrink-0 items-center gap-3 rounded-xl border border-[#E4E7EC] bg-white p-3 text-left shadow-[0_2px_6px_rgba(16,24,40,.04)] hover:border-[#B9D9FF]"
           aria-label="Open help center"
         >
           <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#0878F9] text-white">
@@ -217,16 +217,16 @@ export function AppShell({ children, viewer }: { children: React.ReactNode; view
                 <X size={20} />
               </button>
             </div>
-            <div className="mt-8 flex-1">
+            <div className="-mx-1 mt-8 min-h-0 flex-1 overflow-y-auto overscroll-contain px-1 pb-3">
               <NavLinks close={() => setOpen(false)} />
             </div>
-            <div className="border-t border-[#EAECF0] px-2 pt-4 text-sm font-semibold">
+            <div className="shrink-0 border-t border-[#EAECF0] px-2 pt-4 text-sm font-semibold">
               {viewer.name}
               <div className="text-xs font-normal text-[#667085]">
                 {roleLabel(viewer.role)} · {viewer.activeAgencyName}
               </div>
             </div>
-            <button onClick={async()=>{await authClient.signOut();router.push("/sign-in");router.refresh()}} className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-lg border text-sm font-semibold text-[#B42318]"><LogOut size={17}/>Sign out</button>
+            <button onClick={async()=>{await authClient.signOut();router.push("/sign-in");router.refresh()}} className="mt-3 flex h-11 w-full shrink-0 items-center justify-center gap-2 rounded-lg border text-sm font-semibold text-[#B42318]"><LogOut size={17}/>Sign out</button>
           </aside>
         </div>
       )}
