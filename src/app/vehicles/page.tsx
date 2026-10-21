@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Archive, CarFront, CirclePlus, Plus, Trash2, Wrench } from "lucide-react";
+import { Archive, CarFront, CirclePlus, Droplets, Plus, Trash2, Wrench } from "lucide-react";
 import { PageHeader } from "@/components/shared/page-header";
 import { FilterBar, FilterSelect } from "@/components/shared/filter-bar";
 import { DataTable, type DataColumn } from "@/components/shared/data-table";
@@ -21,6 +21,8 @@ import type { RepositoryResult } from "@/lib/repositories/repository";
 import { formatPkr } from "@/lib/utils";
 import type { Vehicle } from "@/types/vehicle";
 import { setVehicleArchivedAction } from "@/app/actions/vehicles";
+import { OilChangeBadge } from "@/components/vehicles/oil-change-panel";
+import { needsOilChange } from "@/lib/oil-change";
 
 const pageSize = 20;
 type SortState = { key: string; direction: "asc" | "desc" };
@@ -87,6 +89,7 @@ export default function VehiclesPage() {
             "Maintenance",
             "Out of Service",
             "Needs attention",
+            "Oil change due",
           ].includes(initialStatus ?? "")
           ? initialStatus!
           : "All",
@@ -182,6 +185,9 @@ export default function VehiclesPage() {
     [items],
   );
 
+  const oilChangeDue = useMemo(() => activeItems.filter((vehicle) => needsOilChange(vehicle.oilChange)), [activeItems]);
+  const overdueCount = oilChangeDue.filter((vehicle) => vehicle.oilChange?.state === "overdue").length;
+
   const filtered = useMemo(
     () =>
       (fleetView === "archived" ? archivedItems : activeItems)
@@ -194,7 +200,7 @@ export default function VehiclesPage() {
               .includes(term);
           return (
             matchesTerm &&
-            (fleetView === "archived" || status === "All" || (status === "Needs attention" ? ["Maintenance","Out of Service"].includes(vehicle.status) : vehicle.status === status)) &&
+            (fleetView === "archived" || status === "All" || (status === "Needs attention" ? ["Maintenance","Out of Service"].includes(vehicle.status) : status === "Oil change due" ? needsOilChange(vehicle.oilChange) : vehicle.status === status)) &&
             (city === "All" || vehicle.city === city) &&
             (ownership === "All" || vehicle.ownership === ownership) &&
             (!minRate || vehicle.dailyRate >= Number(minRate)) &&
@@ -303,7 +309,12 @@ export default function VehiclesPage() {
       key: "status",
       header: "Status",
       sortable: true,
-      cell: (v) => <StatusBadge status={v.status} />,
+      cell: (v) => (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <StatusBadge status={v.status} />
+          {v.status !== "Archived" && needsOilChange(v.oilChange) && <OilChangeBadge summary={v.oilChange} />}
+        </div>
+      ),
     },
     {
       key: "rate",
@@ -461,6 +472,16 @@ export default function VehiclesPage() {
           </button>
         ))}
       </section>}
+      {fleetView === "active" && !loading && oilChangeDue.length > 0 && status !== "Oil change due" && (
+        <div role="status" className="flex flex-col gap-3 rounded-xl border border-[#FEDF89] bg-[#FFFAEB] p-4 sm:flex-row sm:items-center">
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-[9px] bg-white text-[#B54708]"><Droplets size={18} /></span>
+          <p className="flex-1 text-sm text-[#93370D]">
+            <strong>{oilChangeDue.length} vehicle{oilChangeDue.length === 1 ? " is" : "s are"} due for an oil change</strong>
+            {overdueCount > 0 && <> · {overdueCount} overdue</>}
+          </p>
+          <Button size="sm" variant="secondary" onClick={() => { setStatus("Oil change due"); setPage(1); }}>Show vehicles</Button>
+        </div>
+      )}
       <FilterBar
         search={search}
         onSearch={(value) => {
@@ -491,6 +512,7 @@ export default function VehiclesPage() {
             "Maintenance",
             "Out of Service",
             "Needs attention",
+            "Oil change due",
           ]}
         />}
         <FilterSelect
@@ -560,9 +582,10 @@ export default function VehiclesPage() {
                 {v.status!=="Archived"?<Button size="sm" variant="danger" onClick={()=>setRemoving(v)}><Trash2 size={15}/>Delete</Button>:<Button asChild size="sm" variant="danger"><Link href={`/archive?q=${encodeURIComponent(v.plate)}`}><Trash2 size={15}/>Delete permanently</Link></Button>}
               </div>
               <div className="mt-4 flex items-center justify-between border-t border-[#EAECF0] pt-3">
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   <StatusBadge status={v.status} />
                   <StatusBadge status={v.ownership} />
+                  {v.status !== "Archived" && needsOilChange(v.oilChange) && <OilChangeBadge summary={v.oilChange} />}
                 </div>
                 <span className="text-sm font-bold">
                   {formatPkr(v.dailyRate)}

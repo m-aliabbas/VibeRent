@@ -20,14 +20,14 @@ export const operationalTables = [
   "branches", "agency_cities", "owners", "customers", "drivers", "expense_categories",
   "vehicles", "management_agreements", "vehicle_rate_rules", "booking_number_counters",
   "payment_receipt_counters", "booking_drafts", "bookings", "availability_blocks",
-  "rental_inspections", "expenses", "financial_transactions", "owner_payouts",
+  "rental_inspections", "expenses", "vehicle_service_records", "financial_transactions", "owner_payouts",
   "source_payouts", "private_files", "whatsapp_settings", "audit_events", "users",
 ] as const;
 
 export const migrationBusinessTables = [
   "owners", "customers", "drivers", "vehicles", "management_agreements", "vehicle_rate_rules",
   "booking_drafts", "bookings", "availability_blocks", "rental_inspections", "expenses",
-  "financial_transactions", "owner_payouts", "source_payouts", "private_files",
+  "vehicle_service_records", "financial_transactions", "owner_payouts", "source_payouts", "private_files",
 ] as const;
 
 const collisionKeys = [

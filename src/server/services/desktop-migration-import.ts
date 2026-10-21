@@ -17,7 +17,7 @@ type Row = Record<string, string | number | null>;
 const insertOrder = [
   "owners", "customers", "drivers", "vehicles", "management_agreements", "vehicle_rate_rules",
   "booking_drafts", "bookings", "availability_blocks", "rental_inspections", "expenses",
-  "financial_transactions", "owner_payouts", "source_payouts", "private_files", "audit_events",
+  "vehicle_service_records", "financial_transactions", "owner_payouts", "source_payouts", "private_files", "audit_events",
 ] as const;
 
 function reject(message: string): never {

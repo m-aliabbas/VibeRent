@@ -4,6 +4,7 @@ import { execute, inTransaction, queryAll, queryOne } from "@/db/query";
 import { DomainError } from "@/server/domain/errors";
 import type { VehicleRepository } from "@/server/repositories/contracts";
 import type { ManagementAgreement, Vehicle, VehicleRateRule } from "@/types/vehicle";
+import { summarizeOilChange } from "@/lib/oil-change";
 
 type VehicleRow = {
   id: string;
@@ -35,6 +36,8 @@ type VehicleRow = {
   payout_frequency: string | null;
   archived_at: string | null;
   last_odometer: number | null;
+  oil_change_interval_km: number;
+  last_oil_change_odometer: number | null;
 };
 
 const selectSql = `
@@ -44,7 +47,9 @@ const selectSql = `
     a.expense_responsibility, a.payout_frequency,
     (SELECT ri.odometer FROM rental_inspections ri JOIN bookings bk ON bk.id = ri.booking_id AND bk.agency_id = ri.agency_id
       WHERE ri.agency_id = v.agency_id AND bk.vehicle_id = v.id AND bk.archived_at IS NULL
-      ORDER BY ri.occurred_at DESC, ri.created_at DESC LIMIT 1) AS last_odometer
+      ORDER BY ri.occurred_at DESC, ri.created_at DESC LIMIT 1) AS last_odometer,
+    (SELECT max(sr.odometer) FROM vehicle_service_records sr
+      WHERE sr.agency_id = v.agency_id AND sr.vehicle_id = v.id AND sr.kind = 'oil_change' AND sr.voided_at IS NULL) AS last_oil_change_odometer
   FROM vehicles v
   JOIN branches b ON b.id = v.branch_id AND b.agency_id = v.agency_id
   LEFT JOIN owners o ON o.id = v.owner_id AND o.agency_id = v.agency_id
@@ -101,6 +106,7 @@ function mapVehicle(row: VehicleRow): Vehicle {
     owner: row.owner_name ?? undefined,
     agreement: mapAgreement(row),
     lastOdometer: row.last_odometer ?? undefined,
+    oilChange: summarizeOilChange(row.oil_change_interval_km, row.last_oil_change_odometer, row.last_odometer),
   };
 }
 

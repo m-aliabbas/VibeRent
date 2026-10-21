@@ -59,13 +59,14 @@ import type { RepositoryResult } from "@/lib/repositories/repository";
 import {
   defaultVehicleOperations,
   vehicleActivity,
-  vehicleMaintenance,
   vehicleOperationalData,
   vehicleStatusHistory,
   type VehicleDetailTab,
   type VehicleStatusEvent,
 } from "@/lib/vehicle-detail-data";
 import { formatPkr } from "@/lib/utils";
+import { OilChangeBadge, OilChangePanel } from "@/components/vehicles/oil-change-panel";
+import { needsOilChange } from "@/lib/oil-change";
 import { downloadFromUrl } from "@/lib/download";
 import type { ExpenseDto, ExpenseWorkspaceData } from "@/server/services/expense-service";
 import type { VehicleFinanceSummary } from "@/server/services/vehicle-service";
@@ -235,6 +236,7 @@ export function VehicleWorkspace({ vehicleId }: { vehicleId: string }) {
                 {vehicle.make} {vehicle.model}
               </h1>
               <StatusBadge status={vehicle.status} />
+              {needsOilChange(vehicle.oilChange) && <button type="button" onClick={() => setTab("maintenance")} className="rounded-full" aria-label="Open oil change details"><OilChangeBadge summary={vehicle.oilChange} /></button>}
             </div>
             <p className="mt-1 flex flex-wrap items-center gap-x-2 text-sm text-[#667085]">
               <strong className="text-[#344054]">{vehicle.plate}</strong>
@@ -538,27 +540,15 @@ export function VehicleWorkspace({ vehicleId }: { vehicleId: string }) {
         </Panel>
       )}
       {tab === "maintenance" && (
-        <Panel title="Maintenance schedule">
-          <div className="space-y-3">
-            {vehicleMaintenance.map((item) => (
-              <div
-                key={item.title}
-                className="flex items-center gap-3 rounded-[10px] border border-[#EAECF0] p-4"
-              >
-                <span className="grid h-9 w-9 place-items-center rounded-lg bg-[#FFFAEB] text-[#B54708]">
-                  <Wrench size={18} />
-                </span>
-                <div className="flex-1">
-                  <p className="text-sm font-semibold">{item.title}</p>
-                  <p className="mt-1 text-xs text-[#667085]">
-                    {item.date} · {item.detail}
-                  </p>
-                </div>
-                <StatusBadge status={item.status} />
-              </div>
-            ))}
-          </div>
-        </Panel>
+        <OilChangePanel
+          vehicleId={vehicle.id}
+          vehicleLabel={`${vehicle.make} ${vehicle.model} · ${vehicle.plate}`}
+          archived={vehicle.status === "Archived"}
+          onChanged={(summary, message) => {
+            setVehicle((current) => (current ? { ...current, oilChange: summary } : current));
+            setNotice(message);
+          }}
+        />
       )}
       {tab === "activity" && (
         <Panel title="Operational timeline">

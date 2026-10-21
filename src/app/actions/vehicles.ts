@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { getWebRequestContext } from "@/server/auth/session";
 import { asDomainError } from "@/server/domain/errors";
 import { getVehicle, getVehicleFinance, getVehicleFormOptions, listVehicles, saveVehicle, setVehicleArchived, transitionVehicleStatus } from "@/server/services/vehicle-service";
+import { getOilChangeOverview, recordOilChange, setOilChangeInterval, voidOilChange, type RecordOilChangeInput } from "@/server/services/oil-change-service";
 import type { Vehicle } from "@/types/vehicle";
 import type { RepositoryResult } from "@/lib/repositories/repository";
 
@@ -53,4 +54,44 @@ export async function setVehicleArchivedAction(id:string,archived:boolean):Promi
 export async function getVehicleFormOptionsAction() {
   try { return { ok: true as const, data: await getVehicleFormOptions(await getWebRequestContext()) }; }
   catch (error) { const issue=asDomainError(error); return { ok: false as const, error: {code:issue.code,message:issue.message} }; }
+}
+
+function oilChangeFailure(error: unknown) {
+  const issue = asDomainError(error);
+  return { ok: false as const, error: { code: issue.code, message: issue.message, fieldErrors: issue.fieldErrors ?? {} } };
+}
+
+function revalidateOilChange(vehicleId: string) {
+  revalidatePath("/vehicles");
+  revalidatePath(`/vehicles/${vehicleId}`);
+  revalidatePath("/expenses");
+}
+
+export async function getOilChangeOverviewAction(vehicleId: string) {
+  try { return { ok: true as const, data: await getOilChangeOverview(await getWebRequestContext(), vehicleId) }; }
+  catch (error) { return oilChangeFailure(error); }
+}
+
+export async function recordOilChangeAction(vehicleId: string, input: RecordOilChangeInput) {
+  try {
+    const data = await recordOilChange(await getWebRequestContext(), vehicleId, input);
+    revalidateOilChange(vehicleId);
+    return { ok: true as const, data };
+  } catch (error) { return oilChangeFailure(error); }
+}
+
+export async function setOilChangeIntervalAction(vehicleId: string, intervalKm: number) {
+  try {
+    const data = await setOilChangeInterval(await getWebRequestContext(), vehicleId, intervalKm);
+    revalidateOilChange(vehicleId);
+    return { ok: true as const, data };
+  } catch (error) { return oilChangeFailure(error); }
+}
+
+export async function voidOilChangeAction(vehicleId: string, recordId: string, reason: string) {
+  try {
+    const data = await voidOilChange(await getWebRequestContext(), vehicleId, recordId, reason);
+    revalidateOilChange(vehicleId);
+    return { ok: true as const, data };
+  } catch (error) { return oilChangeFailure(error); }
 }
