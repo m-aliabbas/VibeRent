@@ -291,9 +291,7 @@ function transitionRental(context: RequestContext, bookingId: string, kind: "che
       if(booking.vehicleId)sqlite.prepare(`UPDATE vehicles SET status='available', version=version+1, updated_at=? WHERE agency_id=? AND id=?`).run(now, context.agencyId, booking.vehicleId);
       const payment = (input as CheckInRentalInput).payment;
       if (payment) {
-        // The late charge is added to the total and posted as paid in the same step, so it nets out here.
-        const balance = booking.totalAmount - booking.paid;
-        if (payment.amount > balance) throw new DomainError("VALIDATION_FAILED", "Check-in payment cannot exceed the outstanding balance.", 400, { amount: `Amount exceeds the outstanding balance of PKR ${balance.toLocaleString()}.` });
+        // Amounts above the outstanding balance are accepted and held as customer credit on this booking.
         const idempotencyKey = payment.idempotencyKey || `checkin_pay_${bookingId}_${booking.version}`;
         const existing = sqlite.prepare("SELECT id FROM financial_transactions WHERE agency_id=? AND idempotency_key=?").get(context.agencyId, idempotencyKey);
         if (!existing) {
@@ -622,13 +620,7 @@ export function recordBookingPayment(context: RequestContext, bookingId: string,
       return { ...getBooking(context, bookingId), paymentReceiptNumber: existing.receiptNumber };
     }
 
-    const balance = booking.totalAmount - booking.paid;
-    if (input.amount > balance) {
-      throw new DomainError("VALIDATION_FAILED", "Overpayment is blocked; customer-credit policy is not enabled.", 400, {
-        amount: `Amount exceeds the outstanding balance of PKR ${balance.toLocaleString()}.`,
-      });
-    }
-
+    // Overpayment is allowed: anything above the outstanding balance is held as customer credit.
     const id = `TXN-${randomUUID().slice(0, 8).toUpperCase()}`;
     const now = new Date().toISOString();
     const receiptNumber = allocatePaymentReceiptNumber(context.agencyId, now);
