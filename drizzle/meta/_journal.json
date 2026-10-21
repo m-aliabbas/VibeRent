@@ -169,6 +169,13 @@
       "when": 1792597942715,
       "tag": "0023_magenta_catseye",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1792598633261,
+      "tag": "0024_smiling_ender_wiggin",
+      "breakpoints": true
     }
   ]
 }

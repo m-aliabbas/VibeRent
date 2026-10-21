@@ -87,6 +87,7 @@ export async function permanentlyDeleteArchived(context:RequestContext,kind:Arch
       }
       sqlite.prepare("DELETE FROM vehicle_service_records WHERE agency_id=? AND vehicle_id=?").run(context.agencyId,id);
       sqlite.prepare("DELETE FROM expenses WHERE agency_id=? AND (vehicle_id=? OR booking_id IN (SELECT id FROM bookings WHERE agency_id=? AND vehicle_id=?))").run(context.agencyId,id,context.agencyId,id);
+      sqlite.prepare("DELETE FROM recurring_expenses WHERE agency_id=? AND vehicle_id=?").run(context.agencyId,id);
       sqlite.prepare("DELETE FROM owner_payouts WHERE agency_id=? AND vehicle_id=?").run(context.agencyId,id);
       sqlite.prepare("DELETE FROM availability_blocks WHERE agency_id=? AND vehicle_id=?").run(context.agencyId,id);
       sqlite.prepare("DELETE FROM bookings WHERE agency_id=? AND vehicle_id=?").run(context.agencyId,id);

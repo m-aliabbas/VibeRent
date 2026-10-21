@@ -18,6 +18,7 @@ import {
   MapPin,
   Pencil,
   Plus,
+  Repeat,
   Repeat2,
   ShieldAlert,
   ShieldCheck,
@@ -33,7 +34,8 @@ import {
   AvailabilityCalendar,
   type CalendarSelection,
 } from "@/components/bookings/availability-calendar";
-import { ExpenseDialog } from "@/components/expenses/expense-dialog";
+import { ExpenseDialog, type RecurringSaveResult } from "@/components/expenses/expense-dialog";
+import { RecurringExpenseList } from "@/components/expenses/recurring-expenses";
 import { FormInput } from "@/components/forms/form-controls";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/shared/status-badge";
@@ -100,6 +102,7 @@ export function VehicleWorkspace({ vehicleId }: { vehicleId: string }) {
   const [finance, setFinance] = useState<VehicleFinanceSummary>();
   const [expenseData, setExpenseData] = useState<ExpenseWorkspaceData>();
   const [addingExpense, setAddingExpense] = useState(false);
+  const [addingRecurring, setAddingRecurring] = useState(false);
   const [calendarSelection, setCalendarSelection] = useState<CalendarSelection>();
 
   const load = async () => {
@@ -206,6 +209,18 @@ export function VehicleWorkspace({ vehicleId }: { vehicleId: string }) {
     availabilityBlocks: [],
     recentTransactions: [],
     recentExpenses: [],
+  };
+  const addPostedExpenses = (posted: ExpenseDto[]) => {
+    const own = posted.filter(item => item.vehicleId === vehicleId);
+    if (own.length) setFinance(current => current ? { ...current, recentExpenses: [...own, ...current.recentExpenses.filter(row => !own.some(item => item.id === row.id))] } : current);
+  };
+  const recordRecurring = (result: RecurringSaveResult) => {
+    setExpenseData(current => current ? { ...current, recurring: [result.recurring, ...current.recurring.filter(item => item.id !== result.recurring.id)] } : current);
+    addPostedExpenses(result.posted);
+    setAddingExpense(false);
+    setAddingRecurring(false);
+    setTab("expenses");
+    setNotice(result.posted.length ? `${result.recurring.description} set up for ${vehicle?.plate}. ${result.posted.length} charge${result.posted.length === 1 ? "" : "s"} posted up to today.` : `${result.recurring.description} set up for ${vehicle?.plate}. First charge posts on ${result.recurring.nextDueOn}.`);
   };
   const recordExpense = (item: ExpenseDto) => {
     setFinance(current => current ? { ...current, recentExpenses: [item, ...current.recentExpenses] } : current);
@@ -539,6 +554,21 @@ export function VehicleWorkspace({ vehicleId }: { vehicleId: string }) {
           </div>
         </Panel>
       )}
+      {tab === "expenses" && (
+        <Panel title="Recurring charges" action={<Button size="sm" variant="secondary" disabled={!expenseData || vehicle.status === "Archived"} onClick={() => setAddingRecurring(true)}><Repeat size={16} />Add recurring</Button>}>
+          <p className="mb-4 text-xs leading-5 text-[#667085]">Fixed charges for this vehicle, such as tracker fees, parking or insurance instalments. Each charge posts to Expenses automatically on its due date.</p>
+          {expenseData ? (
+            <RecurringExpenseList
+              items={expenseData.recurring.filter((item) => item.vehicleId === vehicle.id)}
+              categories={expenseData.categories}
+              emptyText="No recurring charges for this vehicle."
+              onUpdated={(item) => setExpenseData((current) => current ? { ...current, recurring: current.recurring.map((row) => row.id === item.id ? item : row) } : current)}
+              onPosted={addPostedExpenses}
+              onNotice={setNotice}
+            />
+          ) : <p className="py-5 text-center text-sm text-[#667085]">Loading recurring charges…</p>}
+        </Panel>
+      )}
       {tab === "maintenance" && (
         <OilChangePanel
           vehicleId={vehicle.id}
@@ -603,12 +633,14 @@ export function VehicleWorkspace({ vehicleId }: { vehicleId: string }) {
           onComplete={completeOperation}
         />
       )}
-      {addingExpense && expenseData && (
+      {(addingExpense || addingRecurring) && expenseData && (
         <ExpenseDialog
           data={expenseData}
           initialVehicleId={vehicle.id}
-          onClose={() => setAddingExpense(false)}
+          initialRepeat={addingRecurring ? "monthly" : undefined}
+          onClose={() => { setAddingExpense(false); setAddingRecurring(false); }}
           onSave={recordExpense}
+          onRecurringSaved={recordRecurring}
         />
       )}
       {calendarSelection && (

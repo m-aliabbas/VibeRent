@@ -30,6 +30,8 @@ const tones: Record<string, string> = {
   cleaning: "bg-[#F4F3FF] text-[#5925DC] ring-[#D9D6FE]",
   insurance: "bg-[#F2F4F7] text-[#475467] ring-[#D0D5DD]",
   archived: "bg-[#F2F4F7] text-[#475467] ring-[#D0D5DD]",
+  paused: "bg-[#FFFAEB] text-[#B54708] ring-[#FEDF89]",
+  ended: "bg-[#F2F4F7] text-[#475467] ring-[#D0D5DD]",
 };
 
 export function StatusBadge({ status }: { status: string }) {
