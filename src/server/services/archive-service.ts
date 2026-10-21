@@ -85,6 +85,7 @@ export async function permanentlyDeleteArchived(context:RequestContext,kind:Arch
       for(const table of ["financial_transactions","source_payouts","rental_inspections"]){
         sqlite.prepare(`DELETE FROM ${table} WHERE agency_id=? AND booking_id IN (SELECT id FROM bookings WHERE agency_id=? AND vehicle_id=?)`).run(context.agencyId,context.agencyId,id);
       }
+      sqlite.prepare("DELETE FROM vehicle_service_records WHERE agency_id=? AND vehicle_id=?").run(context.agencyId,id);
       sqlite.prepare("DELETE FROM expenses WHERE agency_id=? AND (vehicle_id=? OR booking_id IN (SELECT id FROM bookings WHERE agency_id=? AND vehicle_id=?))").run(context.agencyId,id,context.agencyId,id);
       sqlite.prepare("DELETE FROM owner_payouts WHERE agency_id=? AND vehicle_id=?").run(context.agencyId,id);
       sqlite.prepare("DELETE FROM availability_blocks WHERE agency_id=? AND vehicle_id=?").run(context.agencyId,id);

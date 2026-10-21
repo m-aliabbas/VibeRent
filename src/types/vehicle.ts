@@ -1,3 +1,5 @@
+import type { OilChangeSummary } from "@/lib/oil-change";
+
 export type VehicleStatus =
   | "Available"
   | "Booked"
@@ -46,4 +48,5 @@ export type Vehicle = {
   rateRules?: VehicleRateRule[];
   /** Latest odometer captured at a check-out or check-in for this vehicle. */
   lastOdometer?: number;
+  oilChange?: OilChangeSummary;
 };
