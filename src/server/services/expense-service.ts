@@ -8,21 +8,29 @@ import { parseCreateExpenseInput } from "@/server/validation/expense";
 import type { ExpenseStatus } from "@/server/validation/expense";
 import { expenseStatuses } from "@/server/validation/expense";
 import { listExpenseCategories } from "@/server/services/catalog-service";
+import { listRecurringExpenses, postDueRecurringExpenses, type RecurringExpenseDto } from "@/server/services/recurring-expense-service";
 
-export type ExpenseDto = { id:string; amount:number; category:string; description:string; status:ExpenseStatus; occurredOn:string; version:number; createdAt:string; updatedAt:string; vehicleId:string|null; plate:string|null; bookingId:string|null; customerId:string|null; customer:string|null; ownerId:string|null; owner:string|null; receipt:boolean };
+export type ExpenseDto = { id:string; amount:number; category:string; description:string; status:ExpenseStatus; occurredOn:string; version:number; createdAt:string; updatedAt:string; vehicleId:string|null; plate:string|null; bookingId:string|null; customerId:string|null; customer:string|null; ownerId:string|null; owner:string|null; receipt:boolean; recurringExpenseId:string|null };
 export type ExpenseSaveResult = ExpenseDto & {replacesExpenseId?:string};
 export type ExpenseOption = { id:string; label:string };
 export type ExpenseBookingOption = ExpenseOption & { vehicleId:string|null; customerId:string };
-export type ExpenseWorkspaceData = { expenses:ExpenseDto[]; vehicles:ExpenseOption[]; bookings:ExpenseBookingOption[]; customers:ExpenseOption[]; owners:ExpenseOption[]; categories:ExpenseOption[] };
+export type ExpenseWorkspaceData = { expenses:ExpenseDto[]; vehicles:ExpenseOption[]; bookings:ExpenseBookingOption[]; customers:ExpenseOption[]; owners:ExpenseOption[]; categories:ExpenseOption[]; recurring:RecurringExpenseDto[] };
 
-const selectExpense = `SELECT e.id, e.amount, e.category, e.description, e.status, e.occurred_on AS occurredOn, e.version, e.created_at AS createdAt, e.updated_at AS updatedAt, e.vehicle_id AS vehicleId, v.plate, e.booking_id AS bookingId, e.customer_id AS customerId, c.name AS customer, e.owner_id AS ownerId, o.name AS owner, EXISTS(SELECT 1 FROM private_files pf WHERE pf.agency_id=e.agency_id AND pf.entity_type='expense' AND pf.entity_id=e.id AND pf.status='ready') AS receipt FROM expenses e LEFT JOIN vehicles v ON v.id=e.vehicle_id AND v.agency_id=e.agency_id LEFT JOIN customers c ON c.id=e.customer_id AND c.agency_id=e.agency_id LEFT JOIN owners o ON o.id=e.owner_id AND o.agency_id=e.agency_id`;
+const selectExpense = `SELECT e.id, e.amount, e.category, e.description, e.status, e.occurred_on AS occurredOn, e.version, e.created_at AS createdAt, e.updated_at AS updatedAt, e.vehicle_id AS vehicleId, v.plate, e.booking_id AS bookingId, e.customer_id AS customerId, c.name AS customer, e.owner_id AS ownerId, o.name AS owner, e.recurring_expense_id AS recurringExpenseId, EXISTS(SELECT 1 FROM private_files pf WHERE pf.agency_id=e.agency_id AND pf.entity_type='expense' AND pf.entity_id=e.id AND pf.status='ready') AS receipt FROM expenses e LEFT JOIN vehicles v ON v.id=e.vehicle_id AND v.agency_id=e.agency_id LEFT JOIN customers c ON c.id=e.customer_id AND c.agency_id=e.agency_id LEFT JOIN owners o ON o.id=e.owner_id AND o.agency_id=e.agency_id`;
 
 export async function listExpenses(context: RequestContext) {
   requireRole(context, ["agency_owner", "fleet_manager", "rental_agent", "accountant"]);
   return (await queryAll<ExpenseDto & {receipt:number|boolean}>(`${selectExpense} WHERE e.agency_id=? ORDER BY e.occurred_on DESC, e.created_at DESC`,[context.agencyId])).map(row=>({...row,receipt:Boolean(row.receipt)}));
 }
 
+export async function getExpenseById(agencyId: string, id: string): Promise<ExpenseDto> {
+  const row = await queryOne<ExpenseDto & { receipt: number | boolean }>(`${selectExpense} WHERE e.agency_id=? AND e.id=?`, [agencyId, id]);
+  if (!row) throw new DomainError("NOT_FOUND", "Expense not found.", 404);
+  return { ...row, receipt: Boolean(row.receipt) };
+}
+
 export async function getExpenseWorkspace(context: RequestContext): Promise<ExpenseWorkspaceData> {
+  await postDueRecurringExpenses(context.agencyId);
   const [expenses,vehicles,bookings,customers,owners,catalogs] = await Promise.all([
     listExpenses(context),
     queryAll<ExpenseOption>(`SELECT id, make || ' ' || model || ' · ' || plate AS label FROM vehicles WHERE agency_id=? AND archived_at IS NULL ORDER BY make,model,plate`,[context.agencyId]),
@@ -32,7 +40,7 @@ export async function getExpenseWorkspace(context: RequestContext): Promise<Expe
     listExpenseCategories(context),
   ]);
   const categories = catalogs.map(item => ({ id: item.id, label: item.name }));
-  return { expenses, vehicles, bookings, customers, owners, categories };
+  return { expenses, vehicles, bookings, customers, owners, categories, recurring: await listRecurringExpenses(context) };
 }
 
 export async function createExpense(context: RequestContext, rawInput: unknown) {
