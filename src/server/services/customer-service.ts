@@ -11,6 +11,8 @@ export type CustomerDto = { id: string; name: string; fatherName: string | null;
 
 export type CustomerDetailDto = CustomerDto & {
   lifetimeValue: number;
+  /** Paid above booking totals (overpayments not yet refunded). */
+  credit: number;
   lastRentalAt: string | null;
   bookings: Array<{ id: string; vehicle: string; plate: string; status: string; pickupAt: string; returnAt: string; totalAmount: number }>;
 };
@@ -58,9 +60,9 @@ export async function getCustomer(context: RequestContext, id: string) {
 
 export async function getCustomerDetail(context: RequestContext, id: string): Promise<CustomerDetailDto> {
   const customer = await getCustomer(context, id);
-  const bookings = await queryAll<{ id: string; vehicle: string; plate: string; status: string; pickupAt: string; returnAt: string; totalAmount: number; paid: number }>(`
+  const bookings = await queryAll<{ id: string; vehicle: string; plate: string; status: string; pickupAt: string; returnAt: string; totalAmount: number; paid: number; archivedAt: string | null }>(`
     SELECT bk.id, CASE WHEN bk.fulfillment_type='external' THEN bk.external_vehicle_make||' '||bk.external_vehicle_model||coalesce(' '||bk.external_vehicle_year,'') ELSE v.make||' '||v.model||' '||v.year END AS vehicle, coalesce(bk.external_vehicle_plate,v.plate) AS plate,
-      bk.status, bk.pickup_at AS pickupAt, bk.return_at AS returnAt, bk.total_amount AS totalAmount,
+      bk.status, bk.pickup_at AS pickupAt, bk.return_at AS returnAt, bk.total_amount AS totalAmount, bk.archived_at AS archivedAt,
       coalesce((SELECT sum(CASE WHEN lower(ft.kind) IN ('refund','reversal') THEN -ft.amount ELSE ft.amount END)
         FROM financial_transactions ft WHERE ft.agency_id=bk.agency_id AND ft.booking_id=bk.id AND ft.status='posted' AND lower(ft.kind) IN ('payment','late_return_charge','deposit_applied','reversal','refund')),0) AS paid
     FROM bookings bk
@@ -73,6 +75,7 @@ export async function getCustomerDetail(context: RequestContext, id: string): Pr
     bookingCount: bookings.length,
     lifetimeValue: bookings.filter(item => item.status === "completed").reduce((sum, item) => sum + item.totalAmount, 0),
     outstanding: bookings.filter(item => !["cancelled", "no_show"].includes(item.status)).reduce((sum, item) => sum + Math.max(0, item.totalAmount - item.paid), 0),
+    credit: bookings.filter(item => !item.archivedAt).reduce((sum, item) => sum + Math.max(0, item.paid - item.totalAmount), 0),
     lastRentalAt: bookings[0]?.returnAt ?? null,
     bookings: bookings.map(booking => ({ id: booking.id, vehicle: booking.vehicle, plate: booking.plate, status: booking.status, pickupAt: booking.pickupAt, returnAt: booking.returnAt, totalAmount: booking.totalAmount })),
   };

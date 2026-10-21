@@ -155,7 +155,8 @@ function PaymentDialog({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
 
-  const valid = Number.isInteger(amount) && amount > 0 && amount <= Math.max(balance, 0);
+  const valid = Number.isInteger(amount) && amount > 0;
+  const creditAmount = valid ? amount - Math.max(balance, 0) : 0;
 
   async function save() {
     if (!valid || pending) return;
@@ -211,9 +212,9 @@ function PaymentDialog({
         />
       </div>
 
-      {amount > balance && (
-        <p role="alert" className="mt-3 text-xs text-[#B42318]">
-          Overpayment is blocked; customer-credit policy is not enabled.
+      {creditAmount > 0 && (
+        <p role="status" className="mt-3 rounded-lg border border-[#B2DDFF] bg-[#F5FAFF] p-3 text-xs text-[#175CD3]">
+          {formatPkr(creditAmount)} more than the {balance > 0 ? `outstanding balance of ${formatPkr(balance)}` : "booking total"} will be held as credit for {customer}. Refund it from Finance if they want it back.
         </p>
       )}
 

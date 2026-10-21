@@ -76,18 +76,15 @@ if (computedBalance !== expectedBalance) {
   throw new Error(`Balance mismatch: expected ${expectedBalance}, got ${computedBalance}`);
 }
 
-// Test overpayment protection
-let overpaymentBlocked = false;
-try {
-  await recordBookingPayment(context, first.id, {
-    amount: computedBalance + 1000,
-    method: "Bank transfer",
-    reference: "OVERPAY",
-  });
-} catch (error) {
-  overpaymentBlocked = error instanceof DomainError && error.code === "VALIDATION_FAILED";
-}
-if (!overpaymentBlocked) throw new Error("Overpayment was not blocked.");
+// Overpayment is accepted and held as customer credit; reverse it so the rest of the check is unchanged.
+const overpaid = await recordBookingPayment(context, first.id, {
+  amount: computedBalance + 1000,
+  method: "Bank transfer",
+  reference: "OVERPAY",
+});
+const overpaymentTxn = overpaid.transactions?.find(t => t.reference === "OVERPAY" && t.status === "posted");
+if (!overpaymentTxn || overpaid.paid !== refreshed.paid + computedBalance + 1000) throw new Error("Overpayment was not accepted as customer credit.");
+await reverseBookingTransaction(context, first.id, { transactionId: overpaymentTxn.id, reason: "Overpayment check" });
 
 // Test reversal
 const paymentTxn = refreshed.transactions?.find(t => t.amount === paymentAmount && t.status === "posted");
@@ -170,7 +167,7 @@ console.log(JSON.stringify({
   paymentReceiptNumber: updatedWithPayment.paymentReceiptNumber,
   paymentReceiptIdempotent: true,
   refreshRetainedPaid: true,
-  overpaymentBlocked: true,
+  overpaymentAllowed: true,
   reversalWorked: true,
   fullyReversedStatusShown: true,
   reversalDetailsPreserved: true,
