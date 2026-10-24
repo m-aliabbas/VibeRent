@@ -6,7 +6,7 @@ import Image from "next/image";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Banknote, CalendarDays, Car, CheckCircle2, CircleAlert, ClipboardCheck, CreditCard, FileText, FileX2, MessageCircle, Pencil, Printer, Repeat2, ShieldCheck, Trash2, X, XCircle } from "lucide-react";
-import { amendBookingAction, archiveBookingAction, cancelBookingAction, checkOutRentalAction, markBookingErroneousAction, recordSourcePayoutAction, sendBookingAgreementAction } from "@/app/actions/bookings";
+import { amendBookingAction, archiveBookingAction, cancelBookingAction, checkOutRentalAction, editBookingAmountsAction, markBookingErroneousAction, recordSourcePayoutAction, sendBookingAgreementAction } from "@/app/actions/bookings";
 import { updateRentalTermsAction } from "@/app/actions/organization";
 import { Button } from "@/components/ui/button";
 import { FormCombobox } from "@/components/forms/form-combobox";
@@ -28,8 +28,8 @@ export function BookingDetail({initial,vehicles}:{initial:BookingListItem;vehicl
   const [notice,setNotice]=useState("");
   const [sendingAgreement,setSendingAgreement]=useState(false);
   const [downloadingAgreement,setDownloadingAgreement]=useState(false);
-  const [mode,setMode]=useState<"amend"|"cancel"|"delete"|"erroneous"|"checkout"|"extend"|"return"|"terms"|"source-payout">();
-  const total=booking.dailyRate*booking.days+booking.mileageRate*booking.estimatedKm+booking.extras-booking.discount;
+  const [mode,setMode]=useState<"amend"|"cancel"|"delete"|"erroneous"|"checkout"|"extend"|"return"|"terms"|"source-payout"|"edit-amounts">();
+  const total=booking.totalAmount;
   const balance=total-booking.paid;
   const financePurpose=["Cancelled","No Show"].includes(booking.status)?"settlement" as const:"default" as const;
   useEffect(()=>{let active=true;const action=new URLSearchParams(window.location.search).get("action");queueMicrotask(()=>{if(!active)return;if(action==="delete"&&["Confirmed","Cancelled","No Show"].includes(booking.status))setMode("delete");if(action==="cancel"&&["Confirmed","Checked Out"].includes(booking.status))setMode("cancel")});return()=>{active=false}},[booking.status]);
@@ -53,7 +53,7 @@ export function BookingDetail({initial,vehicles}:{initial:BookingListItem;vehicl
       </div>
     </section>
     <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">{[["Booking total",formatPkr(total)],["Paid",formatPkr(booking.paid)],balance<0?["Customer credit",formatPkr(-balance)]:["Balance",formatPkr(balance)],["Deposit",formatPkr(booking.deposit)]].map(([label,value])=><div key={label} className="rounded-xl border border-[#E8ECF2] bg-white p-4"><p className="text-xs text-[#667085]">{label}</p><p className="mt-2 text-lg font-bold">{value}</p></div>)}</section>
-    <div className="flex justify-end"><BookingFinance bookingId={booking.id} customer={booking.customer} balance={balance} depositHeld={booking.depositHeld ?? 0} transactions={booking.transactions ?? []} purpose={financePurpose} onChanged={(updated,message)=>{setBooking(updated);setNotice(message)}}/></div>
+    <div className="flex flex-wrap justify-end gap-2">{financePurpose==="default"&&<Button size="sm" variant="secondary" onClick={()=>setMode("edit-amounts")}><Pencil size={15}/>Edit amounts</Button>}<BookingFinance bookingId={booking.id} customer={booking.customer} balance={balance} depositHeld={booking.depositHeld ?? 0} transactions={booking.transactions ?? []} purpose={financePurpose} onChanged={(updated,message)=>{setBooking(updated);setNotice(message)}}/></div>
     <div className="grid gap-5 lg:grid-cols-2">
       <DetailPanel title="Reservation"><dl className="grid grid-cols-2 gap-4 text-sm"><Fact label="Pickup" value={formatDate(booking.pickupAt)}/><Fact label="Return" value={formatDate(booking.returnAt)}/><Fact label="Current branch" value={booking.city}/><Fact label="Going to" value={booking.destinationCity}/><Fact label="Daily rate" value={formatPkr(booking.dailyRate)}/><Fact label="Mileage pricing" value={booking.mileageRate?`${formatPkr(booking.mileageRate)}/km · ${booking.estimatedKm} km estimated`:"Not applied"}/><Fact label="Notes" value={booking.notes||"None"}/></dl></DetailPanel>
       <DetailPanel title="Readiness"><div className="space-y-3">{[["Customer identity","Verified"],["Driving license","Valid on file"],["Deposit",booking.paid>=booking.deposit?"Received":`${formatPkr(Math.max(0,booking.deposit-booking.paid))} still required`],["Vehicle availability","Reserved for this booking"]].map(([label,value],index)=><div key={label} className="flex gap-3 rounded-lg bg-[#F8FAFC] p-3"><span className={index===2&&booking.paid<booking.deposit?"text-[#B54708]":"text-[#067647]"}>{index===2?<CreditCard size={17}/>:<ShieldCheck size={17}/>}</span><div><p className="text-xs text-[#667085]">{label}</p><p className="text-sm font-semibold">{value}</p></div></div>)}</div></DetailPanel>
@@ -61,10 +61,11 @@ export function BookingDetail({initial,vehicles}:{initial:BookingListItem;vehicl
       <DetailPanel title="Vehicle information" action={booking.fulfillmentType==="fleet"?<Link href={`/vehicles/${booking.vehicleId}`} className="text-xs font-semibold text-[#006FE6] hover:underline">View vehicle</Link>:undefined}><dl className="grid grid-cols-2 gap-4 text-sm"><Fact label="Vehicle" value={booking.vehicle}/><Fact label="Registration" value={booking.plate}/><Fact label="Check-out odometer" value={inspectionValue(booking,"checkout")}/><Fact label="Return odometer" value={inspectionValue(booking,"checkin")}/></dl></DetailPanel>
     </div>
     {booking.fulfillmentType==="external"&&<DetailPanel title="External supplier"><dl className="grid gap-4 text-sm sm:grid-cols-2 lg:grid-cols-5"><Fact label="Supplier" value={booking.externalSupplierName||"Not recorded"}/><Fact label="Phone" value={booking.externalSupplierPhone||"Not recorded"}/><Fact label="Supplier payable" value={formatPkr(booking.supplierPayable??0)}/><Fact label="Paid to source" value={formatPkr(booking.supplierPaid??0)}/><Fact label="Agency commission" value={formatPkr(total-(booking.supplierPayable??0))}/></dl><div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#B2DDFF] bg-[#EFF8FF] p-3"><p className="text-xs text-[#175CD3]">Source payments are separate from agency expenses and remain linked to this rental.</p>{(booking.supplierBalance??0)>0&&["Checked Out","Completed"].includes(booking.status)&&<Button size="sm" onClick={()=>setMode("source-payout")}><Banknote size={15}/>Pay source · {formatPkr(booking.supplierBalance??0)}</Button>}</div>{booking.sourcePayouts?.length?<div className="mt-3 divide-y rounded-lg border bg-white">{booking.sourcePayouts.map(item=><div key={item.id} className="flex items-center justify-between gap-3 p-3 text-xs"><span><strong>{item.reference}</strong><span className="ml-2 text-[#667085]">{item.method.replaceAll("_"," ")} · {formatDate(item.paidAt)}</span></span><strong>{formatPkr(item.amount)}</strong></div>)}</div>:null}</DetailPanel>}
-    {booking.guarantor&&<DetailPanel title="Guarantor information"><dl className="grid gap-4 text-sm sm:grid-cols-2 lg:grid-cols-3"><Fact label="Name" value={booking.guarantor.name}/><Fact label="Parentage" value={booking.guarantor.parentage}/><Fact label="CNIC" value={formatCnic(booking.guarantor.cnic)}/><Fact label="Phone" value={booking.guarantor.phone}/><Fact label="Address" value={booking.guarantor.address}/><Fact label="Amount of car" value={formatPkr(booking.guarantor.carAmount)}/></dl></DetailPanel>}
+    {booking.guarantor&&<DetailPanel title="Guarantor information"><dl className="grid gap-4 text-sm sm:grid-cols-2 lg:grid-cols-3"><Fact label="Name" value={booking.guarantor.name}/><Fact label="Parentage" value={booking.guarantor.parentage||"Not provided"}/><Fact label="CNIC" value={booking.guarantor.cnic?formatCnic(booking.guarantor.cnic):"Not provided"}/><Fact label="Phone" value={booking.guarantor.phone||"Not provided"}/><Fact label="Address" value={booking.guarantor.address||"Not provided"}/><Fact label="Amount of car" value={booking.guarantor.carAmount?formatPkr(booking.guarantor.carAmount):"Not provided"}/></dl></DetailPanel>}
     <DetailPanel title="Rental terms & conditions"><TermsSnapshot value={booking.termsSnapshot}/></DetailPanel>
     <DetailPanel title="Activity"><Timeline items={[{id:"1",title:`Booking ${booking.status.toLowerCase()}`,detail:`${booking.customer} · ${formatPkr(total)}`,time:"Latest",icon:<CheckCircle2 size={16}/>},{id:"2",title:"Availability reserved",detail:`${booking.plate} assigned`,time:"At confirmation",icon:<Car size={16}/>} ]}/></DetailPanel>
     {mode==="amend"&&<AmendDialog booking={booking} vehicles={vehicles} onClose={()=>setMode(undefined)} onSave={next=>{setBooking(next);setMode(undefined);setNotice("Booking amended and availability atomically rechecked.")}}/>}
+    {mode==="edit-amounts"&&<EditAmountsDialog booking={booking} onClose={()=>setMode(undefined)} onSave={next=>{setBooking(next);setMode(undefined);setNotice("Booking amounts updated. Corrections were added to the ledger.")}}/>}
     {mode==="cancel"&&<CancelBookingDialog booking={booking} onClose={()=>setMode(undefined)} onSave={next=>{setBooking(next);setMode(undefined);setNotice(booking.status==="Checked Out"?"Rental cancelled and the vehicle released. Review and refund or reverse any posted finance.":"Booking cancelled. Review and reverse or refund any posted finance before deleting it.")}}/>}
     {mode==="erroneous"&&<ErroneousBookingDialog booking={booking} onClose={()=>setMode(undefined)} onDone={()=>{router.push("/bookings");router.refresh()}}/>}
     {mode==="checkout"&&<CheckoutDialog booking={booking} onClose={()=>setMode(undefined)} onSave={updated=>{setBooking(updated);setMode(undefined);setNotice(`Rental checkout saved. ${(updated as BookingListItem&{notificationDelivery:{message:string}}).notificationDelivery.message}`)}}/>}
@@ -74,6 +75,33 @@ export function BookingDetail({initial,vehicles}:{initial:BookingListItem;vehicl
     {mode==="source-payout"&&<SourcePayoutDialog booking={booking} onClose={()=>setMode(undefined)} onSave={next=>{setBooking(next);setMode(undefined);setNotice("Source payment posted to the rental ledger.")}}/>}
     {mode==="delete"&&<DeleteBookingDialog booking={booking} onClose={()=>setMode(undefined)} onChanged={(updated,message)=>{setBooking(updated);setNotice(message)}} onDeleted={()=>{router.push("/bookings");router.refresh()}}/>}
   </div>;
+}
+
+function EditAmountsDialog({booking,onClose,onSave}:{booking:BookingListItem;onClose:()=>void;onSave:(next:BookingListItem)=>void}) {
+  const [total,setTotal]=useState(String(booking.totalAmount));
+  const [paid,setPaid]=useState(String(booking.paid));
+  const [reason,setReason]=useState("");
+  const [pending,setPending]=useState(false);
+  const [error,setError]=useState("");
+  const totalValue=Number(total),paidValue=Number(paid);
+  const valid=total.trim()!==""&&paid.trim()!==""&&Number.isSafeInteger(totalValue)&&totalValue>=0&&Number.isSafeInteger(paidValue)&&paidValue>=0&&reason.trim().length>=5&&(totalValue!==booking.totalAmount||paidValue!==booking.paid);
+  async function save(){
+    if(!valid||pending)return;
+    setPending(true);setError("");
+    const result=await editBookingAmountsAction(booking.id,{total:totalValue,paid:paidValue,reason:reason.trim(),version:booking.version});
+    setPending(false);
+    if(result.ok)onSave(result.data);else setError(result.error.message);
+  }
+  return <SimpleDialog title="Edit booking amounts" description="Enter the corrected final amounts. The reason and changes will appear in the ledger." onClose={onClose}>
+    <div className="mt-5 grid gap-4 sm:grid-cols-3">
+      <FormInput label="Total (PKR)" type="number" min={0} step={1} value={total} onChange={e=>setTotal(e.target.value)}/>
+      <FormInput label="Paid (PKR)" type="number" min={0} step={1} value={paid} onChange={e=>setPaid(e.target.value)}/>
+      <FormInput label="Outstanding (PKR)" type="number" value={Number.isFinite(totalValue-paidValue)?totalValue-paidValue:""} readOnly hint="Calculated automatically"/>
+    </div>
+    <div className="mt-4"><FormInput label="Reason" value={reason} onChange={e=>setReason(e.target.value)} placeholder="e.g. Agreed discount or payment correction" required/></div>
+    {error&&<p role="alert" className="mt-3 rounded-lg bg-[#FEF3F2] p-3 text-sm text-[#B42318]">{error}</p>}
+    <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end"><Button variant="secondary" disabled={pending} onClick={onClose}>Cancel</Button><Button disabled={!valid||pending} onClick={()=>void save()}>{pending?"Saving…":"Save changes"}</Button></div>
+  </SimpleDialog>;
 }
 
 function SourcePayoutDialog({booking,onClose,onSave}:{booking:BookingListItem;onClose:()=>void;onSave:(next:BookingListItem)=>void}){const balance=booking.supplierBalance??0;const [amount,setAmount]=useState(balance);const [method,setMethod]=useState("bank_transfer");const [reference,setReference]=useState("");const [idempotencyKey]=useState(()=>crypto.randomUUID());const [pending,setPending]=useState(false);const [error,setError]=useState("");const valid=Number.isInteger(amount)&&amount>0&&amount<=balance&&Boolean(reference.trim());async function save(){if(!valid||pending)return;setPending(true);setError("");const result=await recordSourcePayoutAction(booking.id,{amount,method,reference,idempotencyKey});setPending(false);if(result.ok)onSave(result.data);else setError(result.error.message)}return <SimpleDialog title="Record source payment" description={`${booking.externalSupplierName??"External source"} · ${booking.vehicle} · remaining payable ${formatPkr(balance)}`} onClose={onClose}><div className="mt-5 grid gap-4 sm:grid-cols-2"><FormInput label="Amount (PKR)" type="number" min={1} max={balance} value={amount||""} onChange={e=>setAmount(Number(e.target.value))}/><FormSelect label="Method" value={method} onChange={e=>setMethod(e.target.value)} options={[{label:"Bank transfer",value:"bank_transfer"},{label:"Cash",value:"cash"},{label:"Cheque",value:"cheque"}]}/><div className="sm:col-span-2"><FormInput label="Reference" value={reference} onChange={e=>setReference(e.target.value)} placeholder="Transfer, cheque, or voucher reference" required/></div></div>{error&&<p role="alert" className="mt-3 rounded-lg bg-[#FEF3F2] p-3 text-sm text-[#B42318]">{error}</p>}<div className="mt-5 flex justify-end gap-2"><Button variant="secondary" disabled={pending} onClick={onClose}>Cancel</Button><Button disabled={!valid||pending} onClick={()=>void save()}>{pending?"Posting…":"Record source payment"}</Button></div></SimpleDialog>}

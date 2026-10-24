@@ -18,16 +18,15 @@ export async function saveDriver(context:RequestContext,raw:unknown):Promise<Dri
   requireRole(context,["agency_owner","fleet_manager"]);
   const input=raw as Partial<DriverDto>;const errors:Record<string,string>={};
   const name=input.name?.trim()??"",address=input.address?.trim()??"",licenseNumber=input.licenseNumber?.trim().toUpperCase()??"",cnic=(input.cnic??"").replace(/\D/g,"");
-  let phone="";try{phone=normalizePakistanPhone(input.phone??"")}catch{errors.phone="Enter a valid Pakistani mobile number."}
+  let phone="";if(input.phone?.trim())try{phone=normalizePakistanPhone(input.phone)}catch{errors.phone="Enter a valid Pakistani mobile number."}
   if(name.length<2)errors.name="Enter the driver's full name.";
-  if(cnic.length!==13)errors.cnic="Enter a 13-digit CNIC.";
-  if(address.length<5)errors.address="Enter the driver's address.";
-  if(!licenseNumber)errors.licenseNumber="Driving licence number is required.";
+  if(cnic.length!==0&&cnic.length!==13)errors.cnic="Enter a 13-digit CNIC, or leave it blank.";
+  if(address&&address.length<5)errors.address="Enter at least 5 address characters, or leave it blank.";
   if(Object.keys(errors).length)throw new DomainError("VALIDATION_FAILED","Review the driver details.",400,errors);
   const now=new Date().toISOString(),id=input.id?.trim()||`drv_${randomUUID()}`;
   const current=input.id?await queryOne("SELECT id FROM drivers WHERE agency_id=? AND id=? AND archived_at IS NULL",[context.agencyId,id]):null;
   if(input.id&&!current)throw new DomainError("NOT_FOUND","Driver not found.",404);
-  const duplicate=await queryOne(`SELECT id FROM drivers WHERE agency_id=? AND cnic_normalized=? AND id<>?`,[context.agencyId,cnic,id]);
+  const duplicate=cnic?await queryOne(`SELECT id FROM drivers WHERE agency_id=? AND cnic_normalized=? AND id<>?`,[context.agencyId,cnic,id]):undefined;
   if(duplicate)throw new DomainError("VALIDATION_FAILED","A driver with this CNIC already exists.",409,{cnic:"CNIC must be unique."});
   await inTransaction(async()=>{
     if(current)await execute("UPDATE drivers SET name=?,phone_normalized=?,cnic_normalized=?,address=?,license_number=?,license_expires_at=?,status=?,version=version+1,updated_at=? WHERE agency_id=? AND id=? AND archived_at IS NULL",[name,phone,cnic,address,licenseNumber,input.licenseExpiresAt||null,input.status==="inactive"?"inactive":"active",now,context.agencyId,id]);

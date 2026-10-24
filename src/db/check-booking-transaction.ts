@@ -1,6 +1,6 @@
 import { sqlite } from "@/db/connection";
 import { DomainError } from "@/server/domain/errors";
-import { archiveBooking, cancelBooking, checkInRental, confirmBooking, extendRental, getBooking, recordBookingPayment, recordSourcePayout, reverseBookingTransaction, startBooking } from "@/server/services/booking-service";
+import { archiveBooking, cancelBooking, checkInRental, confirmBooking, extendRental, getBooking, editBookingAmounts, recordBookingPayment, recordSourcePayout, reverseBookingTransaction, startBooking } from "@/server/services/booking-service";
 import type { RequestContext } from "@/server/context/request-context";
 
 const context: RequestContext = {
@@ -143,6 +143,11 @@ const completedLate=await checkInRental(context,immediate.id,{odometer:42120,fue
 if(completedLate.status!=="Completed"||completedLate.extras!==2500||completedLate.paid!==2500)throw new Error("Late-return charge was not added to booking extras and income.");
 const lateTransaction=completedLate.transactions?.find(item=>item.kind==="late_return_charge");
 if(!lateTransaction||!lateTransaction.reference.includes("Late return"))throw new Error("Late-return transaction details were not preserved.");
+const corrected=await editBookingAmounts(context,immediate.id,{total:completedLate.totalAmount-500,paid:completedLate.paid+300,reason:"Agreed correction",version:completedLate.version});
+if(corrected.totalAmount!==completedLate.totalAmount-500||corrected.paid!==completedLate.paid+300)throw new Error("Booking amount correction was not persisted.");
+if(!corrected.transactions?.some(item=>item.kind==="price_adjustment_decrease"&&item.reference.includes("Agreed correction"))||!corrected.transactions?.some(item=>item.kind==="payment_adjustment_increase"))throw new Error("Amount corrections were not added to the ledger.");
+const correctedAgain=await editBookingAmounts(context,immediate.id,{total:completedLate.totalAmount,paid:completedLate.paid,reason:"Restore test values",version:corrected.version});
+if(correctedAgain.totalAmount!==completedLate.totalAmount||correctedAgain.paid!==completedLate.paid)throw new Error("Reverse amount correction did not reconcile.");
 
 // Clean up test booking and related financial records
 sqlite.prepare("DELETE FROM financial_transactions WHERE booking_id = ?").run(first.id);

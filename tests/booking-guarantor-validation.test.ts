@@ -14,6 +14,11 @@ test("normalizes a complete guarantor snapshot",()=>{
   assert.deepEqual(parsed.guarantor,{name:"Bilal Ahmed",parentage:"Ahmed Raza",cnic:"3520212345679",phone:"03001234567",address:"Model Town, Lahore",carAmount:6500000});
 });
 
+test("accepts a guarantor with only a name",()=>{
+  const parsed=parseConfirmBookingInput({...base,guarantor:{name:" Bilal Ahmed ",parentage:"",cnic:"",phone:"",address:"",carAmount:0}});
+  assert.deepEqual(parsed.guarantor,{name:"Bilal Ahmed",parentage:"",cnic:"",phone:"",address:"",carAmount:0});
+});
+
 test("rejects a partially completed guarantor",()=>{
   assert.throws(()=>parseConfirmBookingInput({...base,guarantor:{name:"Bilal Ahmed",parentage:"",cnic:"35202",phone:"",address:"",carAmount:0}}),error=>{
     assert.equal((error as {code?:string}).code,"VALIDATION_FAILED");

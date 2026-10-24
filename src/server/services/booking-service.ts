@@ -42,10 +42,10 @@ export async function listBookings(context: RequestContext): Promise<BookingList
   const rows = await queryAll<BookingRow>(`
     SELECT bk.*, c.name AS customer, d.name AS driver, v.make, v.model, v.year, v.plate, br.city,
       coalesce((
-        SELECT sum(CASE WHEN lower(ft.kind) IN ('refund','reversal') THEN -ft.amount ELSE ft.amount END)
+        SELECT sum(CASE WHEN lower(ft.kind) IN ('refund','reversal','payment_adjustment_decrease') THEN -ft.amount ELSE ft.amount END)
         FROM financial_transactions ft
         WHERE ft.agency_id=bk.agency_id AND ft.booking_id=bk.id AND ft.status='posted'
-          AND lower(ft.kind) IN ('payment','late_return_charge','deposit_applied','reversal','refund')
+          AND lower(ft.kind) IN ('payment','late_return_charge','deposit_applied','payment_adjustment_increase','payment_adjustment_decrease','reversal','refund')
       ), 0) AS paid,
       coalesce((
         SELECT sum(CASE WHEN lower(ft.kind) IN ('deposit_refunded','deposit_applied','deposit_forfeited') THEN -ft.amount ELSE ft.amount END)
@@ -54,11 +54,11 @@ export async function listBookings(context: RequestContext): Promise<BookingList
           AND lower(ft.kind) IN ('deposit_received','deposit_refunded','deposit_applied','deposit_forfeited')
       ), 0) AS deposit_held,
       CASE
-        WHEN EXISTS(SELECT 1 FROM financial_transactions p WHERE p.agency_id=bk.agency_id AND p.booking_id=bk.id AND p.status='posted' AND lower(p.kind) IN ('payment','late_return_charge','deposit_applied'))
-          AND NOT EXISTS(SELECT 1 FROM financial_transactions p WHERE p.agency_id=bk.agency_id AND p.booking_id=bk.id AND p.status='posted' AND lower(p.kind) IN ('payment','late_return_charge','deposit_applied') AND NOT EXISTS(SELECT 1 FROM financial_transactions a WHERE a.agency_id=p.agency_id AND a.linked_transaction_id=p.id AND a.status='posted' AND lower(a.kind) IN ('reversal','refund')))
+        WHEN EXISTS(SELECT 1 FROM financial_transactions p WHERE p.agency_id=bk.agency_id AND p.booking_id=bk.id AND p.status='posted' AND lower(p.kind) IN ('payment','late_return_charge','deposit_applied','payment_adjustment_increase'))
+          AND NOT EXISTS(SELECT 1 FROM financial_transactions p WHERE p.agency_id=bk.agency_id AND p.booking_id=bk.id AND p.status='posted' AND lower(p.kind) IN ('payment','late_return_charge','deposit_applied','payment_adjustment_increase') AND NOT EXISTS(SELECT 1 FROM financial_transactions a WHERE a.agency_id=p.agency_id AND a.linked_transaction_id=p.id AND a.status='posted' AND lower(a.kind) IN ('reversal','refund')))
           THEN 'Payment reversed'
-        WHEN coalesce((SELECT sum(CASE WHEN lower(ft.kind) IN ('refund','reversal') THEN -ft.amount ELSE ft.amount END) FROM financial_transactions ft WHERE ft.agency_id=bk.agency_id AND ft.booking_id=bk.id AND ft.status='posted' AND lower(ft.kind) IN ('payment','late_return_charge','deposit_applied','reversal','refund')),0)>=bk.total_amount THEN 'Paid'
-        WHEN coalesce((SELECT sum(CASE WHEN lower(ft.kind) IN ('refund','reversal') THEN -ft.amount ELSE ft.amount END) FROM financial_transactions ft WHERE ft.agency_id=bk.agency_id AND ft.booking_id=bk.id AND ft.status='posted' AND lower(ft.kind) IN ('payment','late_return_charge','deposit_applied','reversal','refund')),0)>0 THEN 'Partially paid'
+        WHEN coalesce((SELECT sum(CASE WHEN lower(ft.kind) IN ('refund','reversal','payment_adjustment_decrease') THEN -ft.amount ELSE ft.amount END) FROM financial_transactions ft WHERE ft.agency_id=bk.agency_id AND ft.booking_id=bk.id AND ft.status='posted' AND lower(ft.kind) IN ('payment','late_return_charge','deposit_applied','payment_adjustment_increase','payment_adjustment_decrease','reversal','refund')),0)>=bk.total_amount THEN 'Paid'
+        WHEN coalesce((SELECT sum(CASE WHEN lower(ft.kind) IN ('refund','reversal','payment_adjustment_decrease') THEN -ft.amount ELSE ft.amount END) FROM financial_transactions ft WHERE ft.agency_id=bk.agency_id AND ft.booking_id=bk.id AND ft.status='posted' AND lower(ft.kind) IN ('payment','late_return_charge','deposit_applied','payment_adjustment_increase','payment_adjustment_decrease','reversal','refund')),0)>0 THEN 'Partially paid'
         ELSE 'Unpaid'
       END AS payment_state,
       coalesce((SELECT sum(sp.amount) FROM source_payouts sp WHERE sp.agency_id=bk.agency_id AND sp.booking_id=bk.id AND sp.status='posted'),0) AS supplier_paid
@@ -99,6 +99,7 @@ export async function listBookings(context: RequestContext): Promise<BookingList
       pickupAt: row.pickup_at,
       returnAt: row.return_at,
       dailyRate: row.daily_rate,
+      totalAmount: row.total_amount,
       days,
       extras: row.extras,
       discount: row.discount,
@@ -226,7 +227,7 @@ async function transitionRental(context: RequestContext, bookingId: string, kind
   return inTransaction(async () => {
     const booking = await queryOne<{ id: string; vehicleId: string|null; customerId: string; status: string; version: number; totalAmount: number; pickupAt:string; returnAt:string; dailyRate:number; mileageRate:number; estimatedKm:number; extras:number; discount:number; paid: number; fulfillmentType:"fleet"|"external"; supplierPricingMode:"percentage"|"fixed"|null; supplierSharePercent:number|null; supplierFixedCost:number|null; supplierPayable:number|null }>(`SELECT bk.id, bk.vehicle_id AS vehicleId, bk.customer_id AS customerId, bk.status, bk.version, bk.total_amount AS totalAmount,
       bk.pickup_at AS pickupAt,bk.return_at AS returnAt,bk.daily_rate AS dailyRate,bk.mileage_rate AS mileageRate,bk.estimated_km AS estimatedKm,bk.extras,bk.discount,bk.fulfillment_type AS fulfillmentType,bk.supplier_fixed_cost AS supplierFixedCost,bk.supplier_pricing_mode AS supplierPricingMode,bk.supplier_share_percent AS supplierSharePercent,bk.supplier_payable AS supplierPayable,
-      coalesce((SELECT sum(CASE WHEN lower(ft.kind) IN ('refund','reversal') THEN -ft.amount ELSE ft.amount END) FROM financial_transactions ft WHERE ft.agency_id=bk.agency_id AND ft.booking_id=bk.id AND ft.status='posted' AND lower(ft.kind) IN ('payment','late_return_charge','deposit_applied','reversal','refund')),0) AS paid
+      coalesce((SELECT sum(CASE WHEN lower(ft.kind) IN ('refund','reversal','payment_adjustment_decrease') THEN -ft.amount ELSE ft.amount END) FROM financial_transactions ft WHERE ft.agency_id=bk.agency_id AND ft.booking_id=bk.id AND ft.status='posted' AND lower(ft.kind) IN ('payment','late_return_charge','deposit_applied','payment_adjustment_increase','payment_adjustment_decrease','reversal','refund')),0) AS paid
       FROM bookings bk WHERE bk.agency_id=? AND bk.id=? LIMIT 1 /*postgres:for-update*/`,[context.agencyId, bookingId]);
     if (!booking) throw new DomainError("NOT_FOUND", "Booking not found.", 404);
     const expectedStatus = kind === "checkout" ? "confirmed" : "checked_out";
@@ -497,7 +498,7 @@ export async function archiveBooking(context:RequestContext, bookingId:string, r
   const reason=typeof rawReason==="string"?rawReason.trim():"";
   return inTransaction(async ()=>{
     const booking=await queryOne<{id:string;status:string;paid:number;held:number}>(`SELECT bk.id,bk.status,
-      coalesce((SELECT sum(CASE WHEN lower(ft.kind) IN ('refund','reversal') THEN -ft.amount ELSE ft.amount END) FROM financial_transactions ft WHERE ft.agency_id=bk.agency_id AND ft.booking_id=bk.id AND ft.status='posted' AND lower(ft.kind) IN ('payment','late_return_charge','deposit_applied','reversal','refund')),0) AS paid,
+      coalesce((SELECT sum(CASE WHEN lower(ft.kind) IN ('refund','reversal','payment_adjustment_decrease') THEN -ft.amount ELSE ft.amount END) FROM financial_transactions ft WHERE ft.agency_id=bk.agency_id AND ft.booking_id=bk.id AND ft.status='posted' AND lower(ft.kind) IN ('payment','late_return_charge','deposit_applied','payment_adjustment_increase','payment_adjustment_decrease','reversal','refund')),0) AS paid,
       coalesce((SELECT sum(CASE WHEN lower(ft.kind) IN ('deposit_refunded','deposit_applied','deposit_forfeited') THEN -ft.amount ELSE ft.amount END) FROM financial_transactions ft WHERE ft.agency_id=bk.agency_id AND ft.booking_id=bk.id AND ft.status='posted' AND lower(ft.kind) IN ('deposit_received','deposit_refunded','deposit_applied','deposit_forfeited')),0) AS held
       FROM bookings bk WHERE bk.agency_id=? AND bk.id=? AND bk.archived_at IS NULL LIMIT 1`,[context.agencyId,bookingId]);
     if(!booking) throw new DomainError("NOT_FOUND","Booking not found.",404);
@@ -528,13 +529,14 @@ export async function markBookingErroneous(context:RequestContext, bookingId:str
     if(typeof input.version==="number"&&input.version!==booking.version) throw new DomainError("VERSION_CONFLICT","The booking changed since it was loaded.",409);
     const now=new Date().toISOString();
     const open=await queryAll<{id:string;kind:string;amount:number;method:string}>(`SELECT ft.id,ft.kind,ft.amount,ft.method FROM financial_transactions ft
-      WHERE ft.agency_id=? AND ft.booking_id=? AND ft.status='posted' AND lower(ft.kind) NOT IN ('reversal','refund')
+      WHERE ft.agency_id=? AND ft.booking_id=? AND ft.status='posted' AND lower(ft.kind) NOT IN ('reversal','refund','price_adjustment_increase','price_adjustment_decrease')
         AND NOT EXISTS(SELECT 1 FROM financial_transactions adj WHERE adj.agency_id=ft.agency_id AND adj.linked_transaction_id=ft.id AND adj.status='posted')
       ORDER BY ft.posted_at`,[context.agencyId,bookingId]);
     const reversed:string[]=[];
     for(const original of open){
       const id=`TXN-${randomUUID().slice(0,8).toUpperCase()}`;
-      await execute(`INSERT INTO financial_transactions (id,agency_id,booking_id,customer_id,kind,amount,method,reference,idempotency_key,linked_transaction_id,status,actor_id,posted_at,created_at,updated_at) VALUES (?,?,?,?,'reversal',?,?,?,?,?,'posted',?,?,?,?)`,[id,context.agencyId,bookingId,booking.customerId,original.amount,original.method,`Erroneous booking: ${reason}`,`err_${original.id}`,original.id,context.userId,now,now,now]);
+      const correctionKind=original.kind==="payment_adjustment_decrease"?"payment_adjustment_increase":"reversal";
+      await execute(`INSERT INTO financial_transactions (id,agency_id,booking_id,customer_id,kind,amount,method,reference,idempotency_key,linked_transaction_id,status,actor_id,posted_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,'posted',?,?,?,?)`,[id,context.agencyId,bookingId,booking.customerId,correctionKind,original.amount,original.method,`Erroneous booking: ${reason}`,`err_${original.id}`,original.id,context.userId,now,now,now]);
       reversed.push(original.id);
     }
     const voidedPayouts=(await execute("UPDATE source_payouts SET status='voided',updated_at=? WHERE agency_id=? AND booking_id=? AND status='posted'",[now,context.agencyId,bookingId])).changes;
@@ -552,6 +554,45 @@ export async function getLastVehicleOdometer(agencyId:string, vehicleId:string|n
   return row?.odometer;
 }
 
+export async function editBookingAmounts(context: RequestContext, bookingId: string, rawInput: unknown) {
+  requireRole(context, ["agency_owner", "fleet_manager", "accountant"]);
+  const input = rawInput as { total?: number; paid?: number; reason?: string; version?: number } | null;
+  if (!input || !Number.isSafeInteger(input.total) || input.total! < 0 || !Number.isSafeInteger(input.paid) || input.paid! < 0 || typeof input.reason !== "string" || input.reason.trim().length < 5 || !Number.isSafeInteger(input.version)) {
+    throw new DomainError("VALIDATION_FAILED", "Enter valid whole PKR amounts and a reason of at least 5 characters.", 400);
+  }
+  return inTransaction(async () => {
+    const booking = await queryOne<{id:string;customerId:string;total:number;paid:number;version:number;status:string}>(`SELECT id,customer_id AS customerId,total_amount AS total,version,status,
+      coalesce((SELECT sum(CASE WHEN lower(ft.kind) IN ('refund','reversal','payment_adjustment_decrease') THEN -ft.amount ELSE ft.amount END)
+        FROM financial_transactions ft WHERE ft.agency_id=b.agency_id AND ft.booking_id=b.id AND ft.status='posted'
+        AND lower(ft.kind) IN ('payment','late_return_charge','deposit_applied','payment_adjustment_increase','payment_adjustment_decrease','reversal','refund')),0) AS paid
+      FROM bookings b WHERE agency_id=? AND id=? AND archived_at IS NULL LIMIT 1 /*postgres:for-update*/`,[context.agencyId, bookingId]);
+    if (!booking) throw new DomainError("NOT_FOUND", "Booking not found.", 404);
+    if (booking.version !== input.version) throw new DomainError("VERSION_CONFLICT", "Booking changed. Reload it and try again.", 409);
+    if (["draft", "cancelled", "no_show"].includes(booking.status)) throw new DomainError("INVALID_STATUS_TRANSITION", "This booking cannot be edited.", 409);
+    const total = input.total!;
+    const paid = input.paid!;
+    if (total === booking.total && paid === booking.paid) throw new DomainError("VALIDATION_FAILED", "Change Total or Paid before saving.", 400);
+    const now = new Date().toISOString();
+    const reason = input.reason!.trim();
+    const post = async (kind: string, amount: number, before: number, after: number) => {
+      await execute(`INSERT INTO financial_transactions (id,agency_id,booking_id,customer_id,kind,amount,method,reference,idempotency_key,status,actor_id,posted_at,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,'manual_correction',?,?,'posted',?,?,?,?)`, [`TXN-${randomUUID().slice(0,8).toUpperCase()}`,context.agencyId,bookingId,booking.customerId,kind,amount,`${reason} · ${before} → ${after}`,`edit_${randomUUID()}`,context.userId,now,now,now]);
+    };
+    if (total !== booking.total) {
+      const difference = total - booking.total;
+      await execute(`UPDATE bookings SET total_amount=?,extras=extras+?,discount=discount+? WHERE agency_id=? AND id=?`, [total,Math.max(0,difference),Math.max(0,-difference),context.agencyId,bookingId]);
+      await post(difference > 0 ? "price_adjustment_increase" : "price_adjustment_decrease",Math.abs(difference),booking.total,total);
+    }
+    if (paid !== booking.paid) {
+      const difference = paid - booking.paid;
+      await post(difference > 0 ? "payment_adjustment_increase" : "payment_adjustment_decrease",Math.abs(difference),booking.paid,paid);
+    }
+    await execute(`UPDATE bookings SET version=version+1,updated_at=? WHERE agency_id=? AND id=?`, [now,context.agencyId,bookingId]);
+    await execute(`INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)`, [randomUUID(),context.agencyId,context.userId,"booking.amounts_edited","booking",bookingId,JSON.stringify({previousTotal:booking.total,total,previousPaid:booking.paid,paid,previousOutstanding:booking.total-booking.paid,outstanding:total-paid,reason}),now]);
+    return await getBooking(context,bookingId);
+  },{immediate:true});
+}
+
 export async function recordBookingPayment(context: RequestContext, bookingId: string, rawInput: unknown) {
   requireRole(context, ["agency_owner", "fleet_manager", "rental_agent", "accountant"]);
   const input = parseRecordPaymentInput(rawInput);
@@ -559,10 +600,10 @@ export async function recordBookingPayment(context: RequestContext, bookingId: s
     const booking = await queryOne<{ id: string; customerId: string; status: string; totalAmount: number; paid: number }>(`
       SELECT bk.id, bk.customer_id AS customerId, bk.status, bk.total_amount AS totalAmount,
         coalesce((
-          SELECT sum(CASE WHEN lower(ft.kind) IN ('refund','reversal') THEN -ft.amount ELSE ft.amount END)
+          SELECT sum(CASE WHEN lower(ft.kind) IN ('refund','reversal','payment_adjustment_decrease') THEN -ft.amount ELSE ft.amount END)
           FROM financial_transactions ft
           WHERE ft.agency_id=bk.agency_id AND ft.booking_id=bk.id AND ft.status='posted'
-            AND lower(ft.kind) IN ('payment','late_return_charge','deposit_applied','reversal','refund')
+            AND lower(ft.kind) IN ('payment','late_return_charge','deposit_applied','payment_adjustment_increase','payment_adjustment_decrease','reversal','refund')
         ), 0) AS paid
       FROM bookings bk
       WHERE bk.agency_id=? AND bk.id=?
@@ -631,10 +672,10 @@ export async function recordBookingDeposit(context: RequestContext, bookingId: s
     const booking = await queryOne<{ id: string; customerId: string; status: string; totalAmount: number; paid: number; held: number }>(`
       SELECT bk.id, bk.customer_id AS customerId, bk.status, bk.total_amount AS totalAmount,
         coalesce((
-          SELECT sum(CASE WHEN lower(ft.kind) IN ('refund','reversal') THEN -ft.amount ELSE ft.amount END)
+          SELECT sum(CASE WHEN lower(ft.kind) IN ('refund','reversal','payment_adjustment_decrease') THEN -ft.amount ELSE ft.amount END)
           FROM financial_transactions ft
           WHERE ft.agency_id=bk.agency_id AND ft.booking_id=bk.id AND ft.status='posted'
-            AND lower(ft.kind) IN ('payment','late_return_charge','deposit_applied','reversal','refund')
+            AND lower(ft.kind) IN ('payment','late_return_charge','deposit_applied','payment_adjustment_increase','payment_adjustment_decrease','reversal','refund')
         ), 0) AS paid,
         coalesce((
           SELECT sum(CASE WHEN lower(ft.kind) IN ('deposit_refunded','deposit_applied','deposit_forfeited') THEN -ft.amount ELSE ft.amount END)
@@ -733,8 +774,8 @@ export async function reverseBookingTransaction(context: RequestContext, booking
     if (original.status !== "posted") {
       throw new DomainError("INVALID_STATUS_TRANSITION", "Only posted transactions can be reversed.", 409);
     }
-    if (["reversal", "refund"].includes(original.kind.toLowerCase())) {
-      throw new DomainError("INVALID_STATUS_TRANSITION", "Cannot reverse an existing reversal or refund transaction.", 409);
+    if (["reversal", "refund"].includes(original.kind.toLowerCase()) || original.kind.toLowerCase().includes("adjustment")) {
+      throw new DomainError("INVALID_STATUS_TRANSITION", "Use Edit amounts to correct an adjustment.", 409);
     }
     if (input.adjustmentType === "refund" && !["payment", "late_return_charge", "deposit_applied"].includes(original.kind.toLowerCase())) {
       throw new DomainError("INVALID_STATUS_TRANSITION", "Only a payment, late-return charge, or applied deposit can be refunded. Use Manage deposit for a held deposit.", 409);

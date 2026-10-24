@@ -6,6 +6,7 @@ import { getSessionViewer, getWebRequestContext } from "@/server/auth/session";
 import { getDashboard } from "@/server/services/dashboard-service";
 
 const actions = [
+  { title: "Legacy data entry", description: "Quickly import historical records and ledger entries", icon: FileText, href: "/legacy-entry" },
   { title: "Create New Booking", description: "Reserve a vehicle for a customer", icon: CalendarDays, href: "/bookings/new" },
   { title: "Add New Vehicle", description: "Add a vehicle to your fleet", icon: CarFront, href: "/vehicles" },
   { title: "Record Expense", description: "Log an expense or payment", icon: ReceiptText, href: "/expenses" },
