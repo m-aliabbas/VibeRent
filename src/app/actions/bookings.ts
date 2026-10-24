@@ -11,6 +11,7 @@ import {
   confirmBooking,
   createAvailabilityBlock,
   extendRental,
+  editBookingAmounts,
   listAvailabilityBlocks,
   listBookings,
   markBookingErroneous,
@@ -156,6 +157,17 @@ export async function checkOutRentalAction(bookingId: string, input: RentalInspe
 export async function checkInRentalAction(bookingId: string, input: CheckInRentalInput) {
   try { const context=await getWebRequestContext();const data=checkInRental(context,bookingId,input);const notificationDelivery=await deliverCheckinInvoice(context,bookingId);revalidatePath("/bookings");revalidatePath(`/bookings/${bookingId}`);revalidatePath("/");revalidatePath("/reports");return { ok: true as const, data:{...data,notificationDelivery} }; }
   catch (error) { const issue=asDomainError(error);return {ok:false as const,error:{code:issue.code,message:issue.message,fieldErrors:issue.fieldErrors??{}}}; }
+}
+
+export async function editBookingAmountsAction(bookingId:string,input:{total:number;paid:number;reason:string;version:number}) {
+  try {
+    const data=editBookingAmounts(await getWebRequestContext(),bookingId,input);
+    revalidatePath("/bookings");revalidatePath(`/bookings/${bookingId}`);revalidatePath("/");revalidatePath("/reports");revalidatePath("/customers");
+    return {ok:true as const,data};
+  } catch(error) {
+    const issue=asDomainError(error);
+    return {ok:false as const,error:{code:issue.code,message:issue.message,fieldErrors:issue.fieldErrors??{}}};
+  }
 }
 
 export async function recordBookingPaymentAction(bookingId: string, input: RecordPaymentInput) {

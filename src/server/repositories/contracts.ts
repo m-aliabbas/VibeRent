@@ -43,6 +43,7 @@ export type BookingListItem = {
   pickupAt: string;
   returnAt: string;
   dailyRate: number;
+  totalAmount: number;
   days: number;
   extras: number;
   discount: number;

@@ -62,7 +62,7 @@ type GuarantorDraft = GuarantorInput;
 
 function isGuarantorComplete(value: GuarantorDraft) {
   const cnic=value.cnic.replace(/\D/g,"");
-  return Boolean(value.name.trim() && value.parentage.trim() && (!cnic || /^\d{13}$/.test(cnic)) && /^(?:92|0)?3\d{9}$/.test(value.phone.replace(/\D/g,"")) && value.address.trim() && Number.isInteger(value.carAmount) && value.carAmount > 0);
+  return Boolean(value.name.trim() && (!value.parentage.trim() || value.parentage.trim().length >= 2) && (!cnic || /^\d{13}$/.test(cnic)) && (!value.phone.trim() || /^(?:92|0)?3\d{9}$/.test(value.phone.replace(/\D/g,""))) && (!value.address.trim() || value.address.trim().length >= 5) && Number.isInteger(value.carAmount) && value.carAmount >= 0);
 }
 
 // ─── Draft ──────────────────────────────────────────────────────────────────
@@ -524,7 +524,7 @@ function CustomerStep({ draft, setDraft, customers, bookingReference, onCustomer
   const selected = customers.find((c) => c.id === draft.customerId);
   const cnicDigits=customerCnic.replace(/\D/g,"");
   const matchedCnic=cnicDigits.length===13?customers.find(customer=>customer.cnic.replace(/\D/g,"")===cnicDigits):undefined;
-  const matches=customerSearch.trim()?customers.filter(customer=>`${customer.name} ${customer.phone} ${customer.cnic}`.toLowerCase().includes(customerSearch.trim().toLowerCase())).slice(0,8):customers.slice(0,8);
+  const matches=customerSearch.trim()?customers.filter(customer=>`${customer.name} ${customer.phone} ${customer.cnic}`.toLowerCase().includes(customerSearch.trim().toLowerCase())).slice(0,5):[];
   const existingCnic=showNewForm&&newForm.cnic.replace(/\D/g,"").length===13?customers.find(customer=>customer.cnic.replace(/\D/g,"")===newForm.cnic.replace(/\D/g,"")):undefined;
   function editExisting(customer:CustomerDto){setUpdatingCustomer(customer);setShowNewForm(true);setNewForm({name:customer.name,fatherName:customer.fatherName??"",phone:customer.phone,cnic:customer.cnic,email:customer.email??"",dateOfBirth:customer.dateOfBirth??"",address:customer.address??"",cnicExpiresAt:customer.cnicExpiresAt??"",licenseNumber:customer.licenseNumber??"",licenseExpiresAt:customer.licenseExpiresAt??""});}
 
@@ -614,24 +614,16 @@ function CustomerStep({ draft, setDraft, customers, bookingReference, onCustomer
       <div className="mt-4 space-y-4">
         <div className="rounded-xl border border-[#B2DDFF] bg-[#F5FAFF] p-4">
           <FormInput label="Customer ID card (CNIC)" inputMode="numeric" placeholder="35202-1234567-1" value={customerCnic} onChange={e=>setCustomerCnic(e.target.value)} />
-          {matchedCnic?<div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-sm"><span><strong>{matchedCnic.name}</strong> · {matchedCnic.phone}</span><Button type="button" size="sm" onClick={()=>{setDraft(current=>({...current,customerId:matchedCnic.id}));setCustomerSearch(matchedCnic.name);setShowNewForm(false)}}>Use this customer</Button></div>:cnicDigits.length===13?<div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-sm"><span>No customer has this CNIC.</span><Button type="button" size="sm" variant="secondary" onClick={()=>{setUpdatingCustomer(undefined);setNewForm(current=>({...current,cnic:cnicDigits}));setShowNewForm(true)}}>Add customer with this CNIC</Button></div>:<p className="mt-2 text-xs text-[#667085]">Enter 13 digits to find an existing customer before creating a new one.</p>}
+          {matchedCnic?<div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-sm"><span><strong>{matchedCnic.name}</strong> · {matchedCnic.phone}</span><Button type="button" size="sm" onClick={()=>{setDraft(current=>({...current,customerId:matchedCnic.id}));setCustomerSearch("");setShowNewForm(false)}}>Use this customer</Button></div>:cnicDigits.length===13?<div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-sm"><span>No customer has this CNIC.</span><Button type="button" size="sm" variant="secondary" onClick={()=>{setUpdatingCustomer(undefined);setNewForm(current=>({...current,cnic:cnicDigits}));setShowNewForm(true)}}>Add customer with this CNIC</Button></div>:<p className="mt-2 text-xs text-[#667085]">Enter 13 digits to find an existing customer before creating a new one.</p>}
         </div>
+        {selected && <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#B2DDFF] bg-[#EFF8FF] p-4 text-sm"><div><p className="text-xs font-semibold uppercase tracking-wide text-[#175CD3]">Selected customer</p><p className="mt-1 font-bold text-[#1D2939]">{selected.name}</p><p className="text-xs text-[#667085]">{selected.phone || "No phone"} · {selected.cnic || "No CNIC"} · {selected.status}{selected.status==="review"&&" · Manager review required"}</p></div><div className="flex flex-wrap gap-2"><Button type="button" size="sm" variant="secondary" onClick={()=>editExisting(selected)}>Update details</Button><Button type="button" size="sm" variant="secondary" onClick={()=>{setDraft(current=>({...current,customerId:""}));setCustomerSearch("")}}>Deselect customer</Button></div></div>}
         <FormInput
-          label="Existing customer"
+          label="Search existing customers"
           placeholder="Search name, phone or CNIC"
           value={customerSearch}
           onChange={(e) => setCustomerSearch(e.target.value)}
         />
-        <div className="max-h-52 overflow-y-auto rounded-xl border border-[#E4E7EC] bg-white p-1" role="listbox" aria-label="Customer matches">{matches.map(customer=><button key={customer.id} type="button" role="option" aria-selected={draft.customerId===customer.id} onClick={()=>{setDraft({...draft,customerId:customer.id});setCustomerSearch(`${customer.name} · ${customer.phone}`)}} className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm ${draft.customerId===customer.id?"bg-[#EFF8FF] text-[#0058B8]":"hover:bg-[#F8FAFC]"}`}><span><strong>{customer.name}</strong><span className="ml-2 text-xs text-[#667085]">{customer.phone} · {customer.cnic}</span></span><span className="text-xs capitalize">{customer.status}</span></button>)}{!matches.length&&<p className="p-3 text-sm text-[#667085]">No existing customer matches your search.</p>}</div>
-
-        {/* Selected customer info */}
-        {selected && (
-          <div className={`rounded-lg border p-3 text-sm ${selected.status === "review" ? "border-[#FEDF89] bg-[#FFFAEB] text-[#93370D]" : "border-[#ABEFC6] bg-[#ECFDF3] text-[#067647]"}`}>
-            <strong>{selected.name} · {selected.status}</strong>
-            <p className="mt-1 text-xs">CNIC on file{selected.status === "review" ? " · Manager review required" : ""}</p>
-            <Button type="button" size="sm" variant="secondary" className="mt-2" onClick={()=>editExisting(selected)}>Update customer details</Button>
-          </div>
-        )}
+        {customerSearch.trim()&&<div className="max-h-52 overflow-y-auto rounded-xl border border-[#E4E7EC] bg-white p-1" aria-label="Customer suggestions">{matches.map(customer=><button key={customer.id} type="button" role="option" aria-selected={draft.customerId===customer.id} onClick={()=>{setDraft({...draft,customerId:customer.id});setCustomerSearch("")}} className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm ${draft.customerId===customer.id?"bg-[#EFF8FF] text-[#0058B8]":"hover:bg-[#F8FAFC]"}`}><span><strong>{customer.name}</strong><span className="ml-2 text-xs text-[#667085]">{customer.phone} · {customer.cnic}</span></span><span className="text-xs capitalize">{customer.status}</span></button>)}{!matches.length&&<p className="p-3 text-sm text-[#667085]">No existing customer matches your search.</p>}</div>}
 
         {bookingReference&&<CnicDocumentDrawer
           label="CNIC documents"
@@ -759,13 +751,13 @@ function GuarantorSection({draft,setDraft,bookingReference}:{draft:Draft;setDraf
     {bookingReference&&<div className="mt-4"><CnicDocumentDrawer label="Guarantor CNIC" subjectLabel="guarantor" intake={intake} loading={loading} uploading={uploading} error={error} onRefresh={()=>void refresh()} onUpload={(side,file)=>void upload(side,file)}/></div>}
     <div className="mt-4 grid gap-3 sm:grid-cols-2">
       <FormInput label="Name" required value={guarantor.name} onChange={e=>update({name:e.target.value})}/>
-      <FormInput label="Parentage" required value={guarantor.parentage} onChange={e=>update({parentage:e.target.value})}/>
+      <FormInput label="Parentage" value={guarantor.parentage} onChange={e=>update({parentage:e.target.value})}/>
       <FormInput label="CNIC (optional)" placeholder="35202-1234567-1" value={guarantor.cnic} onChange={e=>update({cnic:e.target.value})}/>
-      <FormInput label="Phone" required type="tel" placeholder="03001234567" value={guarantor.phone} onChange={e=>update({phone:e.target.value})}/>
-      <FormInput label="Amount of car (PKR)" required type="number" min={1} value={guarantor.carAmount||""} onChange={e=>update({carAmount:Number(e.target.value)})}/>
-      <label className="text-sm font-semibold text-[#344054] sm:col-span-2">Address *<textarea required className="mt-1.5 min-h-20 w-full rounded-[9px] border border-[#D0D5DD] bg-white px-3 py-2 text-sm font-normal outline-none focus:border-[#006FE6] focus:ring-2 focus:ring-[#006FE6]/10" value={guarantor.address} onChange={e=>update({address:e.target.value})} placeholder="Address printed on CNIC"/></label>
+      <FormInput label="Phone" type="tel" placeholder="03001234567" value={guarantor.phone} onChange={e=>update({phone:e.target.value})}/>
+      <FormInput label="Amount of car (PKR)" type="number" min={0} value={guarantor.carAmount||""} onChange={e=>update({carAmount:Number(e.target.value)})}/>
+      <label className="text-sm font-semibold text-[#344054] sm:col-span-2">Address<textarea className="mt-1.5 min-h-20 w-full rounded-[9px] border border-[#D0D5DD] bg-white px-3 py-2 text-sm font-normal outline-none focus:border-[#006FE6] focus:ring-2 focus:ring-[#006FE6]/10" value={guarantor.address} onChange={e=>update({address:e.target.value})} placeholder="Address printed on CNIC"/></label>
     </div>
-    {!isGuarantorComplete(guarantor)&&<p className="mt-3 text-xs text-[#B54708]">Complete the required guarantor fields to continue. CNIC is optional.</p>}
+    {!isGuarantorComplete(guarantor)&&<p className="mt-3 text-xs text-[#B54708]">Enter a guarantor name. Any other details provided must be valid.</p>}
     {isGuarantorComplete(guarantor)&&<div className="mt-3"><Button type="button" size="sm" variant="secondary" disabled={savingGuarantor} onClick={()=>void saveToDirectory()}>{savingGuarantor?"Saving…":"Save guarantor for future bookings"}</Button></div>}
     {guarantorNotice&&<p role="status" className="mt-2 text-xs text-[#475467]">{guarantorNotice}</p>}
   </section>;

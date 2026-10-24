@@ -14,7 +14,7 @@ export function guarantorFields(guarantor:AgreementGuarantor) {
     { en: "CNIC", ur: "شناختی کارڈ", value: formatCnic(guarantor.cnic) },
     { en: "Phone", ur: "فون", value: guarantor.phone },
     { en: "Address", ur: "پتہ", value: guarantor.address },
-    { en: "Amount of car", ur: "گاڑی کی رقم", value: `PKR ${guarantor.carAmount.toLocaleString("en-PK")}` },
+    { en: "Amount of car", ur: "گاڑی کی رقم", value: guarantor.carAmount ? `PKR ${guarantor.carAmount.toLocaleString("en-PK")}` : "" },
   ] as const;
 }
 

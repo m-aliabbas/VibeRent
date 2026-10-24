@@ -20,12 +20,12 @@ export function saveGuarantor(context:RequestContext,raw:unknown):GuarantorDto {
   const input=raw as Partial<GuarantorDto>;
   const errors:Record<string,string>={};
   const name=input.name?.trim()??"", parentage=input.parentage?.trim()??"", address=input.address?.trim()??"", cnic=(input.cnic??"").replace(/\D/g,"");
-  let phone="";try{phone=normalizePakistanPhone(input.phone??"")}catch{errors.phone="Enter a valid Pakistani mobile number."}
+  let phone="";if(input.phone?.trim())try{phone=normalizePakistanPhone(input.phone)}catch{errors.phone="Enter a valid Pakistani mobile number."}
   if(name.length<2)errors.name="Enter the guarantor's name.";
-  if(parentage.length<2)errors.parentage="Enter parentage.";
+  if(parentage&&parentage.length<2)errors.parentage="Enter at least 2 parentage characters, or leave it blank.";
   if(cnic.length!==0&&cnic.length!==13)errors.cnic="Enter a 13-digit CNIC, or leave it blank.";
-  if(address.length<5)errors.address="Enter the address.";
-  if(!Number.isInteger(input.carAmount)||input.carAmount!<=0)errors.carAmount="Enter a positive whole PKR amount.";
+  if(address&&address.length<5)errors.address="Enter at least 5 address characters, or leave it blank.";
+  if(input.carAmount!==undefined&&(!Number.isInteger(input.carAmount)||input.carAmount<0))errors.carAmount="Enter a non-negative whole PKR amount.";
   if(Object.keys(errors).length)throw new DomainError("VALIDATION_FAILED","Review the guarantor details.",400,errors);
   const id=input.id?.trim()||`gtr_${randomUUID()}`;
   return sqlite.transaction(()=>{
@@ -34,8 +34,8 @@ export function saveGuarantor(context:RequestContext,raw:unknown):GuarantorDto {
     const duplicate=cnic?sqlite.prepare("SELECT id FROM guarantors WHERE agency_id=? AND cnic_normalized=? AND id<>?").get(context.agencyId,cnic,id):undefined;
     if(duplicate)throw new DomainError("VALIDATION_FAILED","A guarantor with this CNIC already exists.",409,{cnic:"CNIC must be unique."});
     const now=new Date().toISOString();
-    if(current)sqlite.prepare("UPDATE guarantors SET name=?,parentage=?,cnic_normalized=?,phone_normalized=?,address=?,car_amount=?,updated_at=? WHERE agency_id=? AND id=?").run(name,parentage,cnic||null,phone,address,input.carAmount,now,context.agencyId,id);
-    else sqlite.prepare("INSERT INTO guarantors (id,agency_id,name,parentage,cnic_normalized,phone_normalized,address,car_amount,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)").run(id,context.agencyId,name,parentage,cnic||null,phone,address,input.carAmount,now,now);
+    if(current)sqlite.prepare("UPDATE guarantors SET name=?,parentage=?,cnic_normalized=?,phone_normalized=?,address=?,car_amount=?,updated_at=? WHERE agency_id=? AND id=?").run(name,parentage,cnic||null,phone,address,input.carAmount??0,now,context.agencyId,id);
+    else sqlite.prepare("INSERT INTO guarantors (id,agency_id,name,parentage,cnic_normalized,phone_normalized,address,car_amount,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)").run(id,context.agencyId,name,parentage,cnic||null,phone,address,input.carAmount??0,now,now);
     sqlite.prepare("INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)").run(randomUUID(),context.agencyId,context.userId,current?"guarantor.updated":"guarantor.created","guarantor",id,JSON.stringify({name}),now);
     return sqlite.prepare(`${select} WHERE agency_id=? AND id=?`).get(context.agencyId,id) as GuarantorDto;
   })();

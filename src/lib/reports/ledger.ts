@@ -1,6 +1,7 @@
 export type LedgerEntryKind =
   | "Opening owner balance"
   | "Rental income"
+  | "Booking adjustment"
   | "Expense"
   | "Owner settlement"
   | "Source settlement";

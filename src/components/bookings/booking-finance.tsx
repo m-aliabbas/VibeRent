@@ -374,7 +374,7 @@ function LedgerDialog({
         ) : (
           transactions.map((item) => {
             const kind = item.kind.toLowerCase();
-            const isNegative = ["reversal", "refund"].includes(kind);
+            const isNegative = ["reversal", "refund", "payment_adjustment_decrease", "price_adjustment_decrease"].includes(kind);
             const canAdjust = item.status === "posted" && ["payment", "late_return_charge", "deposit_applied"].includes(kind);
             const original = item.linkedTransactionId
               ? transactions.find((transaction) => transaction.id === item.linkedTransactionId)

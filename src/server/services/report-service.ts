@@ -129,11 +129,12 @@ export function getReports(context: RequestContext): ReportsData {
   const completedBookings = bookings.filter((row) => row.status === "completed");
   const approvedCosts = costs.filter((row) => row.status === "approved");
   const ledgerEntries: LedgerEntry[] = [
-    ...transactions.filter(row=>{const kind=row.kind.toLowerCase();return row.status==="posted"&&(["payment","late_return_charge","deposit_applied","deposit_forfeited"].includes(kind)||(["refund","reversal"].includes(kind)&&["payment","late_return_charge","deposit_applied","deposit_forfeited"].includes(row.originalKind?.toLowerCase()??"")))}).map((transaction) => {
+    ...transactions.filter(row=>{const kind=row.kind.toLowerCase();return row.status==="posted"&&(["payment","late_return_charge","deposit_applied","deposit_forfeited","payment_adjustment_increase","payment_adjustment_decrease","price_adjustment_increase","price_adjustment_decrease"].includes(kind)||(["refund","reversal"].includes(kind)&&["payment","late_return_charge","deposit_applied","deposit_forfeited"].includes(row.originalKind?.toLowerCase()??"")))}).map((transaction) => {
       const row=transaction.bookingId?bookingById.get(transaction.bookingId):undefined;
       const vehicle = row?.vehicleId?vehicleById.get(row.vehicleId):undefined;
       const owner = row?.ownerId ? ownerById.get(row.ownerId) : undefined;
-      const amount=["refund","reversal"].includes(transaction.kind.toLowerCase())?-transaction.amount:transaction.amount;
+      const isPriceAdjustment=transaction.kind.startsWith("price_adjustment_");
+      const amount=isPriceAdjustment?0:["refund","reversal","payment_adjustment_decrease"].includes(transaction.kind.toLowerCase())?-transaction.amount:transaction.amount;
       return {
         id: `TXN-${transaction.id}`,
         date: transaction.date.slice(0,10),
@@ -143,9 +144,9 @@ export function getReports(context: RequestContext): ReportsData {
         ownership: vehicle?.ownerId||row?.fulfillmentType==="external" ? "Managed" as const : "Owned" as const,
         ownerId: row?.ownerId??null,
         owner: owner?.name??row?.externalSupplierName??null,
-        kind: "Rental income" as const,
+        kind: isPriceAdjustment ? "Booking adjustment" as const : "Rental income" as const,
         reference: transaction.reference||transaction.id,
-        description: `${transaction.kind.replaceAll("_"," ")} · ${transaction.method}`,
+        description: `${transaction.kind.replaceAll("_"," ")} · PKR ${transaction.amount.toLocaleString("en-PK")} · ${transaction.reference || transaction.method}`,
         income: amount,
         expense: 0,
         ownerMovement: 0,

@@ -62,11 +62,11 @@ function parseGuarantor(value: unknown, errors: Record<string, string>): Guarant
   const phone = normalizePhone(input.phone ?? "");
   const address = input.address?.trim() ?? "";
   if (!name) errors["guarantor.name"] = "Enter the guarantor name.";
-  if (!parentage) errors["guarantor.parentage"] = "Enter the guarantor parentage.";
+  if (parentage && parentage.length < 2) errors["guarantor.parentage"] = "Enter at least 2 parentage characters.";
   if (cnic && !/^\d{13}$/.test(cnic)) errors["guarantor.cnic"] = "Enter a valid 13-digit CNIC, or leave it blank.";
-  if (!/^(?:92|0)?3\d{9}$/.test(phone)) errors["guarantor.phone"] = "Enter a valid Pakistani mobile number.";
-  if (!address) errors["guarantor.address"] = "Enter the guarantor address.";
-  if (!Number.isInteger(input.carAmount) || (input.carAmount ?? 0) <= 0) errors["guarantor.carAmount"] = "Enter a positive whole PKR amount.";
+  if (phone && !/^(?:92|0)?3\d{9}$/.test(phone)) errors["guarantor.phone"] = "Enter a valid Pakistani mobile number.";
+  if (address && address.length < 5) errors["guarantor.address"] = "Enter at least 5 address characters.";
+  if (input.carAmount !== undefined && (!Number.isInteger(input.carAmount) || input.carAmount < 0)) errors["guarantor.carAmount"] = "Enter a non-negative whole PKR amount.";
   return { name, parentage, cnic, phone, address, carAmount: input.carAmount ?? 0 };
 }
 

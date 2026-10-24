@@ -103,7 +103,7 @@ export async function getRentalAgreementPrintData(context:RequestContext,booking
     agency:{name:row.agency,phone:row.agencyPhone,email:row.agencyEmail,address:row.agencyAddress,registrationNumber:row.registrationNumber,taxNumber:row.taxNumber,logo:row.logo},
     config,
     sections,
-    guarantor:hasGuarantor(row)?guarantorFields({name:row.guarantorName!,parentage:row.guarantorParentage!,cnic:row.guarantorCnic!,phone:row.guarantorPhone!,address:row.guarantorAddress!,carAmount:row.guarantorCarAmount!}).map(item=>({labelEn:item.en,labelUr:item.ur,value:item.value})):null,
+    guarantor:hasGuarantor(row)?guarantorFields({name:row.guarantorName!,parentage:row.guarantorParentage??"",cnic:row.guarantorCnic??"",phone:row.guarantorPhone??"",address:row.guarantorAddress??"",carAmount:row.guarantorCarAmount??0}).map(item=>({labelEn:item.en,labelUr:item.ur,value:item.value})):null,
     termsText:termsImageId?"":resolveTermsSnapshot(row.terms,config),
     termsImageUrl:termsImageId?`/api/v1/files/${termsImageId}`:null,
   };
@@ -253,7 +253,7 @@ function renderGuarantorSection(doc: PDFKit.PDFDocument, fonts: PdfFonts, row:Ag
   const fieldWidth = (contentWidth - gap * (columns - 1)) / columns;
   const rowHeight = compactImageLayout ? 21 : config.density === "compact" ? 23 : 25;
   const baseY = y + (compactImageLayout ? 17 : 20);
-  const fields=guarantorFields({name:row.guarantorName!,parentage:row.guarantorParentage!,cnic:row.guarantorCnic!,phone:row.guarantorPhone!,address:row.guarantorAddress!,carAmount:row.guarantorCarAmount!});
+  const fields=guarantorFields({name:row.guarantorName!,parentage:row.guarantorParentage??"",cnic:row.guarantorCnic??"",phone:row.guarantorPhone??"",address:row.guarantorAddress??"",carAmount:row.guarantorCarAmount??0});
   fields.forEach((item, index) => {
     const column = index % columns;
     const line = Math.floor(index / columns);
@@ -354,7 +354,7 @@ function resolveTermsSnapshot(snapshot: string, config: AgreementDesignConfig) {
 }
 
 function parseConfig(value: string | null) { try { return value ? JSON.parse(value) : undefined; } catch { return undefined; } }
-function hasGuarantor(row:AgreementRow) { return Boolean(row.guarantorName&&row.guarantorParentage&&row.guarantorCnic&&row.guarantorPhone&&row.guarantorAddress&&row.guarantorCarAmount); }
+function hasGuarantor(row:AgreementRow) { return Boolean(row.guarantorName); }
 function field(en: string, ur: string, value: string) { return { en, ur, value }; }
 function formatCnic(value: string) { const digits=value.replace(/\D/g,"");return digits.length===13?`${digits.slice(0,5)}-${digits.slice(5,12)}-${digits.slice(12)}`:value||"Not recorded"; }
 function money(value: number) { return `PKR ${value.toLocaleString("en-PK")}`; }
