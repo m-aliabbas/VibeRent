@@ -1,6 +1,6 @@
 {
   "name": "viberent",
-  "version": "1.0.18",
+  "version": "1.0.19",
   "private": true,
   "scripts": {
     "predev": "npm run db:migrate",
@@ -29,6 +29,7 @@
     "db:check:agency-backup": "NODE_OPTIONS=--conditions=react-server tsx src/db/check-agency-portable-backup.ts",
     "db:check:postgres": "NODE_OPTIONS=--conditions=react-server tsx src/db/check-postgres.ts",
     "db:check:desktop-backup": "node scripts/check-desktop-backup.mjs",
+    "db:check:desktop-upgrade": "node scripts/check-desktop-migration-upgrade.mjs",
     "db:studio": "drizzle-kit studio",
     "desktop": "tauri",
     "desktop:dev": "tauri dev",

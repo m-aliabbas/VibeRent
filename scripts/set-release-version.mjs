@@ -20,4 +20,11 @@ tauri.version = version;
 fs.writeFileSync(tauriPath, `${JSON.stringify(tauri, null, 2)}\n`);
 const cargoPath = path.join(root, "src-tauri", "Cargo.toml");
 fs.writeFileSync(cargoPath, fs.readFileSync(cargoPath, "utf8").replace(/^version\s*=\s*"[^"]+"/m, `version = "${version}"`));
-console.log(`Set VibeRent release version to ${version}. Run cargo check to refresh Cargo.lock.`);
+const cargoLockPath = path.join(root, "src-tauri", "Cargo.lock");
+const cargoLock = fs.readFileSync(cargoLockPath, "utf8");
+const updatedCargoLock = cargoLock.replace(/(\[\[package\]\]\s+name = "viberent"\s+version = ")[^"]+("\s+)/, (_, prefix, suffix) => `${prefix}${version}${suffix}`);
+if (updatedCargoLock === cargoLock && !cargoLock.includes(`name = "viberent"\nversion = "${version}"`)) {
+  throw new Error("Could not find the VibeRent package in Cargo.lock.");
+}
+fs.writeFileSync(cargoLockPath, updatedCargoLock);
+console.log(`Set VibeRent release version to ${version}.`);

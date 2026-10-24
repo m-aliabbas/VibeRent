@@ -4,7 +4,6 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 
 const root = mkdtempSync(path.join(os.tmpdir(), "viberent-desktop-check-"));
-const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 mkdirSync(path.join(root, "data"), { recursive: true });
 const environment = {
   ...process.env,
@@ -18,19 +17,20 @@ const environment = {
 };
 
 function run(args) {
-  const result = spawnSync(npm, args, { cwd: process.cwd(), env: environment, encoding: "utf8" });
+  const result = spawnSync(process.execPath, ["--import", "tsx", ...args], { cwd: process.cwd(), env: environment, encoding: "utf8" });
   if (result.status !== 0) {
     process.stderr.write(result.stdout || "");
     process.stderr.write(result.stderr || "");
-    throw new Error(`${npm} ${args.join(" ")} failed.`);
+    throw new Error(`node --import tsx ${args.join(" ")} failed.`);
   }
 }
 
 try {
-  run(["run", "db:migrate"]);
-  run(["run", "db:seed"]);
-  run(["exec", "--", "tsx", "src/db/check-desktop-backup.ts", "prepare"]);
-  run(["exec", "--", "tsx", "src/db/check-desktop-backup.ts", "apply"]);
+  const migration = spawnSync(process.execPath, ["scripts/migrate-safe.mjs"], { cwd: process.cwd(), env: environment, encoding: "utf8" });
+  if (migration.status !== 0) throw new Error(`${migration.stdout}\n${migration.stderr}`);
+  run(["src/db/seed.ts"]);
+  run(["src/db/check-desktop-backup.ts", "prepare"]);
+  run(["src/db/check-desktop-backup.ts", "apply"]);
   console.log(JSON.stringify({ ok: true, archiveCreated: true, restoreStaged: true, restoreAppliedOnRestart: true, privateFilesRestored: true }, null, 2));
 } finally {
   rmSync(root, { recursive: true, force: true });

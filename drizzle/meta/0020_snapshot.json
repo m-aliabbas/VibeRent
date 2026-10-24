@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "d496b089-253b-43b2-ad5b-9dc05c958d16",
+  "id": "839fb91c-5810-4270-a955-56e12af2772b",
   "prevId": "40e1d30e-daf7-481b-a080-95655f1e234f",
   "tables": {
     "account": {
@@ -2085,6 +2085,124 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
+    "guarantors": {
+      "name": "guarantors",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "agency_id": {
+          "name": "agency_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "parentage": {
+          "name": "parentage",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "cnic_normalized": {
+          "name": "cnic_normalized",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "phone_normalized": {
+          "name": "phone_normalized",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "address": {
+          "name": "address",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "car_amount": {
+          "name": "car_amount",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "archived_at": {
+          "name": "archived_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "guarantors_agency_cnic_uq": {
+          "name": "guarantors_agency_cnic_uq",
+          "columns": [
+            "agency_id",
+            "cnic_normalized"
+          ],
+          "isUnique": true
+        },
+        "guarantors_agency_name_idx": {
+          "name": "guarantors_agency_name_idx",
+          "columns": [
+            "agency_id",
+            "name"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "guarantors_agency_id_agencies_id_fk": {
+          "name": "guarantors_agency_id_agencies_id_fk",
+          "tableFrom": "guarantors",
+          "tableTo": "agencies",
+          "columnsFrom": [
+            "agency_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
     "invitation": {
       "name": "invitation",
       "columns": {
@@ -2248,90 +2366,6 @@
             "id"
           ],
           "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {}
-    },
-    "legacy_import_records": {
-      "name": "legacy_import_records",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "agency_id": {
-          "name": "agency_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "source_agency_id": {
-          "name": "source_agency_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "source_table": {
-          "name": "source_table",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "source_id": {
-          "name": "source_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "row_json": {
-          "name": "row_json",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "imported_at": {
-          "name": "imported_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "legacy_import_records_source_uq": {
-          "name": "legacy_import_records_source_uq",
-          "columns": [
-            "agency_id",
-            "source_agency_id",
-            "source_table",
-            "source_id"
-          ],
-          "isUnique": true
-        }
-      },
-      "foreignKeys": {
-        "legacy_import_records_agency_id_agencies_id_fk": {
-          "name": "legacy_import_records_agency_id_agencies_id_fk",
-          "tableFrom": "legacy_import_records",
-          "tableTo": "agencies",
-          "columnsFrom": [
-            "agency_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
           "onUpdate": "no action"
         }
       },

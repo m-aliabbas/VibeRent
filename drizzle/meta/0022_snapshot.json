@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "721e3671-4834-414f-9e30-df3391c49294",
-  "prevId": "2bf36c14-e8ab-4a99-a71d-da4a0d5a9140",
+  "id": "65967358-9bfc-4ef8-ae18-a16c97f6db8e",
+  "prevId": "9f279a0e-b5f4-45f7-bc06-c948ddf35454",
   "tables": {
     "account": {
       "name": "account",
@@ -2506,90 +2506,6 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
-    "legacy_import_records": {
-      "name": "legacy_import_records",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "agency_id": {
-          "name": "agency_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "source_agency_id": {
-          "name": "source_agency_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "source_table": {
-          "name": "source_table",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "source_id": {
-          "name": "source_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "row_json": {
-          "name": "row_json",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "imported_at": {
-          "name": "imported_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "legacy_import_records_source_uq": {
-          "name": "legacy_import_records_source_uq",
-          "columns": [
-            "agency_id",
-            "source_agency_id",
-            "source_table",
-            "source_id"
-          ],
-          "isUnique": true
-        }
-      },
-      "foreignKeys": {
-        "legacy_import_records_agency_id_agencies_id_fk": {
-          "name": "legacy_import_records_agency_id_agencies_id_fk",
-          "tableFrom": "legacy_import_records",
-          "tableTo": "agencies",
-          "columnsFrom": [
-            "agency_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {}
-    },
     "management_agreements": {
       "name": "management_agreements",
       "columns": {
@@ -4563,122 +4479,6 @@
         }
       },
       "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {}
-    },
-    "web_drive_connections": {
-      "name": "web_drive_connections",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "agency_id": {
-          "name": "agency_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "auth_user_id": {
-          "name": "auth_user_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "credentials_encrypted": {
-          "name": "credentials_encrypted",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "account_email": {
-          "name": "account_email",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "folder_id": {
-          "name": "folder_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "last_backup_at": {
-          "name": "last_backup_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "last_backup_file_id": {
-          "name": "last_backup_file_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "web_drive_connections_agency_user_uq": {
-          "name": "web_drive_connections_agency_user_uq",
-          "columns": [
-            "agency_id",
-            "auth_user_id"
-          ],
-          "isUnique": true
-        }
-      },
-      "foreignKeys": {
-        "web_drive_connections_agency_id_agencies_id_fk": {
-          "name": "web_drive_connections_agency_id_agencies_id_fk",
-          "tableFrom": "web_drive_connections",
-          "tableTo": "agencies",
-          "columnsFrom": [
-            "agency_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "web_drive_connections_auth_user_id_user_id_fk": {
-          "name": "web_drive_connections_auth_user_id_user_id_fk",
-          "tableFrom": "web_drive_connections",
-          "tableTo": "user",
-          "columnsFrom": [
-            "auth_user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "checkConstraints": {}

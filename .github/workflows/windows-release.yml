@@ -65,6 +65,9 @@ jobs:
       - name: Verify SQLite desktop backup and restore
         run: npm run db:check:desktop-backup
 
+      - name: Verify existing Windows database upgrade
+        run: npm run db:check:desktop-upgrade
+
       - name: Build SQLite-backed NSIS installer
         run: npm run desktop:build -- --bundles nsis
 

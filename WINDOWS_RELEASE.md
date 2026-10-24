@@ -19,6 +19,8 @@ The launcher owns only the Node sidecar it starts. Restart, launcher-window clos
 
 Installing an update does not replace these files. Do not move the SQLite database to OneDrive, Google Drive sync, or a network share. Use the application backup workflow instead.
 
+For 1.0.19, the installer includes the complete SQLite migration history through `0023_early_rhodey`. The 1.0.18 migrations through `0022_salty_wallflower` remain unchanged, so an existing client database advances in place. Desktop startup makes a pre-migration archive containing the database and private files, then applies pending migrations and checks SQLite integrity and foreign keys. The release workflow tests a 1.0.18 database upgrade and a fresh install. Keep the application data directory and a separate backup when updating customer PCs.
+
 ## Encrypted Firebase license credentials
 
 The desktop runtime reads the Firebase Admin service account from `k1.json.enc`. The file uses Fernet encryption and is decrypted only inside the local Node.js server. The shared compatibility key follows the VibePOS packaging model and can be overridden with `FIREBASE_CREDENTIALS_KEY` when rotating credentials.
@@ -87,6 +89,7 @@ cp desktop/.env.example desktop/.env
 npm ci
 npm run lint
 npm run typecheck
+npm run db:check:desktop-upgrade
 npm run build:desktop-server
 npm run desktop:prepare
 npm run desktop:build -- --bundles nsis
@@ -109,12 +112,12 @@ The installer is currently unsigned, so Windows can show a security warning. Add
 Set and publish a release:
 
 ```bash
-npm run release:set -- 0.2.0
+npm run release:set -- 1.0.19
 npm run release:check
-git add package.json package-lock.json src-tauri .github WINDOWS_RELEASE.md
-git commit -m "release: v0.2.0"
-git tag v0.2.0
-git push origin main --tags
+git add package.json package-lock.json src-tauri drizzle scripts .github WINDOWS_RELEASE.md
+git commit -m "release: v1.0.19"
+git tag v1.0.19
+git push origin HEAD --tags
 ```
 
 Keep the Authenticode certificate and password only in GitHub Actions secrets.
