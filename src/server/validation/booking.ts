@@ -70,6 +70,9 @@ function parseGuarantor(value: unknown, errors: Record<string, string>): Guarant
   return { name, parentage, cnic, phone, address, carAmount: input.carAmount ?? 0 };
 }
 
+/** Stored when the agent skips the optional fuel reading (the column is NOT NULL). */
+export const NOT_RECORDED_FUEL = "Not recorded";
+
 export function parseConfirmBookingInput(value: unknown): ConfirmBookingInput {
   const input = value as Partial<ConfirmBookingInput> | null;
   const errors: Record<string, string> = {};
@@ -97,8 +100,9 @@ export function parseConfirmBookingInput(value: unknown): ConfirmBookingInput {
   const returned = Date.parse(input.returnAt ?? "");
   if (!Number.isFinite(pickup)) errors.pickupAt = "Enter a valid pickup time.";
   if (!Number.isFinite(returned) || returned <= pickup) errors.returnAt = "Return must be after pickup.";
+  // Extras, discount and the security deposit are optional; a missing value means none.
   for (const key of ["extras", "discount", "depositRequired"] as const) {
-    if (!Number.isInteger(input[key]) || input[key]! < 0) errors[key] = "Enter a non-negative whole PKR amount.";
+    if (input[key] !== undefined && input[key] !== null && (!Number.isInteger(input[key]) || input[key]! < 0)) errors[key] = "Enter a non-negative whole PKR amount.";
   }
   if (input.estimatedKm !== undefined && (!Number.isInteger(input.estimatedKm) || input.estimatedKm < 0)) errors.estimatedKm = "Estimated mileage must be zero or more.";
   if (input.dailyRateOverride !== undefined && (!Number.isInteger(input.dailyRateOverride) || input.dailyRateOverride < 1000)) errors.dailyRateOverride = "Enter a valid override rate.";
@@ -108,15 +112,14 @@ export function parseConfirmBookingInput(value: unknown): ConfirmBookingInput {
   const checkoutInspection = input.checkoutInspection;
   if (startImmediately) {
     if (!checkoutInspection || !Number.isInteger(checkoutInspection.odometer) || checkoutInspection.odometer < 0) errors["checkoutInspection.odometer"] = "Enter a valid handover odometer reading.";
-    if (!checkoutInspection?.fuelLevel?.trim()) errors["checkoutInspection.fuelLevel"] = "Select the handover fuel level.";
-    if (!checkoutInspection?.conditionNotes?.trim()) errors["checkoutInspection.conditionNotes"] = "Enter the vehicle condition at handover.";
+    if ((checkoutInspection?.fuelLevel?.trim().length ?? 0) > 30) errors["checkoutInspection.fuelLevel"] = "Enter a valid fuel level.";
   }
   if (Object.keys(errors).length) throw new DomainError("VALIDATION_FAILED", "Review the booking details.", 400, errors);
   return {
     bookingDraftId: input.bookingDraftId?.trim() || undefined, vehicleId: input.vehicleId?.trim() || undefined, fulfillmentType, external:fulfillmentType==="external"&&external?{supplierName:external.supplierName.trim(),supplierPhone:external.supplierPhone.trim(),vehicleMake:external.vehicleMake.trim(),vehicleModel:external.vehicleModel.trim(),vehicleYear:external.vehicleYear,vehiclePlate:external.vehiclePlate.trim().toUpperCase(),vehicleColor:external.vehicleColor?.trim()||undefined,pricingMode:external.pricingMode,supplierSharePercent:external.supplierSharePercent,supplierFixedCost:external.supplierFixedCost}:undefined, customerId: input.customerId?.trim() || "", rentalMode, driverId:input.driverId?.trim()||undefined, renterSkipped:Boolean(input.renterSkipped), guarantor, destinationCity: input.destinationCity?.trim() || "Local", pickupAt: new Date(pickup).toISOString(), returnAt: new Date(returned).toISOString(),
-    extras: input.extras!, discount: input.discount!, depositRequired: input.depositRequired!, source: input.source?.trim() || "counter", notes: input.notes?.trim() || undefined, estimatedKm: input.estimatedKm ?? 0, dailyRateOverride: input.dailyRateOverride, overrideReason: input.overrideReason?.trim() || undefined,
+    extras: input.extras ?? 0, discount: input.discount ?? 0, depositRequired: input.depositRequired ?? 0, source: input.source?.trim() || "counter", notes: input.notes?.trim() || undefined, estimatedKm: input.estimatedKm ?? 0, dailyRateOverride: input.dailyRateOverride, overrideReason: input.overrideReason?.trim() || undefined,
     startImmediately,
-    checkoutInspection:startImmediately&&checkoutInspection?{odometer:checkoutInspection.odometer,fuelLevel:checkoutInspection.fuelLevel.trim(),conditionNotes:checkoutInspection.conditionNotes.trim()}:undefined,
+    checkoutInspection:startImmediately&&checkoutInspection?{odometer:checkoutInspection.odometer,fuelLevel:checkoutInspection.fuelLevel?.trim()||NOT_RECORDED_FUEL,conditionNotes:checkoutInspection.conditionNotes?.trim()??""}:undefined,
   };
 }
 

@@ -50,6 +50,8 @@ export type BookingListItem = {
   tax: number;
   deposit: number;
   paid: number;
+  /** What the customer still owes (never negative). Mobile prefills payments with it. */
+  balance?: number;
   paymentStatus?: "Unpaid" | "Partially paid" | "Paid" | "Payment reversed";
   depositHeld?: number;
   transactions?: BookingTransactionDto[];

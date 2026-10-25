@@ -149,7 +149,7 @@ export function BookingWizard() {
   const [step, setStep] = useState(0);
   const [draft, setDraft] = useState<Draft>(defaultDraft);
   const [confirmed, setConfirmed] = useState("");
-  const [agreementDelivery,setAgreementDelivery]=useState<{status:"sent"|"skipped"|"failed";message:string}>();
+  const [agreementDelivery,setAgreementDelivery]=useState<{status:"sent"|"queued"|"skipped"|"failed";message:string}>();
   const [startedImmediately,setStartedImmediately]=useState(false);
   const [conflictMode, setConflictMode] = useState(false);
   const [submitting, setSubmitting] = useState(false);

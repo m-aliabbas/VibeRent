@@ -16,10 +16,10 @@ type BookingNoticeRow = {
   checkoutFuel: string | null; checkinFuel: string | null; checkedOutAt: string | null; completedAt: string | null;
 };
 
-export async function deliverCheckoutNotice(context: RequestContext, bookingId: string) {
-  const row = await bookingNotice(context.agencyId, bookingId);
-  if (!row) return failed("Checkout was saved, but its customer notice could not be prepared.");
-  return deliverBookingPdf(context, bookingId, row, {
+type BookingPdfInput = { action:string;title:string;fileName:string;caption:string;issuedAt:string;lines:InvoiceLine[];amountLabel:string;amount:number;reference?:string };
+
+function checkoutNoticeInput(bookingId: string, row: BookingNoticeRow): BookingPdfInput {
+  return {
     action: "booking.checkout_notice",
     title: "Vehicle checkout receipt",
     fileName: `checkout-${row.publicNumber ?? bookingId}.pdf`,
@@ -32,13 +32,11 @@ export async function deliverCheckoutNotice(context: RequestContext, bookingId: 
     ],
     amountLabel: "Rental total",
     amount: row.totalAmount,
-  });
+  };
 }
 
-export async function deliverCheckinInvoice(context: RequestContext, bookingId: string) {
-  const row = await bookingNotice(context.agencyId, bookingId);
-  if (!row) return failed("Check-in was saved, but its invoice could not be prepared.");
-  return deliverBookingPdf(context, bookingId, row, {
+function checkinInvoiceInput(bookingId: string, row: BookingNoticeRow): BookingPdfInput {
+  return {
     action: "booking.checkin_invoice",
     title: "Final rental invoice",
     fileName: `final-invoice-${row.publicNumber ?? bookingId}.pdf`,
@@ -54,7 +52,51 @@ export async function deliverCheckinInvoice(context: RequestContext, bookingId: 
     ],
     amountLabel: "Final rental total",
     amount: row.totalAmount,
-  });
+  };
+}
+
+function bookingStatementInput(bookingId: string, row: BookingNoticeRow): BookingPdfInput {
+  return {
+    action: "booking.statement",
+    title: "Booking payment statement",
+    fileName: `statement-${row.publicNumber ?? bookingId}.pdf`,
+    caption: `Booking #${row.publicNumber ?? bookingId} · paid ${money(row.paid)} · balance ${money(Math.max(0, row.totalAmount - row.paid))}`,
+    issuedAt: new Date().toISOString(),
+    lines: [
+      { label: "Vehicle", value: `${row.vehicle} · ${row.plate}` },
+      { label: "Rental total", value: money(row.totalAmount) },
+      { label: "Total paid to date", value: money(row.paid) },
+      { label: "Outstanding balance", value: money(Math.max(0, row.totalAmount - row.paid)) },
+    ],
+    amountLabel: "Outstanding balance",
+    amount: Math.max(0, row.totalAmount - row.paid),
+  };
+}
+
+export type BookingDocumentKind = "checkout" | "checkin" | "statement";
+
+/**
+ * Renders a booking receipt/invoice PDF without sending it, so the mobile app can share it from the
+ * phone's own WhatsApp (or save it). Returns null when the booking does not exist in this agency.
+ */
+export async function renderBookingDocument(context: RequestContext, bookingId: string, kind: BookingDocumentKind) {
+  const row = await bookingNotice(context.agencyId, bookingId);
+  if (!row) return null;
+  const input = kind === "checkout" ? checkoutNoticeInput(bookingId, row) : kind === "checkin" ? checkinInvoiceInput(bookingId, row) : bookingStatementInput(bookingId, row);
+  const bytes = await createTransactionInvoice({ agency: row.agency, title: input.title, reference: input.reference ?? String(row.publicNumber ?? bookingId), recipient: row.customer, issuedAt: input.issuedAt, lines: input.lines, amountLabel: input.amountLabel, amount: input.amount });
+  return { bytes, fileName: input.fileName, caption: input.caption };
+}
+
+export async function deliverCheckoutNotice(context: RequestContext, bookingId: string) {
+  const row = await bookingNotice(context.agencyId, bookingId);
+  if (!row) return failed("Checkout was saved, but its customer notice could not be prepared.");
+  return deliverBookingPdf(context, bookingId, row, checkoutNoticeInput(bookingId, row));
+}
+
+export async function deliverCheckinInvoice(context: RequestContext, bookingId: string) {
+  const row = await bookingNotice(context.agencyId, bookingId);
+  if (!row) return failed("Check-in was saved, but its invoice could not be prepared.");
+  return deliverBookingPdf(context, bookingId, row, checkinInvoiceInput(bookingId, row));
 }
 
 export async function deliverPaymentInvoice(context: RequestContext, bookingId: string, payment: { amount: number; method: string; reference?: string; receiptNumber: number | null }) {
@@ -116,7 +158,7 @@ export async function deliverOwnerExpenseNotice(context: RequestContext, expense
   }
 }
 
-async function deliverBookingPdf(context: RequestContext, bookingId: string, row: BookingNoticeRow, input: { action:string;title:string;fileName:string;caption:string;issuedAt:string;lines:InvoiceLine[];amountLabel:string;amount:number;reference?:string }) {
+async function deliverBookingPdf(context: RequestContext, bookingId: string, row: BookingNoticeRow, input: BookingPdfInput) {
   return deliverPdf(context, row.phone, input.action, bookingId, { agency:row.agency,title:input.title,reference:input.reference??String(row.publicNumber ?? bookingId),recipient:row.customer,issuedAt:input.issuedAt,fileName:input.fileName,caption:input.caption,lines:input.lines,amountLabel:input.amountLabel,amount:input.amount });
 }
 

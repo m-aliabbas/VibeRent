@@ -1,5 +1,5 @@
 import { DomainError } from "@/server/domain/errors";
-import { parseRecordPaymentInput, type RecordPaymentInput } from "@/server/validation/booking";
+import { NOT_RECORDED_FUEL, parseRecordPaymentInput, type RecordPaymentInput } from "@/server/validation/booking";
 
 export type RentalInspectionInput = {
   odometer: number;
@@ -21,11 +21,12 @@ export function parseRentalInspectionInput(value: unknown): RentalInspectionInpu
   if (!input || typeof input !== "object") throw new DomainError("VALIDATION_FAILED", "Invalid inspection payload.", 400);
   const errors: Record<string, string> = {};
   if (!Number.isInteger(input.odometer) || input.odometer! < 0) errors.odometer = "Enter a valid odometer reading.";
-  if (!input.fuelLevel?.trim() || input.fuelLevel.trim().length > 30) errors.fuelLevel = "Enter a valid fuel level.";
-  if (!input.conditionNotes?.trim()) errors.conditionNotes = "Condition notes are required.";
+  // Fuel level and condition notes are optional so a handover can be saved in seconds.
+  if (input.fuelLevel != null && (typeof input.fuelLevel !== "string" || input.fuelLevel.trim().length > 30)) errors.fuelLevel = "Enter a valid fuel level.";
+  if (input.conditionNotes != null && typeof input.conditionNotes !== "string") errors.conditionNotes = "Enter valid condition notes.";
   if (input.version !== undefined && (!Number.isInteger(input.version) || input.version < 1)) errors.version = "Enter a valid record version.";
   if (Object.keys(errors).length) throw new DomainError("VALIDATION_FAILED", "Review the inspection details.", 400, errors);
-  return { odometer: input.odometer!, fuelLevel: input.fuelLevel!.trim(), conditionNotes: input.conditionNotes!.trim(), version: input.version };
+  return { odometer: input.odometer!, fuelLevel: input.fuelLevel?.trim() || NOT_RECORDED_FUEL, conditionNotes: input.conditionNotes?.trim() ?? "", version: input.version };
 }
 
 export function parseCheckInRentalInput(value: unknown): CheckInRentalInput {

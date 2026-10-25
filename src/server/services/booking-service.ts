@@ -107,6 +107,7 @@ export async function listBookings(context: RequestContext): Promise<BookingList
       deposit: row.deposit_required,
       depositHeld: row.deposit_held,
       paid: row.paid,
+      balance: Math.max(0, row.total_amount - row.paid),
       paymentStatus: row.payment_state as BookingListItem["paymentStatus"],
       status: displayStatus[row.status],
       source: row.source,
