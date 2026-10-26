@@ -1,13 +1,13 @@
 import { apiHandler } from "@/server/api/route";
 import { parseJsonRequest } from "@/server/api/response";
-import { deliverInBackground, requestedDeliveryMode } from "@/server/api/delivery";
+import { requestedDeliveryMode } from "@/server/api/delivery";
+import { notices, withNotices } from "@/server/notifications/notices";
 import { checkOutRental } from "@/server/services/booking-service";
-import { deliverCheckoutNotice } from "@/server/services/notification-delivery-service";
 
 export const runtime = "nodejs";
 
 export const POST = apiHandler<{ id: string }>(async ({ request, context, params }) => {
   const mode = requestedDeliveryMode(request);
-  const data = await checkOutRental(context, params.id, await parseJsonRequest(request));
-  return { ...data, notificationDelivery: deliverInBackground(mode, "Checkout receipt", () => deliverCheckoutNotice(context, params.id)) };
+  const input = await parseJsonRequest(request);
+  return withNotices(() => checkOutRental(context, params.id, input), async () => ({ notificationDelivery: await notices.checkout(context, mode, params.id) }));
 }, { revalidate: true });

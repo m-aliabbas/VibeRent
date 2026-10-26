@@ -16,3 +16,4 @@ release/
 firebase/functions/lib/
 firebase/functions/node_modules/
 .agents/
+dist/

@@ -18,7 +18,8 @@ RUN VIBERENT_DATABASE=postgres \
     POSTGRES_URL=postgresql://build:build@127.0.0.1:5432/build \
     BETTER_AUTH_URL=http://localhost:3000 \
     BETTER_AUTH_SECRET=docker-build-placeholder-32-characters \
-    npm run build:web
+    npm run build:web \
+    && npm run build:roles
 
 FROM node:22.20.0-bookworm-slim AS runner
 
@@ -35,6 +36,8 @@ COPY --from=production-dependencies /app/node_modules ./node_modules
 
 COPY --from=builder --chown=node:node /app/.next ./.next
 COPY --from=builder --chown=node:node /app/public ./public
+# Background processes (worker, wa-gateway) run from the same image with a different command.
+COPY --from=builder --chown=node:node /app/dist ./dist
 COPY --from=builder --chown=node:node /app/drizzle-postgres ./drizzle-postgres
 COPY --from=builder --chown=node:node /app/scripts/migrate-postgres.mjs ./scripts/migrate-postgres.mjs
 # Encrypted integration credentials (o1 = OpenAI OCR, g1/g1-web = Google Drive OAuth) are read from

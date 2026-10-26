@@ -8,9 +8,9 @@ import { applyPendingRestore, createBackup } from "@/server/desktop/backup-servi
 import { startBackupScheduler } from "@/server/desktop/backup-scheduler";
 import { refreshDesktopLicense, startLicenseRefreshScheduler } from "@/server/desktop/license-service";
 import { ensureDesktopAuthSecret } from "@/server/desktop/local-crypto";
-import { startDailyReportScheduler } from "@/server/desktop/daily-report-scheduler";
 
-export async function prepareDesktopRuntime() {
+/** Restores, migrates and licenses the desktop database. Background jobs start afterwards. */
+export async function prepareDesktopRuntime(): Promise<{ licensed: boolean }> {
   await ensureDesktopAuthSecret();
   const restored = await applyPendingRestore();
   if (restored) console.info(JSON.stringify({ event: "desktop.restore.applied", source: restored.sourceFilename }));
@@ -68,11 +68,8 @@ export async function prepareDesktopRuntime() {
 
   const license = await refreshDesktopLicense();
   startLicenseRefreshScheduler();
-  if (!license.enforced || license.state === "active") {
-    startBackupScheduler();
-    const { startConfiguredWhatsAppRuntimes } = await import("@/server/services/whatsapp-settings-service");
-    await startConfiguredWhatsAppRuntimes();
-    startDailyReportScheduler();
-  }
+  const licensed = !license.enforced || license.state === "active";
+  if (licensed) startBackupScheduler();
   console.info(JSON.stringify({ event: "desktop.ready", license: license.state }));
+  return { licensed };
 }

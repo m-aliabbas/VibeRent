@@ -6,13 +6,21 @@ This guide deploys the hosted VibeRent web application on a Linux server using D
 
 The Compose stack contains:
 
-- `web`: the Next.js VibeRent application configured for PostgreSQL
+- `web`: the Next.js VibeRent application configured for PostgreSQL (`VIBERENT_ROLE=web`, HTTP only)
+- `worker`: background jobs from the same image: rendering receipts and agreements, owner WhatsApp commands and CNIC photos, recurring expenses, the daily report and maintenance
+- `wa-gateway`: owns the agencies' WhatsApp connections and sends queued messages; run exactly one
 - `postgres`: PostgreSQL 17
 - `postgres_data`: a Docker named volume containing the PostgreSQL database
 - `private_files`: a Docker named volume containing uploaded private files
 - `app_data`: a Docker named volume containing runtime state such as linked WhatsApp sessions
 
-The application runs PostgreSQL migrations automatically before the web server starts. Both services have health checks and use `restart: unless-stopped`.
+The application runs PostgreSQL migrations automatically before the web server starts. `worker` and `wa-gateway` wait for `web` to be healthy, so they always start on a migrated database. Every service has a health check and uses `restart: unless-stopped`.
+
+Background jobs are stored in PostgreSQL (pg-boss, schema `pgboss`), so a receipt queued just before a restart is still delivered afterwards. If `wa-gateway` is down, messages wait in the queue and the WhatsApp page shows the service as offline. Check the background services with:
+
+```bash
+docker compose --env-file .env.docker logs --tail 100 worker wa-gateway
+```
 
 ## 2. Server requirements
 

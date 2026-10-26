@@ -1,8 +1,8 @@
 import { apiHandler } from "@/server/api/route";
 import { parseJsonRequest } from "@/server/api/response";
-import { deliverInBackground, requestedDeliveryMode } from "@/server/api/delivery";
+import { requestedDeliveryMode } from "@/server/api/delivery";
+import { notices, withNotices } from "@/server/notifications/notices";
 import { recordBookingPayment } from "@/server/services/booking-service";
-import { deliverPaymentInvoice } from "@/server/services/notification-delivery-service";
 import { parseRecordPaymentInput } from "@/server/validation/booking";
 
 export const runtime = "nodejs";
@@ -10,7 +10,7 @@ export const runtime = "nodejs";
 export const POST = apiHandler<{ id: string }>(async ({ request, context, params }) => {
   const mode = requestedDeliveryMode(request);
   const input = parseRecordPaymentInput(await parseJsonRequest(request));
-  const data = await recordBookingPayment(context, params.id, input);
-  const notificationDelivery = deliverInBackground(mode, "Payment receipt", () => deliverPaymentInvoice(context, params.id, { ...input, receiptNumber: data.paymentReceiptNumber }));
-  return { ...data, notificationDelivery };
+  return withNotices(() => recordBookingPayment(context, params.id, input), async data => ({
+    notificationDelivery: await notices.payment(context, mode, params.id, { amount: input.amount, method: input.method, reference: input.reference, receiptNumber: data.paymentReceiptNumber }),
+  }));
 }, { revalidate: true });

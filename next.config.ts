@@ -7,7 +7,8 @@ const nextConfig: NextConfig = {
   // Keeping it external preserves that package boundary in standalone desktop
   // builds; bundling it moves createRequire() into a Next.js chunk where the
   // `#standard-fonts/*` imports can no longer be resolved.
-  serverExternalPackages: ["@whiskeysockets/baileys", "pdfkit"],
+  // pg-boss is ESM-only and manages its own pg pool; it is loaded from node_modules as-is.
+  serverExternalPackages: ["@whiskeysockets/baileys", "pdfkit", "pg-boss"],
   images: { unoptimized: true },
   // Next's client reference manifest skips a "use client" module that webpack
   // scope-hoists into its route's client entry. On the Linux web build this

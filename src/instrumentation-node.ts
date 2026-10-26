@@ -1,23 +1,26 @@
+import type { JobRole } from "@/server/jobs/contracts";
+
 // Node-only startup. Imported from instrumentation.ts behind a NEXT_RUNTIME check so the
 // Edge instrumentation bundle never traces better-sqlite3 or other native modules.
 export async function registerNode() {
   if (process.env.VIBERENT_DESKTOP === "1") {
     const { prepareDesktopRuntime } = await import("@/server/desktop/startup");
-    await prepareDesktopRuntime();
-    await startRecurringExpenses();
+    const { licensed } = await prepareDesktopRuntime();
+    // Started after any desktop restore and migrations so the database is final before it is opened.
+    // WhatsApp, as before, only runs on an active (or unenforced) licence.
+    await startRoles(licensed ? ["worker", "wa-gateway"] : ["worker"]);
     return;
   }
-  const { startConfiguredWhatsAppRuntimes } = await import("@/server/services/whatsapp-settings-service");
-  await startConfiguredWhatsAppRuntimes();
-  await startRecurringExpenses();
+  // `web` serves HTTP only; the worker and WhatsApp gateway then run as their own processes.
+  const { getProcessRole, jobRolesFor } = await import("@/server/jobs/background");
+  await startRoles(jobRolesFor(getProcessRole()));
 }
 
-// Started after any desktop restore and migrations so the database is final before it is opened.
-async function startRecurringExpenses() {
+async function startRoles(roles: JobRole[]) {
   try {
-    const { startRecurringExpenseScheduler } = await import("@/server/services/recurring-expense-service");
-    startRecurringExpenseScheduler();
+    const { startBackgroundRoles } = await import("@/server/jobs/background");
+    await startBackgroundRoles(roles);
   } catch (error) {
-    console.error(JSON.stringify({ event: "recurring_expense.scheduler_start_failed", message: error instanceof Error ? error.message : String(error) }));
+    console.error(JSON.stringify({ event: "jobs.start_failed", roles, message: error instanceof Error ? error.message : String(error) }));
   }
 }

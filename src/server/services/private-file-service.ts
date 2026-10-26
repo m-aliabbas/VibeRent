@@ -17,7 +17,7 @@ export type PrivateFileDto = {
   originalName: string;
   mimeType: string;
   size: number;
-  classification: "vehicle_photo" | "vehicle_document" | "customer_cnic_front" | "customer_cnic_back" | "guarantor_cnic_front" | "guarantor_cnic_back" | "agreement_terms_image";
+  classification: "vehicle_photo" | "vehicle_document" | "customer_cnic_front" | "customer_cnic_back" | "guarantor_cnic_front" | "guarantor_cnic_back" | "agreement_terms_image" | "notification_document";
   createdAt: string;
   downloadUrl: string;
 };
@@ -146,4 +146,35 @@ export async function readPrivateFile(context: RequestContext, id: string) {
   if (!absolutePath.startsWith(`${storageRoot}${path.sep}`)) throw new DomainError("INTERNAL_ERROR", "File storage path is invalid.", 500);
   try { return { file: toDto(row), bytes: await readFile(absolutePath) }; }
   catch { throw new DomainError("NOT_FOUND", "The stored file is unavailable.", 404); }
+}
+
+/**
+ * Stores bytes produced by the server itself (rendered receipts and agreements) without a user
+ * session. Callers are background jobs that already scoped the work to `agencyId`.
+ */
+export async function storeSystemFile(input: { agencyId: string; entityType: string; entityId: string; bytes: Buffer; originalName: string; mimeType: string; classification: PrivateFileDto["classification"] }) {
+  const id = `file_${randomUUID()}`;
+  const storageKey = `${input.agencyId}/${randomUUID()}`;
+  const absolutePath = path.join(storageRoot, storageKey);
+  const temporaryPath = `${absolutePath}.uploading`;
+  await mkdir(path.dirname(absolutePath), { recursive: true });
+  await writeFile(temporaryPath, input.bytes, { flag: "wx", mode: 0o600 });
+  await rename(temporaryPath, absolutePath);
+  const now = new Date().toISOString();
+  try {
+    await execute(`INSERT INTO private_files (id,agency_id,entity_type,entity_id,storage_key,original_name,mime_type,size,classification,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,'ready',?,?)`,[id, input.agencyId, input.entityType, input.entityId, storageKey, safeName(input.originalName), input.mimeType, input.bytes.byteLength, input.classification, now, now]);
+  } catch (error) {
+    await unlink(absolutePath).catch(() => undefined);
+    throw error;
+  }
+  return id;
+}
+
+/** Reads a stored file for a background job. Tenant scope comes from the caller's `agencyId`. */
+export async function readSystemFile(agencyId: string, id: string) {
+  const row = await queryOne<{ storageKey: string }>(`SELECT storage_key AS storageKey FROM private_files WHERE agency_id=? AND id=? AND status='ready' LIMIT 1`,[agencyId, id]);
+  if (!row) throw new Error("The stored file is unavailable.");
+  const absolutePath = path.resolve(storageRoot, row.storageKey);
+  if (!absolutePath.startsWith(`${storageRoot}${path.sep}`)) throw new Error("File storage path is invalid.");
+  return readFile(absolutePath);
 }

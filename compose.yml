@@ -26,6 +26,8 @@ services:
     environment:
       VIBERENT_DATABASE: postgres
       VIBERENT_DESKTOP: "0"
+      # HTTP only. Background jobs run in `worker`; WhatsApp sockets run in `wa-gateway`.
+      VIBERENT_ROLE: web
       PRIVATE_FILE_STORAGE_ROOT: /app/.data/private-files
     depends_on:
       postgres:
@@ -45,6 +47,68 @@ services:
     volumes:
       # WhatsApp sessions (whatsapp.db), the Google Drive session and other runtime state live in
       # /app/.data. Without this volume every redeploy logs agencies out of WhatsApp.
+      - app_data:/app/.data
+      - private_files:/app/.data/private-files
+
+  # Renders receipts and agreements, processes owner WhatsApp commands and CNIC photos, and runs
+  # scheduled jobs (recurring expenses, daily reports, maintenance). Safe to run more than one.
+  worker:
+    image: viberent-web:latest
+    # Same image as `web`; the build is cached, so it is only built once per deployment.
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["node", "dist/roles/worker.cjs"]
+    env_file:
+      - ${VIBERENT_ENV_FILE:-.env.docker}
+    environment:
+      VIBERENT_DATABASE: postgres
+      VIBERENT_DESKTOP: "0"
+      VIBERENT_ROLE: worker
+      PRIVATE_FILE_STORAGE_ROOT: /app/.data/private-files
+    depends_on:
+      web:
+        # The web container applies database migrations before it reports healthy.
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    stop_grace_period: 30s
+    volumes:
+      - app_data:/app/.data
+      - private_files:/app/.data/private-files
+
+  # Owns the agencies' WhatsApp connections and sends queued messages. Run exactly one.
+  wa-gateway:
+    image: viberent-web:latest
+    # Same image as `web`; the build is cached, so it is only built once per deployment.
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["node", "dist/roles/wa-gateway.cjs"]
+    env_file:
+      - ${VIBERENT_ENV_FILE:-.env.docker}
+    environment:
+      VIBERENT_DATABASE: postgres
+      VIBERENT_DESKTOP: "0"
+      VIBERENT_ROLE: wa-gateway
+      PRIVATE_FILE_STORAGE_ROOT: /app/.data/private-files
+    depends_on:
+      web:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3002/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    stop_grace_period: 30s
+    volumes:
       - app_data:/app/.data
       - private_files:/app/.data/private-files
 

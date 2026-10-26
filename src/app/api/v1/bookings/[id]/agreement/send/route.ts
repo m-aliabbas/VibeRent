@@ -1,6 +1,7 @@
 import { apiHandler } from "@/server/api/route";
-import { deliverRentalAgreement } from "@/server/services/agreement-delivery-service";
+import { resendAgreement } from "@/server/notifications/notices";
 
 export const runtime = "nodejs";
 
-export const POST = apiHandler<{ id: string }>(({ context, params }) => deliverRentalAgreement(context, params.id));
+/** Queues the rental agreement PDF again. The response reports `queued`; delivery status is on `/notifications`. */
+export const POST = apiHandler<{ id: string }>(({ context, params }) => resendAgreement(context, params.id));

@@ -1,7 +1,7 @@
 import { apiHandler, readJsonObject } from "@/server/api/route";
-import { deliverInBackground, requestedDeliveryMode } from "@/server/api/delivery";
+import { requestedDeliveryMode } from "@/server/api/delivery";
+import { notices, withNotices } from "@/server/notifications/notices";
 import { recordOwnerPayout } from "@/server/services/owner-service";
-import { deliverOwnerPayoutInvoice } from "@/server/services/notification-delivery-service";
 
 export const runtime = "nodejs";
 
@@ -10,6 +10,5 @@ type PayoutInput = Parameters<typeof recordOwnerPayout>[2];
 export const POST = apiHandler<{ id: string }>(async ({ request, context, params }) => {
   const mode = requestedDeliveryMode(request);
   const input = await readJsonObject(request) as PayoutInput;
-  const data = await recordOwnerPayout(context, params.id, input);
-  return { ...data, notificationDelivery: deliverInBackground(mode, "Owner payout receipt", () => deliverOwnerPayoutInvoice(context, params.id, input)) };
+  return withNotices(() => recordOwnerPayout(context, params.id, input), async () => ({ notificationDelivery: await notices.payout(context, mode, params.id, input) }));
 }, { status: 201, revalidate: true });

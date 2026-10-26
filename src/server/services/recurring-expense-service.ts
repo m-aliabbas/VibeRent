@@ -225,27 +225,13 @@ export async function setRecurringExpenseStatus(context: RequestContext, id: str
   return { recurring: await getRecurring(context.agencyId, id), posted };
 }
 
-type SchedulerState = { running: boolean; timer?: NodeJS.Timeout; lastError?: string };
-const globalState = globalThis as typeof globalThis & { __viberentRecurringExpenses?: SchedulerState };
-const schedulerState = globalState.__viberentRecurringExpenses ??= { running: false };
-
+/** Posts due charges for every agency. Runs as the hourly `recurring.post` job and at worker start-up. */
 export async function runRecurringExpensePosting() {
   const agencies = await queryAll<{ agencyId: string }>("SELECT DISTINCT agency_id AS agencyId FROM recurring_expenses WHERE status='active' AND next_due_on<=?", [todayInPakistan()]);
   for (const { agencyId } of agencies) {
     try { await postDueRecurringExpenses(agencyId); }
     catch (error) {
-      schedulerState.lastError = error instanceof Error ? error.message : "Recurring expense posting failed";
-      console.error(JSON.stringify({ event: "recurring_expense.post_failed", agencyId, message: schedulerState.lastError }));
+      console.error(JSON.stringify({ event: "recurring_expense.post_failed", agencyId, message: error instanceof Error ? error.message : "Recurring expense posting failed" }));
     }
   }
-}
-
-/** Posts due charges at startup and then hourly, so reports stay current even if nobody opens Expenses. */
-export function startRecurringExpenseScheduler() {
-  if (schedulerState.running) return;
-  schedulerState.running = true;
-  const tick = () => { void runRecurringExpensePosting().catch(error => console.error(JSON.stringify({ event: "recurring_expense.scheduler_failed", message: error instanceof Error ? error.message : String(error) }))); };
-  tick();
-  schedulerState.timer = setInterval(tick, 60 * 60 * 1000);
-  schedulerState.timer.unref();
 }

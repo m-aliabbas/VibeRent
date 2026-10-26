@@ -105,6 +105,12 @@ async function withSqliteLock<T>(operation: (database: Database.Database) => T |
   }
 }
 
+/** The client of the active PostgreSQL transaction, so a library (the job queue) can write inside it. */
+export function activePostgresTransactionClient(): PoolClient | undefined {
+  const active = transactions.getStore();
+  return active?.target === "postgres" ? active.client : undefined;
+}
+
 async function postgresExecutor() {
   const active = transactions.getStore();
   return active?.target === "postgres" ? active.client : postgresPool();

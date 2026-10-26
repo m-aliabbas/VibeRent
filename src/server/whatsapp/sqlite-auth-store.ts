@@ -11,6 +11,7 @@ import {
   type SignalDataTypeMap,
   type WAMessageContent,
 } from "@whiskeysockets/baileys";
+import type { WhatsAppAuthStore } from "./auth-store";
 
 type AuthKeyRow = { keyId: string; payload: string };
 type CredentialsRow = { payload: string };
@@ -52,7 +53,7 @@ export type SqliteWhatsAppAuthState = {
 };
 
 /** Dedicated SQLite-backed implementation of Baileys' AuthenticationState contract. */
-export class SqliteWhatsAppAuthStore {
+export class SqliteWhatsAppAuthStore implements WhatsAppAuthStore {
   readonly databasePath: string;
   private readonly database: Database.Database;
   private readonly lastPrunedAt = new Map<string, number>();

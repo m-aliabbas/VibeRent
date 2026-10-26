@@ -129,7 +129,7 @@ jobs:
 
           if [ "$healthy" -ne 1 ]; then
             docker compose --env-file .env.docker ps
-            docker compose --env-file .env.docker logs --no-color --tail 150 web
+            docker compose --env-file .env.docker logs --no-color --tail 150 web worker wa-gateway
             exit 1
           fi
 

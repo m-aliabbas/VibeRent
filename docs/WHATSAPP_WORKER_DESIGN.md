@@ -1,6 +1,16 @@
 # WhatsApp and background worker design
 
-Status: proposed · Target branch: `codex/postgresql-web` · Date: 2026-10-26
+Status: Phases 0–2 implemented on `codex/postgresql-web` (Phase 3 sharding not started) · Date: 2026-10-26
+
+## Implementation notes (where the code differs from the plan below)
+
+- **Queue:** pg-boss 12 on web (`src/server/jobs/pg-boss-queue.ts`); a SQLite `background_jobs` table on desktop/LAN (`local-queue.ts`). Both enqueue inside the caller's transaction.
+- **Jobs:** `notify.render` and `wa.send` are as designed. OCR for photos *uploaded in the web app* still runs inside the request; only WhatsApp CNIC photos go through the worker (`wa.inbound`).
+- **Inbound:** there is no `whatsapp_inbound` table. pg-boss dedupes by `agencyId:messageId`, and photos wait in the shared `.data/whatsapp-images` inbox until the worker files them.
+- **Leases** stay in a `whatsapp_session_leases` table (PostgreSQL) or `whatsapp.db` (SQLite), not on `whatsapp_sessions`.
+- **Roles:** `VIBERENT_ROLE` = `web` | `worker` | `wa-gateway` | `all`. Unset means `all`, so a single-container install keeps working. Desktop runs `worker` always and `wa-gateway` when licensed.
+- **API:** `GET /api/v1/notifications?entityType=&entityId=` and `POST /api/v1/notifications/{id}/retry`. Mutation responses keep `{ status, message }` and add `deliveryId`. There is no delivery-status UI yet.
+- **Upgrade:** on first start the gateway copies sessions from `.data/whatsapp.db` into PostgreSQL and marks already-linked agencies as `desired_state=connected`.
 
 This document designs the move of WhatsApp, PDF delivery, OCR and scheduled work out of the
 Next.js web process. It is grounded in the code on `codex/postgresql-web` as of `cddbb3b`.

@@ -1,14 +1,17 @@
 import "server-only";
 
-import { randomUUID } from "node:crypto";
-import { execute, queryOne } from "@/db/query";
+import { queryOne } from "@/db/query";
 import type { RequestContext } from "@/server/context/request-context";
+import { createRentalAgreementPdf } from "@/server/documents/rental-agreement";
 import { createTransactionInvoice, type InvoiceLine } from "@/server/documents/transaction-invoice";
-import { ensureWhatsAppRuntimeForDelivery } from "@/server/services/whatsapp-settings-service";
-import { sendWhatsAppDocument, sendWhatsAppText } from "@/server/whatsapp/runtime-registry";
+import { renderDailyReport } from "@/server/notifications/daily-report";
+import type { NotificationDeliveryRow } from "@/server/notifications/notification-service";
 import { formatPaymentReceiptNumber } from "@/lib/payment-receipt";
 
-export type NotificationDeliveryResult = { status: "sent" | "skipped" | "failed"; message: string };
+/** The content of a delivery, ready for WhatsApp. Rendering runs in the worker, never in a web request. */
+export type RenderedNotification =
+  | { status: "ready"; phone: string; recipientName: string; document?: { bytes: Buffer; fileName: string }; text?: string; caption?: string }
+  | { status: "skipped"; reason: string };
 
 type BookingNoticeRow = {
   publicNumber: number | null; agency: string; customer: string; phone: string; vehicle: string; plate: string;
@@ -87,24 +90,52 @@ export async function renderBookingDocument(context: RequestContext, bookingId: 
   return { bytes, fileName: input.fileName, caption: input.caption };
 }
 
-export async function deliverCheckoutNotice(context: RequestContext, bookingId: string) {
-  const row = await bookingNotice(context.agencyId, bookingId);
-  if (!row) return failed("Checkout was saved, but its customer notice could not be prepared.");
-  return deliverBookingPdf(context, bookingId, row, checkoutNoticeInput(bookingId, row));
+/** Builds the PDF or text for a queued delivery. `context` is the agency-scoped system context of the job. */
+export async function renderNotification(context: RequestContext, delivery: NotificationDeliveryRow): Promise<RenderedNotification> {
+  const payload = JSON.parse(delivery.payload || "{}") as Record<string, unknown>;
+  switch (delivery.kind) {
+    case "booking.agreement": return renderAgreement(context, delivery.entityId);
+    case "booking.checkout_notice": return renderBookingPdf(context.agencyId, delivery.entityId, row => checkoutNoticeInput(delivery.entityId, row));
+    case "booking.checkin_invoice": return renderBookingPdf(context.agencyId, delivery.entityId, row => checkinInvoiceInput(delivery.entityId, row));
+    case "booking.payment_receipt": return renderBookingPdf(context.agencyId, delivery.entityId, row => paymentReceiptInput(row, payload as PaymentPayload));
+    case "owner.payout_receipt": return renderOwnerPayout(context.agencyId, delivery.entityId, payload as PayoutPayload);
+    case "owner.expense_notice": return renderOwnerExpenseNotice(context.agencyId, delivery.entityId);
+    case "owner.command_reply": return { status: "ready", phone: String(payload.phone ?? ""), recipientName: "Owner", text: String(payload.text ?? "") };
+    case "report.daily": return renderDailyReport(context.agencyId, String(payload.day ?? ""));
+  }
 }
 
-export async function deliverCheckinInvoice(context: RequestContext, bookingId: string) {
-  const row = await bookingNotice(context.agencyId, bookingId);
-  if (!row) return failed("Check-in was saved, but its invoice could not be prepared.");
-  return deliverBookingPdf(context, bookingId, row, checkinInvoiceInput(bookingId, row));
+type PaymentPayload = { amount: number; method: string; reference?: string; receiptNumber: number | null };
+type PayoutPayload = { amount: number; method: string; reference: string; periodFrom: string; periodTo: string };
+
+async function renderAgreement(context: RequestContext, bookingId: string): Promise<RenderedNotification> {
+  const booking = await queryOne<{ publicNumber: number | null; renterSkipped: number; customer: string }>(
+    "SELECT b.public_number AS publicNumber,b.renter_skipped AS renterSkipped,c.name AS customer FROM bookings b JOIN customers c ON c.id=b.customer_id AND c.agency_id=b.agency_id WHERE b.agency_id=? AND b.id=? LIMIT 1",
+    [context.agencyId, bookingId],
+  );
+  if (!booking) throw new Error("The rental agreement could not be found.");
+  if (booking.renterSkipped) return { status: "skipped", reason: "This with-driver booking has no renter contact." };
+  const agreement = await createRentalAgreementPdf(context, bookingId);
+  if (!agreement.customerPhone.trim()) return { status: "skipped", reason: "The customer has no phone number." };
+  return {
+    status: "ready", phone: agreement.customerPhone, recipientName: booking.customer,
+    document: { bytes: agreement.bytes, fileName: agreement.fileName }, caption: `Rental agreement #${booking.publicNumber ?? bookingId}`,
+  };
 }
 
-export async function deliverPaymentInvoice(context: RequestContext, bookingId: string, payment: { amount: number; method: string; reference?: string; receiptNumber: number | null }) {
-  const row = await bookingNotice(context.agencyId, bookingId);
-  if (!row) return failed("Payment was posted, but its receipt could not be prepared.");
-  if (payment.receiptNumber == null) return failed("Payment was posted, but its receipt number could not be prepared.");
+async function renderBookingPdf(agencyId: string, bookingId: string, build: (row: BookingNoticeRow) => BookingPdfInput): Promise<RenderedNotification> {
+  const row = await bookingNotice(agencyId, bookingId);
+  if (!row) throw new Error("The booking for this notice could not be found.");
+  if (!row.phone?.trim()) return { status: "skipped", reason: "No phone number is available for the customer." };
+  const input = build(row);
+  const bytes = await createTransactionInvoice({ agency: row.agency, title: input.title, reference: input.reference ?? String(row.publicNumber ?? bookingId), recipient: row.customer, issuedAt: input.issuedAt, lines: input.lines, amountLabel: input.amountLabel, amount: input.amount });
+  return { status: "ready", phone: row.phone, recipientName: row.customer, document: { bytes, fileName: input.fileName }, caption: input.caption };
+}
+
+function paymentReceiptInput(row: BookingNoticeRow, payment: PaymentPayload): BookingPdfInput {
+  if (payment.receiptNumber == null) throw new Error("The payment receipt number is missing.");
   const receiptId = formatPaymentReceiptNumber(payment.receiptNumber);
-  return deliverBookingPdf(context, bookingId, row, {
+  return {
     action: "booking.payment_invoice",
     title: "Payment receipt",
     fileName: `payment-receipt-${receiptId}.pdf`,
@@ -121,59 +152,41 @@ export async function deliverPaymentInvoice(context: RequestContext, bookingId: 
     amountLabel: "Payment received",
     amount: payment.amount,
     reference: receiptId,
-  });
+  };
 }
 
-export async function deliverOwnerPayoutInvoice(context: RequestContext, ownerId: string, payout: { amount: number; method: string; reference: string; periodFrom: string; periodTo: string }) {
-  const row = await queryOne<{ agency: string; owner: string; phone: string }>(`SELECT a.name AS agency,o.name AS owner,o.phone FROM owners o JOIN agencies a ON a.id=o.agency_id WHERE o.agency_id=? AND o.id=? LIMIT 1`,[context.agencyId, ownerId]);
-  if (!row) return failed("Payout was posted, but the owner invoice could not be prepared.");
-  return deliverPdf(context, row.phone, "owner_payout", ownerId, {
-    agency: row.agency, title: "Owner payout receipt", reference: payout.reference, recipient: row.owner,
-    issuedAt: new Date().toISOString(), fileName: `owner-payout-${safeFilePart(payout.reference)}.pdf`,
-    caption: `Owner payout receipt · ${money(payout.amount)} · ${payout.reference}`,
+async function renderOwnerPayout(agencyId: string, ownerId: string, payout: PayoutPayload): Promise<RenderedNotification> {
+  const row = await queryOne<{ agency: string; owner: string; phone: string }>(`SELECT a.name AS agency,o.name AS owner,o.phone FROM owners o JOIN agencies a ON a.id=o.agency_id WHERE o.agency_id=? AND o.id=? LIMIT 1`,[agencyId, ownerId]);
+  if (!row) throw new Error("The owner for this payout could not be found.");
+  if (!row.phone?.trim()) return { status: "skipped", reason: "The owner has no phone number." };
+  const bytes = await createTransactionInvoice({
+    agency: row.agency, title: "Owner payout receipt", reference: payout.reference, recipient: row.owner, issuedAt: new Date().toISOString(),
     lines: [
       { label: "Statement period", value: `${payout.periodFrom} to ${payout.periodTo}` },
       { label: "Payment method", value: payout.method },
       { label: "Reference", value: payout.reference },
     ], amountLabel: "Amount paid", amount: payout.amount,
   });
+  return {
+    status: "ready", phone: row.phone, recipientName: row.owner,
+    document: { bytes, fileName: `owner-payout-${safeFilePart(payout.reference)}.pdf` },
+    caption: `Owner payout receipt · ${money(payout.amount)} · ${payout.reference}`,
+  };
 }
 
-export async function deliverOwnerExpenseNotice(context: RequestContext, expenseId: string) {
-  const row = await queryOne<{ id:string;amount:number;category:string;description:string;occurredOn:string;ownerId:string;owner:string;phone:string;vehicle:string|null }>(`SELECT e.id,e.amount,e.category,e.description,e.occurred_on AS occurredOn,o.id AS ownerId,o.name AS owner,o.phone,v.make||' '||v.model||' · '||v.plate AS vehicle
+async function renderOwnerExpenseNotice(agencyId: string, expenseId: string): Promise<RenderedNotification> {
+  const row = await queryOne<{ id:string;amount:number;category:string;description:string;occurredOn:string;owner:string;phone:string;vehicle:string|null }>(`SELECT e.id,e.amount,e.category,e.description,e.occurred_on AS occurredOn,o.name AS owner,o.phone,v.make||' '||v.model||' · '||v.plate AS vehicle
     FROM expenses e JOIN owners o ON o.id=e.owner_id AND o.agency_id=e.agency_id LEFT JOIN vehicles v ON v.id=e.vehicle_id AND v.agency_id=e.agency_id
-    WHERE e.agency_id=? AND e.id=? LIMIT 1`,[context.agencyId, expenseId]);
-  if (!row) return skipped("Expense saved. No owner message was needed because the expense is not allocated to an owner.");
-  try {
-    await ensureWhatsAppRuntimeForDelivery(context.agencyId);
-    const sent = await sendWhatsAppText(context.agencyId, row.phone, [
+    WHERE e.agency_id=? AND e.id=? LIMIT 1`,[agencyId, expenseId]);
+  if (!row) return { status: "skipped", reason: "The expense is not allocated to an owner." };
+  if (!row.phone?.trim()) return { status: "skipped", reason: "The owner has no phone number." };
+  return {
+    status: "ready", phone: row.phone, recipientName: row.owner,
+    text: [
       `VibeRent owner expense notice`, `Expense: ${row.id}`, `Date: ${row.occurredOn}`,
       `Category: ${row.category}`, `Vehicle: ${row.vehicle ?? "Not linked"}`, `Details: ${row.description}`, `Amount: ${money(row.amount)}`,
-    ].join("\n"));
-    await audit(context, "expense", expenseId, "expense.owner_notice_sent", { messageId: sent.id, ownerId: row.ownerId });
-    return sentResult(`Expense saved and details sent to ${row.owner} on WhatsApp.`);
-  } catch (error) {
-    await audit(context, "expense", expenseId, "expense.owner_notice_failed", { reason: safeReason(error) });
-    return failed("Expense saved, but the owner WhatsApp message failed. Check the connection and owner phone number.");
-  }
-}
-
-async function deliverBookingPdf(context: RequestContext, bookingId: string, row: BookingNoticeRow, input: BookingPdfInput) {
-  return deliverPdf(context, row.phone, input.action, bookingId, { agency:row.agency,title:input.title,reference:input.reference??String(row.publicNumber ?? bookingId),recipient:row.customer,issuedAt:input.issuedAt,fileName:input.fileName,caption:input.caption,lines:input.lines,amountLabel:input.amountLabel,amount:input.amount });
-}
-
-async function deliverPdf(context: RequestContext, phone: string, action: string, entityId: string, input: { agency:string;title:string;reference:string;recipient:string;issuedAt:string;fileName:string;caption:string;lines:InvoiceLine[];amountLabel:string;amount:number }) {
-  if (!phone.trim()) return skipped("The record was saved, but WhatsApp delivery was skipped because no phone number is available.");
-  try {
-    const document = await createTransactionInvoice(input);
-    await ensureWhatsAppRuntimeForDelivery(context.agencyId);
-    const sent = await sendWhatsAppDocument(context.agencyId, phone, { document, mimeType:"application/pdf", fileName:input.fileName, caption:input.caption });
-    await audit(context, action.startsWith("owner_") ? "owner" : "booking", entityId, `${action}_sent`, { messageId: sent.id });
-    return sentResult(`${input.title} sent to ${input.recipient} on WhatsApp.`);
-  } catch (error) {
-    await audit(context, action.startsWith("owner_") ? "owner" : "booking", entityId, `${action}_failed`, { reason: safeReason(error) });
-    return failed(`${input.title} could not be sent. Check the WhatsApp connection and recipient phone number.`);
-  }
+    ].join("\n"),
+  };
 }
 
 function bookingNotice(agencyId: string, bookingId: string) {
@@ -187,13 +200,6 @@ function bookingNotice(agencyId: string, bookingId: string) {
     FROM bookings b JOIN agencies a ON a.id=b.agency_id JOIN customers c ON c.id=b.customer_id AND c.agency_id=b.agency_id LEFT JOIN vehicles v ON v.id=b.vehicle_id AND v.agency_id=b.agency_id WHERE b.agency_id=? AND b.id=? LIMIT 1`,[agencyId, bookingId]);
 }
 
-function audit(context: RequestContext, entityType: string, entityId: string, action: string, metadata: Record<string, unknown>) {
-  return execute("INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)",[`aud_${randomUUID()}`, context.agencyId, context.userId, action, entityType, entityId, JSON.stringify(metadata), new Date().toISOString()]);
-}
-function safeReason(error: unknown) { const message=error instanceof Error?error.message:"unknown";if(message.includes("already active"))return "duplicate_session";if(message.includes("not connected")||message.includes("reconnect"))return "whatsapp_not_connected";if(message.includes("not registered"))return "recipient_not_registered";return "delivery_failed"; }
 function safeFilePart(value:string){return value.replace(/[^a-z0-9_-]/gi,"-").slice(0,40)||"receipt";}
 function formatKm(value:number|null){return value===null?"Not recorded":`${value.toLocaleString("en-PK")} km`;}
 function money(value:number){return `PKR ${value.toLocaleString("en-PK")}`;}
-function sentResult(message:string):NotificationDeliveryResult{return {status:"sent",message};}
-function skipped(message:string):NotificationDeliveryResult{return {status:"skipped",message};}
-function failed(message:string):NotificationDeliveryResult{return {status:"failed",message};}

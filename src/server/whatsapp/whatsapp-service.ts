@@ -11,6 +11,7 @@ import makeWASocket, {
 import pino, { type Logger } from "pino";
 import { getWhatsAppDatabasePath } from "@/server/desktop/runtime-paths";
 import { normalizePakistanPhone, toWhatsAppJid, whatsAppJidUser } from "./pakistan-phone";
+import type { WhatsAppAuthStore } from "./auth-store";
 import { getSharedWhatsAppAuthStore, SqliteWhatsAppAuthStore } from "./sqlite-auth-store";
 import type {
   IncomingWhatsAppMessage,
@@ -22,7 +23,9 @@ import type {
 
 export type WhatsAppServiceOptions = {
   sessionId: string;
-  /** Opens a dedicated store for this path. Without it, the process-wide shared store is used. */
+  /** Session storage, e.g. PostgreSQL in the web gateway. Takes precedence over `databasePath`. */
+  authStore?: WhatsAppAuthStore;
+  /** Opens a dedicated SQLite store for this path. Without either option, the process-wide shared SQLite store is used. */
   databasePath?: string;
   logger?: Logger;
   reconnectDelayMs?: number;
@@ -58,8 +61,8 @@ export class WhatsAppService extends EventEmitter {
   > &
     WhatsAppServiceOptions;
   private readonly logger: Logger;
-  private readonly authStore: SqliteWhatsAppAuthStore;
-  private readonly ownsAuthStore: boolean;
+  private readonly authStore: WhatsAppAuthStore;
+  private readonly ownedSqliteStore?: SqliteWhatsAppAuthStore;
   private readonly recipientLookups = new Map<string, { registered: boolean; expiresAt: number }>();
   private socket?: WASocket;
   private reconnectTimer?: NodeJS.Timeout;
@@ -79,10 +82,8 @@ export class WhatsAppService extends EventEmitter {
       ...options,
     };
     this.logger = options.logger ?? pino({ level: process.env.WHATSAPP_LOG_LEVEL ?? "info" });
-    this.ownsAuthStore = Boolean(options.databasePath);
-    this.authStore = options.databasePath
-      ? new SqliteWhatsAppAuthStore(options.databasePath)
-      : getSharedWhatsAppAuthStore(getWhatsAppDatabasePath());
+    if (!options.authStore && options.databasePath) this.ownedSqliteStore = new SqliteWhatsAppAuthStore(options.databasePath);
+    this.authStore = options.authStore ?? this.ownedSqliteStore ?? getSharedWhatsAppAuthStore(getWhatsAppDatabasePath());
   }
 
   get connectionStatus(): WhatsAppConnectionStatus {
@@ -91,7 +92,7 @@ export class WhatsAppService extends EventEmitter {
 
   async start(): Promise<void> {
     if (!this.stopped) return;
-    if (!this.authStore.acquireSessionLease(this.options.sessionId, this.leaseHolderId, this.leaseTtlMs)) {
+    if (!(await this.authStore.acquireSessionLease(this.options.sessionId, this.leaseHolderId, this.leaseTtlMs))) {
       throw new Error("This WhatsApp session is already active in another VibeRent process.");
     }
     this.stopped = false;
@@ -101,7 +102,7 @@ export class WhatsAppService extends EventEmitter {
     } catch (error) {
       this.stopped = true;
       this.stopLeaseHeartbeat();
-      this.authStore.releaseSessionLease(this.options.sessionId, this.leaseHolderId);
+      await this.authStore.releaseSessionLease(this.options.sessionId, this.leaseHolderId);
       throw error;
     }
   }
@@ -113,13 +114,13 @@ export class WhatsAppService extends EventEmitter {
     this.stopLeaseHeartbeat();
     this.socket?.end(undefined);
     this.socket = undefined;
-    this.authStore.releaseSessionLease(this.options.sessionId, this.leaseHolderId);
+    await this.authStore.releaseSessionLease(this.options.sessionId, this.leaseHolderId);
     this.setStatus("disconnected");
   }
 
   async close(): Promise<void> {
     await this.stop();
-    if (this.ownsAuthStore) this.authStore.close();
+    this.ownedSqliteStore?.close();
   }
 
   async logout(): Promise<void> {
@@ -131,8 +132,8 @@ export class WhatsAppService extends EventEmitter {
       if (this.socket) await this.socket.logout("VibeRent WhatsApp session logged out");
     } finally {
       this.socket = undefined;
-      this.authStore.clearSession(this.options.sessionId);
-      this.authStore.releaseSessionLease(this.options.sessionId, this.leaseHolderId);
+      await this.authStore.clearSession(this.options.sessionId);
+      await this.authStore.releaseSessionLease(this.options.sessionId, this.leaseHolderId);
       this.setStatus("logged_out");
     }
   }
@@ -194,7 +195,7 @@ export class WhatsAppService extends EventEmitter {
     const id = message?.key.id;
     if (!id) throw new Error("WhatsApp did not return a message ID.");
     if (message.message) {
-      this.authStore.saveMessage(this.options.sessionId, jid, id, message.message);
+      await this.authStore.saveMessage(this.options.sessionId, jid, id, message.message);
     }
     return { id, jid };
   }
@@ -250,8 +251,7 @@ export class WhatsAppService extends EventEmitter {
         if (loggedOut) {
           this.stopped = true;
           this.stopLeaseHeartbeat();
-          this.authStore.clearSession(this.options.sessionId);
-          this.authStore.releaseSessionLease(this.options.sessionId, this.leaseHolderId);
+          void this.forgetSession().catch((error: unknown) => this.emit("error", error));
         } else if (!this.stopped) {
           this.scheduleReconnect();
         }
@@ -325,11 +325,29 @@ export class WhatsAppService extends EventEmitter {
     }, this.options.reconnectDelayMs);
   }
 
+  /** Clears the stored session after WhatsApp logged this device out, then frees the lease. */
+  private async forgetSession(): Promise<void> {
+    await this.authStore.clearSession(this.options.sessionId);
+    await this.authStore.releaseSessionLease(this.options.sessionId, this.leaseHolderId);
+  }
+
   private startLeaseHeartbeat(): void {
     this.stopLeaseHeartbeat();
-    this.leaseTimer = setInterval(() => {
-      if (this.stopped) return;
-      if (this.authStore.refreshSessionLease(this.options.sessionId, this.leaseHolderId, this.leaseTtlMs)) return;
+    let refreshing = false;
+    this.leaseTimer = setInterval(async () => {
+      if (this.stopped || refreshing) return;
+      refreshing = true;
+      let held: boolean;
+      try {
+        held = await this.authStore.refreshSessionLease(this.options.sessionId, this.leaseHolderId, this.leaseTtlMs);
+      } catch (error) {
+        // A transient database error is not proof that another process owns the session.
+        this.logger.warn({ err: error }, "WhatsApp session lease refresh failed");
+        return;
+      } finally {
+        refreshing = false;
+      }
+      if (held || this.stopped) return;
       this.stopped = true;
       this.socket?.end(new Error("WhatsApp session lease was lost."));
       this.socket = undefined;

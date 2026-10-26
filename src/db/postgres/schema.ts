@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { customType, doublePrecision as real, index, integer, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { bigint, customType, doublePrecision as real, index, integer, pgTable, primaryKey, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 import type { AgreementDesignConfig } from "@/lib/agreement-config";
 
 // Keep boolean storage compatible with the existing SQLite SQL while exposing
@@ -192,3 +192,31 @@ export const legacyImportRecords = pgTable("legacy_import_records", {
   importedAt: text("imported_at").notNull(),
 }, t => [uniqueIndex("legacy_import_records_source_uq").on(t.agencyId,t.sourceAgencyId,t.sourceTable,t.sourceId)]);
 
+
+// Outbound customer/owner notices (agreements, receipts, invoices, owner messages). The row is the
+// durable record of each delivery; background jobs render and send it.
+export const notificationDeliveries = pgTable("notification_deliveries", {
+  id:text("id").primaryKey(), agencyId:text("agency_id").notNull().references(()=>agencies.id,{onDelete:"cascade"}), kind:text("kind").notNull(), entityType:text("entity_type").notNull(), entityId:text("entity_id").notNull(), channel:text("channel").notNull().default("whatsapp"), status:text("status",{enum:["queued","rendering","ready","sending","sent","failed","skipped","cancelled"]}).notNull().default("queued"), recipientPhone:text("recipient_phone"), recipientName:text("recipient_name"), payload:text("payload").notNull().default("{}"), documentFileId:text("document_file_id").references(()=>privateFiles.id), messageText:text("message_text"), fileName:text("file_name"), caption:text("caption"), attempts:integer("attempts").notNull().default(0), lastErrorCode:text("last_error_code"), waMessageId:text("wa_message_id"), idempotencyKey:text("idempotency_key").notNull(), requestedBy:text("requested_by").references(()=>users.id), sentAt:text("sent_at"), ...timestamps,
+}, t => [uniqueIndex("notification_deliveries_idempotency_uq").on(t.agencyId,t.idempotencyKey), index("notification_deliveries_entity_idx").on(t.agencyId,t.entityType,t.entityId), index("notification_deliveries_status_idx").on(t.status,t.updatedAt)]);
+
+// Desired and reported state of each agency's WhatsApp connection. Web writes `desired_state`; the
+// gateway that owns the socket writes the rest, so any web replica can show the live status.
+export const whatsappSessions = pgTable("whatsapp_sessions", {
+  agencyId:text("agency_id").primaryKey().references(()=>agencies.id,{onDelete:"cascade"}), sessionId:text("session_id").notNull().unique(), desiredState:text("desired_state",{enum:["connected","disconnected"]}).notNull().default("disconnected"), status:text("status").notNull().default("idle"), qrPayload:text("qr_payload"), qrUpdatedAt:text("qr_updated_at"), linkedJid:text("linked_jid"), lastError:text("last_error"), holderId:text("holder_id"), heartbeatAt:text("heartbeat_at"), ...timestamps,
+});
+
+// Baileys authentication state for the WhatsApp gateway. Desktop keeps the same tables in its
+// dedicated whatsapp.db file (see sqlite-auth-store.ts).
+export const whatsappAuthCredentials = pgTable("whatsapp_auth_credentials", {
+  sessionId:text("session_id").primaryKey(), payload:text("payload").notNull(), updatedAt:text("updated_at").notNull(),
+});
+export const whatsappAuthKeys = pgTable("whatsapp_auth_keys", {
+  sessionId:text("session_id").notNull(), keyType:text("key_type").notNull(), keyId:text("key_id").notNull(), payload:text("payload").notNull(), updatedAt:text("updated_at").notNull(),
+}, t => [primaryKey({ columns: [t.sessionId,t.keyType,t.keyId] })]);
+/** Messages VibeRent sent, kept briefly so Baileys can answer retry requests. */
+export const whatsappMessageCache = pgTable("whatsapp_message_cache", {
+  sessionId:text("session_id").notNull(), remoteJid:text("remote_jid").notNull(), messageId:text("message_id").notNull(), payload:text("payload").notNull(), createdAt:text("created_at").notNull(),
+}, t => [primaryKey({ columns: [t.sessionId,t.remoteJid,t.messageId] }), index("whatsapp_message_cache_message_idx").on(t.sessionId,t.messageId), index("whatsapp_message_cache_created_idx").on(t.createdAt)]);
+export const whatsappSessionLeases = pgTable("whatsapp_session_leases", {
+  sessionId:text("session_id").primaryKey(), holderId:text("holder_id").notNull(), expiresAt:bigint("expires_at",{mode:"number"}).notNull(), updatedAt:text("updated_at").notNull(),
+});

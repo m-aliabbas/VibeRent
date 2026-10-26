@@ -169,6 +169,13 @@
       "when": 1792819074920,
       "tag": "0023_early_rhodey",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1792999394251,
+      "tag": "0024_background_jobs_and_notifications",
+      "breakpoints": true
     }
   ]
 }

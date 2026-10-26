@@ -185,3 +185,20 @@ export const legacyImportRecords = sqliteTable("legacy_import_records", {
   rowJson: text("row_json").notNull(),
   importedAt: text("imported_at").notNull(),
 }, t => [uniqueIndex("legacy_import_records_source_uq").on(t.agencyId,t.sourceAgencyId,t.sourceTable,t.sourceId)]);
+
+// Outbound customer/owner notices (agreements, receipts, invoices, owner messages). The row is the
+// durable record of each delivery; background jobs render and send it.
+export const notificationDeliveries = sqliteTable("notification_deliveries", {
+  id:text("id").primaryKey(), agencyId:text("agency_id").notNull().references(()=>agencies.id,{onDelete:"cascade"}), kind:text("kind").notNull(), entityType:text("entity_type").notNull(), entityId:text("entity_id").notNull(), channel:text("channel").notNull().default("whatsapp"), status:text("status",{enum:["queued","rendering","ready","sending","sent","failed","skipped","cancelled"]}).notNull().default("queued"), recipientPhone:text("recipient_phone"), recipientName:text("recipient_name"), payload:text("payload").notNull().default("{}"), documentFileId:text("document_file_id").references(()=>privateFiles.id), messageText:text("message_text"), fileName:text("file_name"), caption:text("caption"), attempts:integer("attempts").notNull().default(0), lastErrorCode:text("last_error_code"), waMessageId:text("wa_message_id"), idempotencyKey:text("idempotency_key").notNull(), requestedBy:text("requested_by").references(()=>users.id), sentAt:text("sent_at"), ...timestamps,
+}, t => [uniqueIndex("notification_deliveries_idempotency_uq").on(t.agencyId,t.idempotencyKey), index("notification_deliveries_entity_idx").on(t.agencyId,t.entityType,t.entityId), index("notification_deliveries_status_idx").on(t.status,t.updatedAt)]);
+
+// Desired and reported state of each agency's WhatsApp connection. Web writes `desired_state`; the
+// process that owns the socket writes the rest, so any web replica can show the live status.
+export const whatsappSessions = sqliteTable("whatsapp_sessions", {
+  agencyId:text("agency_id").primaryKey().references(()=>agencies.id,{onDelete:"cascade"}), sessionId:text("session_id").notNull().unique(), desiredState:text("desired_state",{enum:["connected","disconnected"]}).notNull().default("disconnected"), status:text("status").notNull().default("idle"), qrPayload:text("qr_payload"), qrUpdatedAt:text("qr_updated_at"), linkedJid:text("linked_jid"), lastError:text("last_error"), holderId:text("holder_id"), heartbeatAt:text("heartbeat_at"), ...timestamps,
+});
+
+// Durable job queue for the single-process SQLite runtimes (desktop and LAN). PostgreSQL uses pg-boss.
+export const backgroundJobs = sqliteTable("background_jobs", {
+  id:text("id").primaryKey(), name:text("name").notNull(), data:text("data").notNull().default("{}"), singletonKey:text("singleton_key"), status:text("status",{enum:["pending","active","failed"]}).notNull().default("pending"), attempts:integer("attempts").notNull().default(0), runAt:text("run_at").notNull(), lastError:text("last_error"), ...timestamps,
+}, t => [index("background_jobs_due_idx").on(t.status,t.runAt), uniqueIndex("background_jobs_singleton_uq").on(t.name,t.singletonKey).where(sql`status IN ('pending','active') AND singleton_key IS NOT NULL`)]);
