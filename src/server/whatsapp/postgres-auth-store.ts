@@ -5,6 +5,7 @@ import Database from "better-sqlite3";
 import { BufferJSON, initAuthCreds, proto, type AuthenticationCreds, type SignalDataSet, type SignalDataTypeMap, type WAMessageContent } from "@whiskeysockets/baileys";
 import { execute, inTransaction, queryAll, queryOne } from "@/db/query";
 import type { WhatsAppAuthStore } from "@/server/whatsapp/auth-store";
+import { createSerialQueue } from "@/server/whatsapp/serial-queue";
 
 function serialize(value: unknown): string {
   return JSON.stringify(value, BufferJSON.replacer);
@@ -19,23 +20,30 @@ const writeBatchSize = 200;
 /** Sent messages older than this are no longer needed for WhatsApp retry requests. */
 export const messageCacheRetentionMs = 7 * 24 * 60 * 60 * 1000;
 
-/** Baileys session storage in PostgreSQL for the web WhatsApp gateway. */
+/**
+ * Baileys session storage in PostgreSQL for the web WhatsApp gateway. Every credential and key read or
+ * write for a session runs through one in-order queue, matching the synchronous SQLite store.
+ */
 export class PostgresWhatsAppAuthStore implements WhatsAppAuthStore {
+  private readonly serial = createSerialQueue();
+
   async useSession(sessionId: string) {
     const normalizedSessionId = sessionId.trim();
     if (!normalizedSessionId) throw new Error("A non-empty WhatsApp session ID is required.");
-    const row = await queryOne<{ payload: string }>("SELECT payload FROM whatsapp_auth_credentials WHERE session_id=?", [normalizedSessionId]);
+    const inOrder = <T>(operation: () => Promise<T>) => this.serial(normalizedSessionId, operation);
+    const row = await inOrder(() => queryOne<{ payload: string }>("SELECT payload FROM whatsapp_auth_credentials WHERE session_id=?", [normalizedSessionId]));
     const creds = row ? deserialize<AuthenticationCreds>(row.payload) : initAuthCreds();
 
-    const saveCreds = async () => {
+    // Baileys mutates `creds` in place; serializing at write time inside the queue stores the latest state.
+    const saveCreds = () => inOrder(async () => {
       await execute(
         `INSERT INTO whatsapp_auth_credentials (session_id,payload,updated_at) VALUES (?,?,?)
          ON CONFLICT (session_id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at`,
         [normalizedSessionId, serialize(creds), new Date().toISOString()],
       );
-    };
+    });
 
-    const getKeys = async <T extends keyof SignalDataTypeMap>(type: T, ids: string[]) => {
+    const getKeys = <T extends keyof SignalDataTypeMap>(type: T, ids: string[]) => inOrder(async () => {
       const result: { [id: string]: SignalDataTypeMap[T] } = {};
       if (ids.length === 0) return result;
       const rows = await queryAll<{ keyId: string; payload: string }>(
@@ -50,9 +58,9 @@ export class PostgresWhatsAppAuthStore implements WhatsAppAuthStore {
         result[keyRow.keyId] = value;
       }
       return result;
-    };
+    });
 
-    const setKeys = async (data: SignalDataSet) => {
+    const setKeys = (data: SignalDataSet) => inOrder(async () => {
       const now = new Date().toISOString();
       const upserts: Array<[string, string, string]> = [];
       const removals = new Map<string, string[]>();
@@ -69,23 +77,23 @@ export class PostgresWhatsAppAuthStore implements WhatsAppAuthStore {
           await execute("DELETE FROM whatsapp_auth_keys WHERE session_id=? AND key_type=? AND key_id = ANY(?)", [normalizedSessionId, type, ids]);
         }
       });
-    };
+    });
 
     return {
       state: {
         creds,
-        keys: { get: getKeys, set: setKeys, clear: async () => { await execute("DELETE FROM whatsapp_auth_keys WHERE session_id=?", [normalizedSessionId]); } },
+        keys: { get: getKeys, set: setKeys, clear: () => inOrder(async () => { await execute("DELETE FROM whatsapp_auth_keys WHERE session_id=?", [normalizedSessionId]); }) },
       },
       saveCreds,
     };
   }
 
   async clearSession(sessionId: string) {
-    await inTransaction(async () => {
+    await this.serial(sessionId.trim(), () => inTransaction(async () => {
       await execute("DELETE FROM whatsapp_auth_keys WHERE session_id=?", [sessionId]);
       await execute("DELETE FROM whatsapp_message_cache WHERE session_id=?", [sessionId]);
       await execute("DELETE FROM whatsapp_auth_credentials WHERE session_id=?", [sessionId]);
-    });
+    }));
   }
 
   async hasRegisteredSession(sessionId: string) {
