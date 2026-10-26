@@ -6,7 +6,7 @@ import type { RequestContext } from "@/server/context/request-context";
 import { DomainError } from "@/server/domain/errors";
 import { normalizePakistanPhone } from "@/server/whatsapp/pakistan-phone";
 import { getWhatsAppDatabasePath } from "@/server/desktop/runtime-paths";
-import { SqliteWhatsAppAuthStore } from "@/server/whatsapp/sqlite-auth-store";
+import { getSharedWhatsAppAuthStore } from "@/server/whatsapp/sqlite-auth-store";
 import { getWhatsAppRuntimeSnapshot, logoutWhatsAppRuntime, startWhatsAppRuntime } from "@/server/whatsapp/runtime-registry";
 
 type SettingsRow={sessionId:string;ownerNumber:string|null;listeningEnabled:number};
@@ -52,13 +52,11 @@ export async function resetWhatsApp(context:RequestContext){requireOwner(context
 
 export async function startConfiguredWhatsAppRuntimes(){
   const rows=await queryAll<{agencyId:string;sessionId:string;ownerNumber:string|null;listeningEnabled:number}>("SELECT agency_id AS agencyId,session_id AS sessionId,owner_phone_normalized AS ownerNumber,listening_enabled AS listeningEnabled FROM whatsapp_settings");
-  const authStore=new SqliteWhatsAppAuthStore(getWhatsAppDatabasePath());
-  try {
-    for(const row of rows){
-      if(!authStore.hasRegisteredSession(row.sessionId))continue;
-      try{await startWhatsAppRuntime({agencyId:row.agencyId,sessionId:row.sessionId,ownerNumber:row.ownerNumber,listeningEnabled:Boolean(row.listeningEnabled)})}catch(error){console.error(JSON.stringify({event:"whatsapp.start_failed",agencyId:row.agencyId,error:error instanceof Error?error.message:"unknown"}))}
-    }
-  } finally { authStore.close(); }
+  const authStore=getSharedWhatsAppAuthStore(getWhatsAppDatabasePath());
+  for(const row of rows){
+    if(!authStore.hasRegisteredSession(row.sessionId))continue;
+    try{await startWhatsAppRuntime({agencyId:row.agencyId,sessionId:row.sessionId,ownerNumber:row.ownerNumber,listeningEnabled:Boolean(row.listeningEnabled)})}catch(error){console.error(JSON.stringify({event:"whatsapp.start_failed",agencyId:row.agencyId,error:error instanceof Error?error.message:"unknown"}))}
+  }
 }
 
 export async function ensureWhatsAppRuntimeForDelivery(agencyId:string){

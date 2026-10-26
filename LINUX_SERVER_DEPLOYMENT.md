@@ -10,6 +10,7 @@ The Compose stack contains:
 - `postgres`: PostgreSQL 17
 - `postgres_data`: a Docker named volume containing the PostgreSQL database
 - `private_files`: a Docker named volume containing uploaded private files
+- `app_data`: a Docker named volume containing runtime state such as linked WhatsApp sessions
 
 The application runs PostgreSQL migrations automatically before the web server starts. Both services have health checks and use `restart: unless-stopped`.
 
@@ -136,6 +137,7 @@ VibeRent data is not stored inside disposable container layers. Docker named vol
 
 - `viberent_postgres_data`: agencies, users, bookings, vehicles, customers, payments, expenses, and other PostgreSQL records
 - `viberent_private_files`: uploaded private documents and images stored by the application
+- `viberent_app_data`: runtime state in `/app/.data`, including linked WhatsApp sessions (`whatsapp.db`) and the Google Drive session, so agencies do not need to scan the WhatsApp QR code again after a deployment
 
 If the application crashes, the server loses power, or Linux is restarted, the data remains on the server disk in these volumes. When Docker and the Compose stack start again, VibeRent reconnects to the same data.
 
@@ -171,6 +173,7 @@ Normal `docker compose down` does not delete named volumes. The following operat
 docker compose --env-file .env.docker down --volumes
 docker volume rm viberent_postgres_data
 docker volume rm viberent_private_files
+docker volume rm viberent_app_data
 docker system prune --volumes
 ```
 

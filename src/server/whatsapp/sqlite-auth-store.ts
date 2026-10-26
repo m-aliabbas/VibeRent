@@ -12,8 +12,31 @@ import {
   type WAMessageContent,
 } from "@whiskeysockets/baileys";
 
-type AuthKeyRow = { payload: string };
+type AuthKeyRow = { keyId: string; payload: string };
 type CredentialsRow = { payload: string };
+
+/** Sent messages kept per session so Baileys can answer retry requests. */
+const retainedMessagesPerSession = 500;
+/** Pruning runs at most this often per session instead of on every saved message. */
+const pruneIntervalMs = 60 * 60 * 1000;
+
+const sharedStores = (globalThis as typeof globalThis & {
+  __viberentWhatsAppAuthStores?: Map<string, SqliteWhatsAppAuthStore>;
+}).__viberentWhatsAppAuthStores ??= new Map<string, SqliteWhatsAppAuthStore>();
+
+/**
+ * One connection per database file for the whole process. better-sqlite3 is synchronous, so separate
+ * connections to the same file wait on each other with `busy_timeout` and freeze the event loop.
+ * Callers must not close the shared store.
+ */
+export function getSharedWhatsAppAuthStore(databasePath: string): SqliteWhatsAppAuthStore {
+  const resolved = path.resolve(databasePath);
+  const existing = sharedStores.get(resolved);
+  if (existing?.isOpen) return existing;
+  const store = new SqliteWhatsAppAuthStore(resolved);
+  sharedStores.set(resolved, store);
+  return store;
+}
 
 function serialize(value: unknown): string {
   return JSON.stringify(value, BufferJSON.replacer);
@@ -32,6 +55,7 @@ export type SqliteWhatsAppAuthState = {
 export class SqliteWhatsAppAuthStore {
   readonly databasePath: string;
   private readonly database: Database.Database;
+  private readonly lastPrunedAt = new Map<string, number>();
 
   constructor(databasePath: string) {
     this.databasePath = path.resolve(databasePath);
@@ -106,43 +130,44 @@ export class SqliteWhatsAppAuthStore {
         .run(normalizedSessionId, serialize(creds), now);
     };
 
+    const getKeysQuery = this.database.prepare(`
+      SELECT key_id AS keyId, payload
+      FROM whatsapp_auth_keys
+      WHERE session_id = ? AND key_type = ? AND key_id IN (SELECT value FROM json_each(?))
+    `);
+
     const getKeys = async <T extends keyof SignalDataTypeMap>(type: T, ids: string[]) => {
       const result: { [id: string]: SignalDataTypeMap[T] } = {};
-      const query = this.database.prepare(`
-        SELECT payload
-        FROM whatsapp_auth_keys
-        WHERE session_id = ? AND key_type = ? AND key_id = ?
-      `);
+      if (ids.length === 0) return result;
 
-      for (const id of ids) {
-        const keyRow = query.get(normalizedSessionId, type, id) as AuthKeyRow | undefined;
-        if (!keyRow) continue;
-
+      // One query per call instead of one per key ID: Baileys asks for many keys while decrypting.
+      const rows = getKeysQuery.all(normalizedSessionId, type, JSON.stringify(ids)) as AuthKeyRow[];
+      for (const keyRow of rows) {
         let value = deserialize<SignalDataTypeMap[T]>(keyRow.payload);
         if (type === "app-state-sync-key") {
           value = proto.Message.AppStateSyncKeyData.fromObject(
             value as proto.Message.IAppStateSyncKeyData,
           ) as unknown as SignalDataTypeMap[T];
         }
-        result[id] = value;
+        result[keyRow.keyId] = value;
       }
 
       return result;
     };
 
-    const setKeys = async (data: SignalDataSet) => {
-      const upsert = this.database.prepare(`
-        INSERT INTO whatsapp_auth_keys (session_id, key_type, key_id, payload, updated_at)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(session_id, key_type, key_id) DO UPDATE SET
-          payload = excluded.payload,
-          updated_at = excluded.updated_at
-      `);
-      const remove = this.database.prepare(`
-        DELETE FROM whatsapp_auth_keys
-        WHERE session_id = ? AND key_type = ? AND key_id = ?
-      `);
+    const upsert = this.database.prepare(`
+      INSERT INTO whatsapp_auth_keys (session_id, key_type, key_id, payload, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(session_id, key_type, key_id) DO UPDATE SET
+        payload = excluded.payload,
+        updated_at = excluded.updated_at
+    `);
+    const remove = this.database.prepare(`
+      DELETE FROM whatsapp_auth_keys
+      WHERE session_id = ? AND key_type = ? AND key_id = ?
+    `);
 
+    const setKeys = async (data: SignalDataSet) => {
       this.database.transaction(() => {
         const now = new Date().toISOString();
         for (const [type, values] of Object.entries(data)) {
@@ -191,6 +216,10 @@ export class SqliteWhatsAppAuthStore {
     } catch {
       return false;
     }
+  }
+
+  get isOpen(): boolean {
+    return this.database.open;
   }
 
   close(): void {
@@ -249,24 +278,32 @@ export class SqliteWhatsAppAuthStore {
     messageId: string,
     message: WAMessageContent,
   ): void {
-    this.database.transaction(() => {
-      this.database.prepare(`
-        INSERT INTO whatsapp_messages (session_id, remote_jid, message_id, payload, created_at)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(session_id, remote_jid, message_id) DO UPDATE SET
-          payload = excluded.payload,
-          created_at = excluded.created_at
-      `).run(sessionId, remoteJid, messageId, serialize(message), new Date().toISOString());
-      this.database.prepare(`
-        DELETE FROM whatsapp_messages
-        WHERE session_id = ? AND rowid NOT IN (
-          SELECT rowid FROM whatsapp_messages
-          WHERE session_id = ?
-          ORDER BY created_at DESC
-          LIMIT 500
-        )
-      `).run(sessionId, sessionId);
-    })();
+    this.database.prepare(`
+      INSERT INTO whatsapp_messages (session_id, remote_jid, message_id, payload, created_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(session_id, remote_jid, message_id) DO UPDATE SET
+        payload = excluded.payload,
+        created_at = excluded.created_at
+    `).run(sessionId, remoteJid, messageId, serialize(message), new Date().toISOString());
+
+    const now = Date.now();
+    if (now - (this.lastPrunedAt.get(sessionId) ?? 0) >= pruneIntervalMs) {
+      this.lastPrunedAt.set(sessionId, now);
+      this.pruneMessages(sessionId);
+    }
+  }
+
+  /** Keeps the newest retained messages for a session and deletes the rest. */
+  pruneMessages(sessionId: string, keep = retainedMessagesPerSession): number {
+    return this.database.prepare(`
+      DELETE FROM whatsapp_messages
+      WHERE session_id = ? AND created_at < (
+        SELECT created_at FROM whatsapp_messages
+        WHERE session_id = ?
+        ORDER BY created_at DESC
+        LIMIT 1 OFFSET ?
+      )
+    `).run(sessionId, sessionId, keep - 1).changes;
   }
 
   private clearSessionKeys(sessionId: string): void {

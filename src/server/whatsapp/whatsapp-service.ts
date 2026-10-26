@@ -11,7 +11,7 @@ import makeWASocket, {
 import pino, { type Logger } from "pino";
 import { getWhatsAppDatabasePath } from "@/server/desktop/runtime-paths";
 import { normalizePakistanPhone, toWhatsAppJid, whatsAppJidUser } from "./pakistan-phone";
-import { SqliteWhatsAppAuthStore } from "./sqlite-auth-store";
+import { getSharedWhatsAppAuthStore, SqliteWhatsAppAuthStore } from "./sqlite-auth-store";
 import type {
   IncomingWhatsAppMessage,
   SendDocumentInput,
@@ -22,11 +22,22 @@ import type {
 
 export type WhatsAppServiceOptions = {
   sessionId: string;
+  /** Opens a dedicated store for this path. Without it, the process-wide shared store is used. */
   databasePath?: string;
   logger?: Logger;
   reconnectDelayMs?: number;
   checkRecipientBeforeSending?: boolean;
 };
+
+/** How long a recipient lookup is trusted. Registered numbers rarely leave WhatsApp. */
+const registeredRecipientTtlMs = 24 * 60 * 60 * 1000;
+/** Unregistered results expire quickly so a customer who just installed WhatsApp is retried soon. */
+const unregisteredRecipientTtlMs = 10 * 60 * 1000;
+
+/** Chats VibeRent never acts on: groups, status updates, broadcast lists and channels. */
+function isIgnoredChat(jid: string): boolean {
+  return jid === "status@broadcast" || jid.endsWith("@g.us") || jid.endsWith("@broadcast") || jid.endsWith("@newsletter");
+}
 
 function disconnectStatusCode(error: unknown): number | undefined {
   if (!error || typeof error !== "object" || !("output" in error)) return undefined;
@@ -48,6 +59,8 @@ export class WhatsAppService extends EventEmitter {
     WhatsAppServiceOptions;
   private readonly logger: Logger;
   private readonly authStore: SqliteWhatsAppAuthStore;
+  private readonly ownsAuthStore: boolean;
+  private readonly recipientLookups = new Map<string, { registered: boolean; expiresAt: number }>();
   private socket?: WASocket;
   private reconnectTimer?: NodeJS.Timeout;
   private leaseTimer?: NodeJS.Timeout;
@@ -66,9 +79,10 @@ export class WhatsAppService extends EventEmitter {
       ...options,
     };
     this.logger = options.logger ?? pino({ level: process.env.WHATSAPP_LOG_LEVEL ?? "info" });
-    this.authStore = new SqliteWhatsAppAuthStore(
-      options.databasePath ?? getWhatsAppDatabasePath(),
-    );
+    this.ownsAuthStore = Boolean(options.databasePath);
+    this.authStore = options.databasePath
+      ? new SqliteWhatsAppAuthStore(options.databasePath)
+      : getSharedWhatsAppAuthStore(getWhatsAppDatabasePath());
   }
 
   get connectionStatus(): WhatsAppConnectionStatus {
@@ -105,7 +119,7 @@ export class WhatsAppService extends EventEmitter {
 
   async close(): Promise<void> {
     await this.stop();
-    this.authStore.close();
+    if (this.ownsAuthStore) this.authStore.close();
   }
 
   async logout(): Promise<void> {
@@ -169,7 +183,7 @@ export class WhatsAppService extends EventEmitter {
     const jid = toWhatsAppJid(phoneNumber);
     if (this.options.checkRecipientBeforeSending) {
       try {
-        if (!(await this.isRegistered(phoneNumber))) throw new Error("The recipient is not registered on WhatsApp.");
+        if (!(await this.isRegisteredCached(jid, phoneNumber))) throw new Error("The recipient is not registered on WhatsApp.");
       } catch (error) {
         if (error instanceof Error && error.message.includes("not registered")) throw error;
         this.logger.warn({ err:error },"WhatsApp recipient lookup failed; attempting direct delivery");
@@ -183,6 +197,18 @@ export class WhatsAppService extends EventEmitter {
       this.authStore.saveMessage(this.options.sessionId, jid, id, message.message);
     }
     return { id, jid };
+  }
+
+  /** Looks a recipient up once and reuses the answer, instead of a WhatsApp round trip before every send. */
+  private async isRegisteredCached(jid: string, phoneNumber: string): Promise<boolean> {
+    const cached = this.recipientLookups.get(jid);
+    if (cached && cached.expiresAt > Date.now()) return cached.registered;
+    const registered = await this.isRegistered(phoneNumber);
+    this.recipientLookups.set(jid, {
+      registered,
+      expiresAt: Date.now() + (registered ? registeredRecipientTtlMs : unregisteredRecipientTtlMs),
+    });
+    return registered;
   }
 
   private async connect(): Promise<void> {
@@ -231,17 +257,9 @@ export class WhatsAppService extends EventEmitter {
         }
       }
     });
+    // Inbound messages are not stored: `getMessage` only needs messages VibeRent sent, which `send()`
+    // saves. Storing every chat on a busy agency phone blocked the event loop with SQLite writes.
     socket.ev.on("messages.upsert", ({ messages, type }) => {
-      for (const message of messages) {
-        if (message.key.remoteJid && message.key.id && message.message) {
-          this.authStore.saveMessage(
-            this.options.sessionId,
-            message.key.remoteJid,
-            message.key.id,
-            message.message,
-          );
-        }
-      }
       if (type !== "notify") return;
       for (const message of messages) this.handleIncomingMessage(message);
     });
@@ -249,7 +267,7 @@ export class WhatsAppService extends EventEmitter {
 
   private handleIncomingMessage(message: WAMessage): void {
     if (message.key.fromMe || !message.key.id || !message.key.remoteJid) return;
-    if (message.key.remoteJid === "status@broadcast") return;
+    if (isIgnoredChat(message.key.remoteJid)) return;
 
     const content = normalizeMessageContent(message.message);
     if (!content) return;

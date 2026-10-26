@@ -12,7 +12,7 @@ export {
   type CnicImageCommand,
   type SavedIncomingImage,
 } from "./incoming-image-command";
-export { SqliteWhatsAppAuthStore } from "./sqlite-auth-store";
+export { getSharedWhatsAppAuthStore, SqliteWhatsAppAuthStore } from "./sqlite-auth-store";
 export { WhatsAppService, type WhatsAppServiceOptions } from "./whatsapp-service";
 export type {
   IncomingWhatsAppMedia,

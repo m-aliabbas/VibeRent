@@ -7,7 +7,7 @@ import { parseCnicImageCommand } from "./incoming-image-command";
 import { findActiveDraftByNumber, ingestBookingCnic } from "@/server/services/booking-cnic-service";
 import { runOwnerCommand } from "./owner-command-service";
 import { getWhatsAppDatabasePath } from "@/server/desktop/runtime-paths";
-import { SqliteWhatsAppAuthStore } from "./sqlite-auth-store";
+import { getSharedWhatsAppAuthStore } from "./sqlite-auth-store";
 
 type RuntimeEntry = {
   agencyId: string;
@@ -79,11 +79,7 @@ export async function logoutWhatsAppRuntime(agencyId:string, sessionId?:string) 
     finally { await entry.service.close();runtimes.delete(agencyId); }
     return;
   }
-  if(sessionId) {
-    const authStore=new SqliteWhatsAppAuthStore(getWhatsAppDatabasePath());
-    try { authStore.clearSession(sessionId); }
-    finally { authStore.close(); }
-  }
+  if(sessionId) getSharedWhatsAppAuthStore(getWhatsAppDatabasePath()).clearSession(sessionId);
 }
 
 export async function sendWhatsAppDocument(agencyId:string,phoneNumber:string,input:{document:Buffer;mimeType:string;fileName:string;caption?:string}){
