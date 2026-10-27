@@ -5,7 +5,7 @@ import { DomainError } from "@/server/domain/errors";
 
 export async function getCurrentSession(context: RequestContext) {
   const user = await queryOne<Record<string, unknown>>(
-    `SELECT u.id, u.name, u.email, u.role, u.branch_id AS branchId, a.id AS agencyId, a.name AS agencyName, a.currency, a.timezone FROM users u JOIN agencies a ON a.id=u.agency_id WHERE u.agency_id=? AND u.id=? AND u.active=1 LIMIT 1`,
+    `SELECT u.id, u.name, u.email, u.phone, u.role, u.branch_id AS branchId, a.id AS agencyId, a.name AS agencyName, a.currency, a.timezone FROM users u JOIN agencies a ON a.id=u.agency_id WHERE u.agency_id=? AND u.id=? AND u.active=1 LIMIT 1`,
     [context.agencyId, context.userId],
   );
   if (!user) throw new DomainError("UNAUTHENTICATED", "The authenticated user is not active.", 401);
