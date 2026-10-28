@@ -1,5 +1,5 @@
 import { apiHandler, readJsonObject } from "@/server/api/route";
-import { getVehicle, saveVehicle, setVehicleArchived } from "@/server/services/vehicle-service";
+import { deleteVehicle, getVehicle, saveVehicle } from "@/server/services/vehicle-service";
 
 export const runtime = "nodejs";
 
@@ -12,5 +12,5 @@ export const PATCH = apiHandler<{ id: string }>(async ({ request, context, param
   return saveVehicle(context, { ...current, ...changes, id: params.id });
 }, { revalidate: true });
 
-/** Archives the vehicle (same as POST /vehicles/:id/archive). */
-export const DELETE = apiHandler<{ id: string }>(({ context, params }) => setVehicleArchived(context, params.id, true), { revalidate: true });
+/** Deletes a vehicle even when it has bookings. `?deleteHistory=true` also deletes its bookings, payments, expenses, and payouts. */
+export const DELETE = apiHandler<{ id: string }>(({ request, context, params }) => deleteVehicle(context, params.id, { deleteHistory: new URL(request.url).searchParams.get("deleteHistory") === "true" }), { revalidate: true });

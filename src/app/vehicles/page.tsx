@@ -20,7 +20,8 @@ import { vehicleRepository } from "@/lib/repositories/vehicle-repository";
 import type { RepositoryResult } from "@/lib/repositories/repository";
 import { formatPkr } from "@/lib/utils";
 import type { Vehicle } from "@/types/vehicle";
-import { setVehicleArchivedAction } from "@/app/actions/vehicles";
+import { deleteVehicleAction, setVehicleArchivedAction } from "@/app/actions/vehicles";
+import { VehicleDeleteDialog } from "@/components/vehicles/vehicle-delete-dialog";
 import { OilChangeBadge } from "@/components/vehicles/oil-change-panel";
 import { needsOilChange } from "@/lib/oil-change";
 
@@ -248,6 +249,21 @@ export default function VehiclesPage() {
     );
     setEditing(undefined);
     return result;
+  };
+  const deleteRemoving = async (deleteHistory: boolean) => {
+    if (!removing) return;
+    setRemovingPending(true);
+    const result = await deleteVehicleAction(removing.id, deleteHistory);
+    setRemovingPending(false);
+    if (!result.ok) {
+      setNotice(result.error.message);
+      return;
+    }
+    setItems((current) => current.filter((item) => item.id !== removing.id));
+    setNotice(
+      `${removing.make} ${removing.model} deleted${deleteHistory ? " with its bookings, payments, and expenses" : ". Its history stays in ledgers"}.`,
+    );
+    setRemoving(undefined);
   };
   const remove = async () => {
     if (!removing) return;
@@ -607,6 +623,17 @@ export default function VehiclesPage() {
           onSave={save}
         />
       )}
+      {removing && removing.status !== "Archived" ? (
+        <VehicleDeleteDialog
+          key={removing.id}
+          open
+          onOpenChange={(open) => !open && setRemoving(undefined)}
+          label={`${removing.make} ${removing.model} · ${removing.plate}`}
+          canDeleteHistory
+          pending={removingPending}
+          onConfirm={(deleteHistory) => void deleteRemoving(deleteHistory)}
+        />
+      ) : (
       <ConfirmDialog
         open={Boolean(removing)}
         onOpenChange={(open) => !open && setRemoving(undefined)}
@@ -627,6 +654,7 @@ export default function VehiclesPage() {
           removing?.status === "Archived" ? "Restoring…" : "Deleting…"
         }
       />
+      )}
     </div>
   );
 }
