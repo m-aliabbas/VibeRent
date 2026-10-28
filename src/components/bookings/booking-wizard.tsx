@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
-import { ArrowLeft, CalendarClock, CarFront, Check, Loader2, MessageCircle, Plus, Search, ShieldAlert, X } from "lucide-react";
+import { ArrowLeft, CalendarClock, CarFront, Check, Loader2, MessageCircle, Pencil, Plus, Search, ShieldAlert, ShieldCheck, X } from "lucide-react";
 
 import { clearBookingAction, confirmBookingAction, startBookingAction } from "@/app/actions/bookings";
 import { listCustomersAction, createCustomerAction, updateCustomerAction } from "@/app/actions/customers";
@@ -685,6 +685,9 @@ function GuarantorSection({draft,setDraft,bookingReference}:{draft:Draft;setDraf
   const [savedGuarantors,setSavedGuarantors]=useState<GuarantorDto[]>([]);
   const [savingGuarantor,setSavingGuarantor]=useState(false);
   const [guarantorNotice,setGuarantorNotice]=useState("");
+  const [guarantorQuery,setGuarantorQuery]=useState("");
+  const [savedGuarantorId,setSavedGuarantorId]=useState<string>();
+  const [editingSaved,setEditingSaved]=useState(false);
   const [intake,setIntake]=useState<CnicIntake>();
   const [loading,setLoading]=useState(false);
   const [uploading,setUploading]=useState<"front"|"back"|null>(null);
@@ -693,7 +696,7 @@ function GuarantorSection({draft,setDraft,bookingReference}:{draft:Draft;setDraf
   const lastExtractionKey=useRef("");
   useEffect(()=>{let active=true;void listGuarantorsAction().then(result=>{if(active&&result.ok)setSavedGuarantors(result.data)});return()=>{active=false}},[]);
 
-  async function saveToDirectory(){if(!guarantor||!isGuarantorComplete(guarantor))return;setSavingGuarantor(true);const cnic=guarantor.cnic.replace(/\D/g,"");const existing=cnic?savedGuarantors.find(item=>item.cnic.replace(/\D/g,"")===cnic):undefined;const result=await saveGuarantorAction({...guarantor,id:existing?.id??""});setSavingGuarantor(false);if(result.ok){setSavedGuarantors(current=>[result.data,...current.filter(item=>item.id!==result.data.id)]);setGuarantorNotice("Guarantor saved for future bookings.")}else setGuarantorNotice(result.error.message)}
+  async function saveToDirectory(){if(!guarantor||!isGuarantorComplete(guarantor))return;setSavingGuarantor(true);const cnic=guarantor.cnic.replace(/\D/g,"");const existing=cnic?savedGuarantors.find(item=>item.cnic.replace(/\D/g,"")===cnic):undefined;const result=await saveGuarantorAction({...guarantor,id:savedGuarantorId??existing?.id??""});setSavingGuarantor(false);if(result.ok){setSavedGuarantors(current=>[result.data,...current.filter(item=>item.id!==result.data.id)]);setSavedGuarantorId(result.data.id);setEditingSaved(false);setGuarantorNotice("Guarantor saved for future bookings.")}else setGuarantorNotice(result.error.message)}
 
   function update(values:Partial<GuarantorDraft>){
     setDraft(current=>current.guarantor?{...current,guarantor:{...current.guarantor,...values}}:current);
@@ -744,10 +747,40 @@ function GuarantorSection({draft,setDraft,bookingReference}:{draft:Draft;setDraf
     const next=result.data as CnicIntake;setIntake(next);applyExtracted(next);
   }
 
-  if(!guarantor)return <section className="rounded-xl border border-dashed border-[#98A2B3] bg-white p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><h3 className="text-sm font-bold text-[#1D2939]">Guarantor</h3><p className="mt-1 text-xs text-[#667085]">Search a saved guarantor, use CNIC OCR, or enter details manually.</p></div><Button type="button" size="sm" variant="secondary" onClick={()=>setDraft({...draft,guarantor:{name:"",parentage:"",cnic:"",phone:"",address:"",carAmount:0}})}><Plus size={15}/>Add guarantor</Button></div>{savedGuarantors.length>0&&<div className="mt-3"><FormCombobox label="Existing guarantor" value="" onValueChange={id=>{const selected=savedGuarantors.find(item=>item.id===id);if(selected)setDraft(current=>({...current,guarantor:{name:selected.name,parentage:selected.parentage,cnic:selected.cnic,phone:selected.phone,address:selected.address,carAmount:selected.carAmount}}))}} options={[{label:"Select guarantor",value:""},...savedGuarantors.map(item=>({label:`${item.name} · ${item.cnic||item.phone}`,value:item.id,keywords:`${item.phone} ${item.cnic} ${item.parentage}`}))]} searchPlaceholder="Search name, phone or CNIC…"/></div>}</section>;
+  function pickSaved(selected:GuarantorDto){setSavedGuarantorId(selected.id);setEditingSaved(false);setGuarantorNotice("");setDraft(current=>({...current,guarantor:{name:selected.name,parentage:selected.parentage,cnic:selected.cnic,phone:selected.phone,address:selected.address,carAmount:selected.carAmount}}))}
+  function startNew(name=""){setSavedGuarantorId(undefined);setEditingSaved(false);setGuarantorNotice("");setDraft(current=>({...current,guarantor:{name,parentage:"",cnic:"",phone:"",address:"",carAmount:0}}))}
+  function clearGuarantor(){setSavedGuarantorId(undefined);setEditingSaved(false);setGuarantorQuery("");setDraft(current=>({...current,guarantor:null}))}
+
+  if(!guarantor){
+    const query=guarantorQuery.trim().toLowerCase();
+    const digits=query.replace(/\D/g,"");
+    const matches=savedGuarantors.filter(item=>!query||`${item.name} ${item.parentage} ${item.phone} ${item.address}`.toLowerCase().includes(query)||(digits.length>2&&`${item.cnic}${item.phone}`.replace(/\D/g,"").includes(digits)));
+    const visible=matches.slice(0,query?8:4);
+    return <section className="rounded-xl border border-[#E4E7EC] bg-white p-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div className="flex gap-3"><span className="grid size-10 shrink-0 place-items-center rounded-lg bg-[#EFF8FF] text-[#006FE6]"><ShieldCheck size={19}/></span><div><h3 className="text-sm font-bold text-[#1D2939]">Guarantor <span className="font-normal text-[#667085]">(optional)</span></h3><p className="mt-1 text-xs text-[#667085]">Pick someone who stood guarantee before, or add a new guarantor.</p></div></div><Button type="button" size="sm" variant="secondary" className="shrink-0" onClick={()=>startNew()}><Plus size={15}/>New guarantor</Button></div>
+      {savedGuarantors.length>0&&<div className="mt-4">
+        <label className="flex h-11 items-center gap-2 rounded-[9px] border border-[#D0D5DD] px-3 focus-within:border-[#006FE6] focus-within:ring-2 focus-within:ring-[#006FE6]/10"><Search size={16} className="shrink-0 text-[#98A2B3]"/><input aria-label="Search saved guarantors" value={guarantorQuery} onChange={event=>setGuarantorQuery(event.target.value)} placeholder="Search name, phone or CNIC…" className="w-full bg-transparent text-sm outline-none placeholder:text-[#98A2B3]"/>{guarantorQuery&&<button type="button" aria-label="Clear search" onClick={()=>setGuarantorQuery("")} className="grid size-7 place-items-center rounded text-[#667085] hover:bg-[#F2F4F7]"><X size={14}/></button>}</label>
+        {visible.length?<ul className="mt-2 divide-y divide-[#EAECF0] overflow-hidden rounded-xl border border-[#E4E7EC]" aria-label="Saved guarantors">{visible.map(item=><li key={item.id}><button type="button" onClick={()=>pickSaved(item)} className="flex min-h-14 w-full items-center gap-3 px-3 py-2.5 text-left hover:bg-[#F5FAFF] focus-visible:bg-[#F5FAFF] focus-visible:outline-none">
+          <span className="grid size-9 shrink-0 place-items-center rounded-full bg-[#F2F4F7] text-xs font-bold text-[#475467]">{initials(item.name)}</span>
+          <span className="min-w-0 flex-1"><strong className="block truncate text-sm text-[#19191F]">{item.name}{item.parentage&&<span className="font-normal text-[#667085]"> · s/o {item.parentage}</span>}</strong><span className="mt-0.5 block truncate text-xs text-[#667085]">{[item.cnic,item.phone].filter(Boolean).join(" · ")||"No CNIC or phone saved"}</span></span>
+          <span className="shrink-0 text-xs font-semibold text-[#006FE6]">Use</span>
+        </button></li>)}</ul>
+        :<div className="mt-2 rounded-xl border border-dashed border-[#D0D5DD] p-4 text-center text-sm text-[#667085]">No saved guarantor matches “{guarantorQuery}”.<div className="mt-2"><Button type="button" size="sm" variant="secondary" onClick={()=>startNew(/\d/.test(guarantorQuery)?"":guarantorQuery.trim())}><Plus size={15}/>Add as new guarantor</Button></div></div>}
+        {matches.length>visible.length&&<p className="mt-2 text-xs text-[#667085]">Showing {visible.length} of {matches.length}. Search to narrow the list.</p>}
+      </div>}
+    </section>;
+  }
+
+  if(savedGuarantorId&&!editingSaved)return <section className="rounded-xl border border-[#B2DDFF] bg-[#F5FAFF] p-4">
+    <div className="flex items-start gap-3"><span className="grid size-10 shrink-0 place-items-center rounded-full bg-white text-sm font-bold text-[#006FE6] ring-1 ring-[#B2DDFF]">{initials(guarantor.name)}</span><div className="min-w-0 flex-1"><p className="text-xs font-semibold text-[#175CD3]">Guarantor · saved record</p><h3 className="truncate text-base font-bold text-[#19191F]">{guarantor.name}</h3>{guarantor.parentage&&<p className="text-xs text-[#667085]">s/o {guarantor.parentage}</p>}</div><button type="button" onClick={clearGuarantor} className="grid size-9 shrink-0 place-items-center rounded-lg text-[#667085] hover:bg-white" aria-label="Remove guarantor"><X size={16}/></button></div>
+    <dl className="mt-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">{[["CNIC",guarantor.cnic||"Not provided"],["Phone",guarantor.phone||"Not provided"],["Car amount",guarantor.carAmount?formatPkr(guarantor.carAmount):"Not set"],["Address",guarantor.address||"Not provided"]].map(([label,value])=><div key={label} className="min-w-0 rounded-lg bg-white p-2.5 ring-1 ring-[#E4E7EC]"><dt className="text-[#667085]">{label}</dt><dd className="mt-0.5 truncate font-semibold text-[#344054]" title={value}>{value}</dd></div>)}</dl>
+    <div className="mt-3 flex flex-wrap gap-2"><Button type="button" size="sm" variant="secondary" onClick={()=>setEditingSaved(true)}><Pencil size={15}/>Edit for this booking</Button><Button type="button" size="sm" variant="ghost" onClick={clearGuarantor}>Choose a different guarantor</Button></div>
+    {guarantorNotice&&<p role="status" className="mt-2 text-xs text-[#475467]">{guarantorNotice}</p>}
+  </section>;
 
   return <section className="rounded-xl border border-[#B2DDFF] bg-[#F5FAFF] p-4">
-    <div className="flex items-start justify-between gap-3"><div><h3 className="text-sm font-bold text-[#1D2939]">Guarantor details</h3><p className="mt-1 text-xs text-[#667085]">Upload the guarantor CNIC to fill identity fields, then review every value.</p></div><button type="button" onClick={()=>setDraft({...draft,guarantor:null})} className="grid h-8 w-8 place-items-center rounded-lg text-[#667085] hover:bg-white" aria-label="Remove guarantor"><X size={16}/></button></div>
+    <div className="flex items-start justify-between gap-3"><div><h3 className="text-sm font-bold text-[#1D2939]">{savedGuarantorId?"Edit guarantor details":"New guarantor"}</h3><p className="mt-1 text-xs text-[#667085]">{savedGuarantorId?"Changes apply to this booking. Save them to update the guarantor directory.":"Upload the guarantor CNIC to fill identity fields, then review every value."}</p></div><button type="button" onClick={clearGuarantor} className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-[#667085] hover:bg-white" aria-label="Remove guarantor"><X size={16}/></button></div>
+    {savedGuarantors.length>0&&!savedGuarantorId&&<button type="button" onClick={clearGuarantor} className="mt-2 text-xs font-semibold text-[#006FE6] hover:underline">Pick a saved guarantor instead</button>}
     {bookingReference&&<div className="mt-4"><CnicDocumentDrawer label="Guarantor CNIC" subjectLabel="guarantor" intake={intake} loading={loading} uploading={uploading} error={error} onRefresh={()=>void refresh()} onUpload={(side,file)=>void upload(side,file)}/></div>}
     <div className="mt-4 grid gap-3 sm:grid-cols-2">
       <FormInput label="Name" required value={guarantor.name} onChange={e=>update({name:e.target.value})}/>
@@ -758,10 +791,12 @@ function GuarantorSection({draft,setDraft,bookingReference}:{draft:Draft;setDraf
       <label className="text-sm font-semibold text-[#344054] sm:col-span-2">Address<textarea className="mt-1.5 min-h-20 w-full rounded-[9px] border border-[#D0D5DD] bg-white px-3 py-2 text-sm font-normal outline-none focus:border-[#006FE6] focus:ring-2 focus:ring-[#006FE6]/10" value={guarantor.address} onChange={e=>update({address:e.target.value})} placeholder="Address printed on CNIC"/></label>
     </div>
     {!isGuarantorComplete(guarantor)&&<p className="mt-3 text-xs text-[#B54708]">Enter a guarantor name. Any other details provided must be valid.</p>}
-    {isGuarantorComplete(guarantor)&&<div className="mt-3"><Button type="button" size="sm" variant="secondary" disabled={savingGuarantor} onClick={()=>void saveToDirectory()}>{savingGuarantor?"Saving…":"Save guarantor for future bookings"}</Button></div>}
+    {isGuarantorComplete(guarantor)&&<div className="mt-3 flex flex-wrap gap-2"><Button type="button" size="sm" variant="secondary" disabled={savingGuarantor} onClick={()=>void saveToDirectory()}>{savingGuarantor?"Saving…":savedGuarantorId?"Update saved guarantor":"Save guarantor for future bookings"}</Button>{savedGuarantorId&&<Button type="button" size="sm" variant="ghost" onClick={()=>setEditingSaved(false)}>Done editing</Button>}</div>}
     {guarantorNotice&&<p role="status" className="mt-2 text-xs text-[#475467]">{guarantorNotice}</p>}
   </section>;
 }
+
+function initials(name:string){return name.trim().split(/\s+/).slice(0,2).map(part=>part[0]?.toUpperCase()??"").join("")||"G"}
 
 // ─── Pricing step ────────────────────────────────────────────────────────────
 

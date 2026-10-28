@@ -116,19 +116,20 @@ function listRateRules(agencyId: string, vehicleId: string): Promise<VehicleRate
 
 export class DatabaseVehicleRepository implements VehicleRepository {
   async list(agencyId: string) {
-    const rows=await queryAll<VehicleRow>(`${selectSql} WHERE v.agency_id = ? ORDER BY v.created_at DESC`,[agencyId]);
+    const rows=await queryAll<VehicleRow>(`${selectSql} WHERE v.agency_id = ? AND v.status <> 'deleted' ORDER BY v.created_at DESC`,[agencyId]);
     return Promise.all(rows.map(async row => ({ ...mapVehicle(row), rateRules: await listRateRules(agencyId, row.id) })));
   }
 
   async getById(agencyId: string, id: string) {
-    const row = await queryOne<VehicleRow>(`${selectSql} WHERE v.agency_id = ? AND v.id = ? LIMIT 1`,[agencyId, id]);
+    const row = await queryOne<VehicleRow>(`${selectSql} WHERE v.agency_id = ? AND v.id = ? AND v.status <> 'deleted' LIMIT 1`,[agencyId, id]);
     return row ? { ...mapVehicle(row), rateRules: await listRateRules(agencyId, row.id) } : undefined;
   }
 
   async save(agencyId: string, actorId: string, input: Vehicle) {
     return inTransaction(async () => {
-      const existing = await queryOne<{ id: string; version: number }>("SELECT id, version FROM vehicles WHERE agency_id = ? AND id = ?",[agencyId, input.id]);
-      const duplicate = await queryOne<{ id: string }>("SELECT id FROM vehicles WHERE agency_id = ? AND upper(plate) = upper(?) AND id <> ? LIMIT 1",[agencyId, input.plate, existing?.id ?? ""]);
+      const existing = await queryOne<{ id: string; version: number }>("SELECT id, version FROM vehicles WHERE agency_id = ? AND id = ? AND status <> 'deleted'",[agencyId, input.id]);
+      const duplicate = await queryOne<{ id: string; status: string }>("SELECT id, status FROM vehicles WHERE agency_id = ? AND upper(plate) = upper(?) AND id <> ? LIMIT 1",[agencyId, input.plate, existing?.id ?? ""]);
+      if (duplicate?.status === "deleted") throw new DomainError("VALIDATION_FAILED", `Plate ${input.plate} belongs to a deleted vehicle whose history was kept. Delete it again from the Archive with its history to reuse the plate.`, 409, { plate: "Plate belongs to a deleted vehicle." });
       if (duplicate) throw new DomainError("VALIDATION_FAILED", `Plate ${input.plate} already belongs to another vehicle.`, 409, { plate: "Plate number must be unique." });
 
       const branch = await queryOne<{ id: string }>("SELECT id FROM branches WHERE agency_id = ? AND city = ? AND active = 1 LIMIT 1",[agencyId, input.city]);

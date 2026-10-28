@@ -1,9 +1,12 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
+import { unlink } from "node:fs/promises";
+import path from "node:path";
 import { execute, inTransaction, queryAll, queryOne } from "@/db/query";
 import { requireRole } from "@/server/auth/authorize";
 import type { RequestContext } from "@/server/context/request-context";
 import { DomainError } from "@/server/domain/errors";
+import { getPrivateFileRoot } from "@/server/desktop/runtime-paths";
 import { vehicleRepository } from "@/server/repositories/drizzle/vehicle-repository";
 import { parseVehicleInput } from "@/server/validation/vehicle";
 import { listExpenses, type ExpenseDto } from "@/server/services/expense-service";
@@ -192,6 +195,74 @@ export async function setVehicleArchived(context:RequestContext,id:string,archiv
     await execute("INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)",[randomUUID(),context.agencyId,context.userId,archived?"vehicle.archived":"vehicle.restored","vehicle",id,JSON.stringify({previousStatus:vehicle.status}),now]);
     return getVehicle(context,id);
   },{immediate:true});
+}
+
+export type VehicleDeletionImpact={bookings:number;transactions:number;expenses:number;payouts:number;documents:number};
+
+/** Counts the history a vehicle carries, shown before an owner chooses whether to delete it too. */
+export async function getVehicleDeletionImpact(agencyId:string,id:string):Promise<VehicleDeletionImpact>{
+  const count=async(sql:string,args:unknown[])=>(await queryOne<{total:number}>(sql,args))?.total??0;
+  const [bookings,transactions,expenses,payouts,documents]=await Promise.all([
+    count("SELECT count(*) AS total FROM bookings WHERE agency_id=? AND vehicle_id=?",[agencyId,id]),
+    count("SELECT count(*) AS total FROM financial_transactions WHERE agency_id=? AND booking_id IN (SELECT id FROM bookings WHERE agency_id=? AND vehicle_id=?)",[agencyId,agencyId,id]),
+    count("SELECT count(*) AS total FROM expenses WHERE agency_id=? AND (vehicle_id=? OR booking_id IN (SELECT id FROM bookings WHERE agency_id=? AND vehicle_id=?))",[agencyId,id,agencyId,id]),
+    count("SELECT count(*) AS total FROM owner_payouts WHERE agency_id=? AND vehicle_id=?",[agencyId,id]),
+    count("SELECT count(*) AS total FROM private_files WHERE agency_id=? AND entity_type='vehicle' AND entity_id=?",[agencyId,id]),
+  ]);
+  return {bookings,transactions,expenses,payouts,documents};
+}
+
+/**
+ * Deletes a vehicle whether or not it has history.
+ * - deleteHistory=false: the vehicle is hidden everywhere (status 'deleted') while bookings, payments,
+ *   expenses and payouts keep pointing at it, so ledgers and reports stay intact.
+ * - deleteHistory=true: the vehicle and every record linked to it (bookings with their payments,
+ *   inspections and source payouts, expenses, recurring expenses, owner payouts, documents) are removed.
+ */
+export async function deleteVehicle(context:RequestContext,id:string,input:{deleteHistory:boolean}){
+  requireRole(context,input.deleteHistory?["agency_owner"]:["agency_owner","fleet_manager"]);
+  const agency=context.agencyId;
+  const result=await inTransaction(async()=>{
+    const vehicle=await queryOne<{id:string;plate:string;status:string}>("SELECT id,plate,status FROM vehicles WHERE agency_id=? AND id=? LIMIT 1 /*postgres:for-update*/",[agency,id]);
+    if(vehicle?.status==="deleted"&&!input.deleteHistory) throw new DomainError("INVALID_STATUS_TRANSITION","This vehicle is already deleted with its history kept.",409);
+    if(!vehicle) throw new DomainError("NOT_FOUND","Vehicle not found.",404);
+    const now=new Date().toISOString();
+    if(!input.deleteHistory){
+      await execute("UPDATE vehicles SET status='deleted',archived_at=coalesce(archived_at,?),version=version+1,updated_at=? WHERE agency_id=? AND id=?",[now,now,agency,id]);
+      await execute("INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)",[randomUUID(),agency,context.userId,"vehicle.deleted","vehicle",id,JSON.stringify({plate:vehicle.plate,previousStatus:vehicle.status,historyKept:true}),now]);
+      return {id,historyDeleted:false,storageKeys:[] as string[]};
+    }
+    const impact=await getVehicleDeletionImpact(agency,id);
+    const bookingIds="SELECT id FROM bookings WHERE agency_id=? AND vehicle_id=?";
+    const expenseIds=`SELECT id FROM expenses WHERE agency_id=? AND (vehicle_id=? OR booking_id IN (${bookingIds}) OR recurring_expense_id IN (SELECT id FROM recurring_expenses WHERE agency_id=? AND vehicle_id=?))`;
+    const expenseArgs=[agency,id,agency,id,agency,id];
+    const deliveryIds=`SELECT id FROM notification_deliveries WHERE agency_id=? AND ((entity_type='booking' AND entity_id IN (${bookingIds})) OR (entity_type='vehicle' AND entity_id=?) OR (entity_type='expense' AND entity_id IN (${expenseIds})))`;
+    const deliveryArgs=[agency,agency,id,id,...expenseArgs];
+    const fileFilter=`agency_id=? AND ((entity_type='vehicle' AND entity_id=?) OR (entity_type='booking' AND entity_id IN (${bookingIds})) OR (entity_type='expense' AND entity_id IN (${expenseIds})) OR (entity_type='notification' AND entity_id IN (${deliveryIds})))`;
+    const fileArgs=[agency,id,agency,id,...expenseArgs,...deliveryArgs];
+    const files=await queryAll<{id:string;storageKey:string}>(`SELECT id,storage_key AS storageKey FROM private_files WHERE ${fileFilter}`,fileArgs);
+    await execute(`DELETE FROM notification_deliveries WHERE id IN (${deliveryIds})`,deliveryArgs);
+    for(const file of files) await execute("DELETE FROM private_files WHERE agency_id=? AND id=?",[agency,file.id]);
+    await execute("DELETE FROM vehicle_service_records WHERE agency_id=? AND vehicle_id=?",[agency,id]);
+    await execute(`DELETE FROM vehicle_service_records WHERE agency_id=? AND expense_id IN (${expenseIds})`,[agency,...expenseArgs]);
+    await execute(`DELETE FROM expenses WHERE id IN (${expenseIds})`,expenseArgs);
+    await execute("DELETE FROM recurring_expenses WHERE agency_id=? AND vehicle_id=?",[agency,id]);
+    await execute("DELETE FROM owner_payouts WHERE agency_id=? AND vehicle_id=?",[agency,id]);
+    await execute(`DELETE FROM source_payouts WHERE agency_id=? AND booking_id IN (${bookingIds})`,[agency,agency,id]);
+    await execute(`DELETE FROM rental_inspections WHERE agency_id=? AND booking_id IN (${bookingIds})`,[agency,agency,id]);
+    await execute(`UPDATE financial_transactions SET linked_transaction_id=NULL WHERE agency_id=? AND booking_id IN (${bookingIds})`,[agency,agency,id]);
+    await execute(`DELETE FROM financial_transactions WHERE agency_id=? AND booking_id IN (${bookingIds})`,[agency,agency,id]);
+    await execute("DELETE FROM bookings WHERE agency_id=? AND vehicle_id=?",[agency,id]);
+    await execute("DELETE FROM availability_blocks WHERE agency_id=? AND vehicle_id=?",[agency,id]);
+    await execute("DELETE FROM vehicle_rate_rules WHERE agency_id=? AND vehicle_id=?",[agency,id]);
+    await execute("DELETE FROM vehicles WHERE agency_id=? AND id=?",[agency,id]);
+    await execute("UPDATE audit_events SET metadata=NULL WHERE agency_id=? AND entity_type='vehicle' AND entity_id=?",[agency,id]);
+    await execute("INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)",[randomUUID(),agency,context.userId,"vehicle.permanently_deleted","vehicle",id,JSON.stringify({historyDeleted:true,...impact}),now]);
+    return {id,historyDeleted:true,storageKeys:files.map(file=>file.storageKey)};
+  },{immediate:true});
+  const root=getPrivateFileRoot();
+  await Promise.all(result.storageKeys.map(key=>unlink(path.join(root,key)).catch(()=>undefined)));
+  return {id:result.id,historyDeleted:result.historyDeleted};
 }
 
 export async function getVehicleFormOptions(context: RequestContext) {

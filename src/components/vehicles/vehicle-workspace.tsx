@@ -29,7 +29,8 @@ import {
 } from "lucide-react";
 import { createAvailabilityBlockAction } from "@/app/actions/bookings";
 import { getExpenseWorkspaceAction } from "@/app/actions/expenses";
-import { getVehicleFinanceAction, setVehicleArchivedAction, transitionVehicleStatusAction } from "@/app/actions/vehicles";
+import { deleteVehicleAction, getVehicleFinanceAction, transitionVehicleStatusAction } from "@/app/actions/vehicles";
+import { VehicleDeleteDialog } from "@/components/vehicles/vehicle-delete-dialog";
 import {
   AvailabilityCalendar,
   type CalendarSelection,
@@ -42,7 +43,6 @@ import { StatusBadge } from "@/components/shared/status-badge";
 import { InlineError } from "@/components/shared/inline-error";
 import { LoadingState } from "@/components/shared/loading-state";
 import { Toast } from "@/components/shared/toast";
-import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import {
   DetailPanel as Panel,
   Timeline,
@@ -84,7 +84,7 @@ const tabs: { id: VehicleDetailTab; label: string }[] = [
   { id: "activity", label: "Activity" },
 ];
 
-export function VehicleWorkspace({ vehicleId }: { vehicleId: string }) {
+export function VehicleWorkspace({ vehicleId, canDeleteHistory }: { vehicleId: string; canDeleteHistory: boolean }) {
   const router = useRouter();
   const [vehicle, setVehicle] = useState<Vehicle>();
   const [error, setError] = useState("");
@@ -228,7 +228,7 @@ export function VehicleWorkspace({ vehicleId }: { vehicleId: string }) {
     setTab("expenses");
     setNotice(`${item.id} submitted for approval and linked to ${vehicle.plate}.`);
   };
-  const removeVehicle=async()=>{if(!vehicle)return;setDeletePending(true);const result=await setVehicleArchivedAction(vehicle.id,true);setDeletePending(false);if(result.ok){router.push("/vehicles");router.refresh()}else{setNotice(result.error.message);setDeleting(false)}};
+  const removeVehicle=async(deleteHistory:boolean)=>{if(!vehicle)return;setDeletePending(true);const result=await deleteVehicleAction(vehicle.id,deleteHistory);setDeletePending(false);if(result.ok){router.push("/vehicles");router.refresh()}else{setNotice(result.error.message);setDeleting(false)}};
 
   return (
     <div className="space-y-6">
@@ -327,7 +327,7 @@ export function VehicleWorkspace({ vehicleId }: { vehicleId: string }) {
         </div>
       </div>
 
-      <ConfirmDialog open={deleting} onOpenChange={setDeleting} title={`Delete ${vehicle.plate}?`} description="The vehicle will leave active fleet views while its rental, expense, and audit history remains preserved. Active bookings must be cancelled or completed first." onConfirm={()=>void removeVehicle()} pending={deletePending} confirmLabel="Delete vehicle" pendingLabel="Deleting…"/>
+      <VehicleDeleteDialog open={deleting} onOpenChange={setDeleting} label={`${vehicle.make} ${vehicle.model} · ${vehicle.plate}`} canDeleteHistory={canDeleteHistory} pending={deletePending} onConfirm={deleteHistory=>void removeVehicle(deleteHistory)}/>
       {tab === "overview" && (
         <div className="space-y-5">
           <section className="grid gap-3 md:grid-cols-2">

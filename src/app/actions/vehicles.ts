@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { getWebRequestContext } from "@/server/auth/session";
 import { asDomainError } from "@/server/domain/errors";
-import { getVehicle, getVehicleFinance, getVehicleFormOptions, listVehicles, saveVehicle, setVehicleArchived, transitionVehicleStatus } from "@/server/services/vehicle-service";
+import { getVehicle, getVehicleFinance, getVehicleFormOptions, deleteVehicle, listVehicles, saveVehicle, setVehicleArchived, transitionVehicleStatus } from "@/server/services/vehicle-service";
 import { getOilChangeOverview, recordOilChange, setOilChangeInterval, voidOilChange, type RecordOilChangeInput } from "@/server/services/oil-change-service";
 import type { Vehicle } from "@/types/vehicle";
 import type { RepositoryResult } from "@/lib/repositories/repository";
@@ -48,6 +48,14 @@ export async function setVehicleArchivedAction(id:string,archived:boolean):Promi
     revalidatePath("/bookings/new");
     revalidatePath("/");
     return {ok:true,data};
+  } catch(error) { return failure(error); }
+}
+
+export async function deleteVehicleAction(id:string,deleteHistory:boolean) {
+  try {
+    const data=await deleteVehicle(await getWebRequestContext(),id,{deleteHistory});
+    for(const route of ["/vehicles",`/vehicles/${id}`,"/bookings","/bookings/new","/expenses","/reports","/owners","/archive","/"])revalidatePath(route);
+    return {ok:true as const,data};
   } catch(error) { return failure(error); }
 }
 

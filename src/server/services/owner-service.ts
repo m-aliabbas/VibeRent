@@ -4,10 +4,12 @@ import { execute, inTransaction, queryAll, queryOne } from "@/db/query";
 import { requireRole } from "@/server/auth/authorize";
 import type { RequestContext } from "@/server/context/request-context";
 import { DomainError } from "@/server/domain/errors";
+import { formatPercent, ownerExpenseAmount, ownerExpensePercent } from "@/lib/owner-share";
 
 type AgreementRow={id:string;version:number;effectiveFrom:string;effectiveTo:string|null;shareBasis:string;ownerSharePercent:number|null;ownerShareAmount:number|null;expenseResponsibility:string;payoutFrequency:string;createdAt:string};
 type RevenueRow={id:string;date:string;totalAmount:number;vehicle:string;plate:string;agreementId:string|null;agreementVersion:number|null;shareBasis:string|null;ownerSharePercent:number|null;ownerShareAmount:number|null};
-type ExpenseRow={id:string;date:string;amount:number;description:string};
+type ExpenseRow={id:string;date:string;amount:number;fullAmount:number;percent:number;description:string};
+type ExpenseSourceRow={id:string;date:string;amount:number;description:string;category:string;ownerId:string|null;recurringExpenseId:string|null;vehicle:string|null;plate:string|null;expenseResponsibility:string|null;shareBasis:string|null;ownerSharePercent:number|null};
 type PayoutRow={id:string;vehicleId:string|null;vehicle:string|null;plate:string|null;periodFrom:string;periodTo:string;paidAt:string;amount:number;method:string;reference:string;status:string};
 export type OwnerPayoutDto={id:string;vehicleId:string|null;vehicle:string|null;plate:string|null;periodFrom:string;periodTo:string;paidAt:string;amount:number;method:string;reference:string;status:string};
 export type OwnerStatementLine={id:string;kind:"Rental revenue"|"Owner expense"|"Payout";source:string;description:string;date:string;amount:number;agreementVersion:string};
@@ -30,10 +32,23 @@ function monthBounds(date:string){const value=new Date(date);const from=new Date
 function listAgreements(agencyId:string,ownerId:string){return queryAll<AgreementRow>(`SELECT id,version,effective_from AS effectiveFrom,effective_to AS effectiveTo,share_basis AS shareBasis,owner_share_percent AS ownerSharePercent,owner_share_amount AS ownerShareAmount,expense_responsibility AS expenseResponsibility,payout_frequency AS payoutFrequency,created_at AS createdAt FROM management_agreements WHERE agency_id=? AND owner_id=? ORDER BY version DESC`,[agencyId,ownerId]);}
 async function latestAgreement(agencyId:string,ownerId:string){return (await listAgreements(agencyId,ownerId))[0];}
 
+/** The owner's portion of an approved expense, described with the full amount, split, and recurrence. */
+function ownerExpense(row:ExpenseSourceRow):ExpenseRow{
+  const percent=ownerExpensePercent({assignedToOwner:Boolean(row.ownerId),expenseResponsibility:row.expenseResponsibility,shareBasis:row.shareBasis,ownerSharePercent:row.ownerSharePercent});
+  const parts=[`${row.category}: ${row.description}`,row.plate?`${row.vehicle} · ${row.plate}`:undefined,`owner pays ${formatPercent(percent)} of PKR ${row.amount.toLocaleString("en-PK")}`,row.recurringExpenseId?"recurring":undefined];
+  return {id:row.id,date:row.date,amount:ownerExpenseAmount(row.amount,percent),fullAmount:row.amount,percent,description:parts.filter(Boolean).join(" · ")};
+}
+function revenueDescription(row:RevenueRow){
+  const full=`full rental PKR ${row.totalAmount.toLocaleString("en-PK")}`;
+  return `${row.vehicle} · ${row.plate} · ${row.shareBasis==="percentage"?`${formatPercent(row.ownerSharePercent??0)} of ${full}`:row.shareBasis==="fixed_monthly"?`fixed monthly share · ${full}`:`no agreement · ${full}`}`;
+}
+
 async function ledger(context:RequestContext,ownerId:string){
   const [revenue,expenses,payouts]=await Promise.all([
     queryAll<RevenueRow>(`SELECT b.id,substr(coalesce(b.completed_at,b.return_at),1,10) AS date,b.total_amount AS totalAmount,v.make||' '||v.model AS vehicle,v.plate,a.id AS agreementId,a.version AS agreementVersion,a.share_basis AS shareBasis,a.owner_share_percent AS ownerSharePercent,a.owner_share_amount AS ownerShareAmount FROM bookings b JOIN vehicles v ON v.id=b.vehicle_id AND v.agency_id=b.agency_id LEFT JOIN management_agreements a ON a.id=v.agreement_id AND a.agency_id=v.agency_id WHERE b.agency_id=? AND v.owner_id=? AND b.status='completed' ORDER BY date DESC`,[context.agencyId,ownerId]),
-    queryAll<ExpenseRow>(`SELECT id,occurred_on AS date,amount,description FROM expenses WHERE agency_id=? AND owner_id=? AND status='approved' ORDER BY occurred_on DESC`,[context.agencyId,ownerId]),
+    queryAll<ExpenseSourceRow>(`SELECT e.id,e.occurred_on AS date,e.amount,e.description,e.category,e.owner_id AS ownerId,e.recurring_expense_id AS recurringExpenseId,v.make||' '||v.model AS vehicle,v.plate,a.expense_responsibility AS expenseResponsibility,a.share_basis AS shareBasis,a.owner_share_percent AS ownerSharePercent
+      FROM expenses e LEFT JOIN vehicles v ON v.id=e.vehicle_id AND v.agency_id=e.agency_id LEFT JOIN management_agreements a ON a.id=v.agreement_id AND a.agency_id=v.agency_id
+      WHERE e.agency_id=? AND e.status='approved' AND (e.owner_id=? OR (e.owner_id IS NULL AND v.owner_id=?)) ORDER BY e.occurred_on DESC`,[context.agencyId,ownerId,ownerId]).then(rows=>rows.map(ownerExpense).filter(row=>row.amount>0)),
     queryAll<PayoutRow>(`SELECT p.id,p.vehicle_id AS vehicleId,CASE WHEN v.id IS NULL THEN NULL ELSE v.make||' '||v.model END AS vehicle,v.plate,p.period_from AS periodFrom,p.period_to AS periodTo,p.paid_at AS paidAt,p.amount,p.method,p.reference,p.status FROM owner_payouts p LEFT JOIN vehicles v ON v.id=p.vehicle_id AND v.agency_id=p.agency_id WHERE p.agency_id=? AND p.owner_id=? AND p.status='posted' ORDER BY p.paid_at DESC`,[context.agencyId,ownerId]),
   ]);
   return {revenue,expenses,payouts};
@@ -43,7 +58,7 @@ async function buildStatements(context:RequestContext,ownerId:string):Promise<Ow
   const data=await ledger(context,ownerId); const dates=[...data.revenue.map(x=>x.date),...data.expenses.map(x=>x.date),...data.payouts.map(x=>x.periodFrom)];
   const periods=[...new Set((dates.length?dates:[new Date().toISOString().slice(0,10)]).map(d=>d.slice(0,7)))].sort().reverse();
   return periods.map(period=>{const {from,to}=monthBounds(`${period}-01`); const lines:OwnerStatementLine[]=[];
-    const fixed=new Set<string>();for(const row of data.revenue.filter(x=>x.date>=from&&x.date<to)){const key=row.agreementId??row.id;if(row.shareBasis==="fixed_monthly"&&fixed.has(key))continue;if(row.shareBasis==="fixed_monthly")fixed.add(key);lines.push({id:`REV-${row.id}`,kind:"Rental revenue",source:row.id,description:`${row.vehicle} · ${row.plate} owner share`,date:row.date,amount:shareAmount(row.totalAmount,row),agreementVersion:row.agreementVersion?`v${row.agreementVersion}`:"Unversioned"});}
+    const fixed=new Set<string>();for(const row of data.revenue.filter(x=>x.date>=from&&x.date<to)){const key=row.agreementId??row.id;if(row.shareBasis==="fixed_monthly"&&fixed.has(key))continue;if(row.shareBasis==="fixed_monthly")fixed.add(key);lines.push({id:`REV-${row.id}`,kind:"Rental revenue",source:row.id,description:revenueDescription(row),date:row.date,amount:shareAmount(row.totalAmount,row),agreementVersion:row.agreementVersion?`v${row.agreementVersion}`:"Unversioned"});}
     for(const row of data.expenses.filter(x=>x.date>=from&&x.date<to)) lines.push({id:`COST-${row.id}`,kind:"Owner expense",source:row.id,description:row.description,date:row.date,amount:-row.amount,agreementVersion:"Allocated expense"});
     for(const row of data.payouts.filter(x=>x.periodFrom>=from&&x.periodFrom<to)) lines.push({id:`PAY-${row.id}`,kind:"Payout",source:row.reference,description:`Payout · ${row.vehicle?`${row.vehicle} · ${row.plate}`:"Unallocated vehicle"} · ${row.method}`,date:row.paidAt,amount:-row.amount,agreementVersion:"Posted payout"});
     lines.sort((a,b)=>b.date.localeCompare(a.date)); const rentalRevenue=lines.filter(x=>x.kind==="Rental revenue").reduce((s,x)=>s+x.amount,0);const expenses=Math.abs(lines.filter(x=>x.kind==="Owner expense").reduce((s,x)=>s+x.amount,0));const payouts=Math.abs(lines.filter(x=>x.kind==="Payout").reduce((s,x)=>s+x.amount,0));const closing=rentalRevenue-expenses-payouts;

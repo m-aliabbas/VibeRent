@@ -12,7 +12,7 @@ export function FilterBar({
 }: {
   search: string;
   onSearch: (value: string) => void;
-  children: ReactNode;
+  children?: ReactNode;
   hasFilters: boolean;
   onClear: () => void;
   placeholder?: string;

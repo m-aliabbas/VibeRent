@@ -14,6 +14,8 @@ export function ConfirmDialog({
   confirmLabel = "Confirm",
   pendingLabel = "Working…",
   confirmVariant = "danger",
+  confirmDisabled = false,
+  children,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -24,6 +26,8 @@ export function ConfirmDialog({
   confirmLabel?: string;
   pendingLabel?: string;
   confirmVariant?: "primary" | "danger";
+  confirmDisabled?: boolean;
+  children?: React.ReactNode;
 }) {
   return (
     <Dialog.Root
@@ -49,6 +53,7 @@ export function ConfirmDialog({
           <Dialog.Description className="mt-2 text-sm leading-6 text-[#667085]">
             {description}
           </Dialog.Description>
+          {children}
           <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
             <Button
               variant="secondary"
@@ -57,7 +62,7 @@ export function ConfirmDialog({
             >
               Cancel
             </Button>
-            <Button variant={confirmVariant} disabled={pending} onClick={onConfirm}>
+            <Button variant={confirmVariant} disabled={pending || confirmDisabled} onClick={onConfirm}>
               {pending && <LoaderCircle className="animate-spin" size={17} />}{" "}
               {pending ? pendingLabel : confirmLabel}
             </Button>

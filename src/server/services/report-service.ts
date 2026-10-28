@@ -3,13 +3,57 @@ import "server-only";
 import { queryAll, queryOne } from "@/db/query";
 import { buildLedgerEntries, summarizeLedger } from "@/lib/reports/ledger";
 import type { LedgerEntry, LedgerSummary } from "@/lib/reports/ledger";
+import { formatPercent, ownerExpenseAmount, ownerExpensePercent } from "@/lib/owner-share";
 import { requireRole } from "@/server/auth/authorize";
 import type { RequestContext } from "@/server/context/request-context";
 
-type Vehicle = { id: string; name: string; plate: string; city: string; ownership: string; ownerId: string | null; archivedAt: string | null };
+type Vehicle = { id: string; name: string; plate: string; city: string; ownership: string; ownerId: string | null; archivedAt: string | null; status: string; expenseResponsibility: string | null; shareBasis: string | null; ownerSharePercent: number | null };
 type Booking = { id: string; vehicleId: string | null; ownerId: string | null; source: string; pickupAt: string; returnAt: string; completedAt: string | null; status: string; totalAmount: number; shareBasis: string | null; ownerSharePercent: number | null; ownerShareAmount: number | null; fulfillmentType:"fleet"|"external"; externalVehicle:string|null; externalPlate:string|null; externalSupplierName:string|null; city:string };
-type Cost = { id: string; vehicleId: string | null; ownerId: string | null; date: string; category: string; description: string; amount: number; status: string; receipt: number };
-type Transaction = { id: string; bookingId: string | null; date: string; amount: number; kind: string; originalKind:string|null; status: string; method: string; reference:string };
+type Cost = { id: string; vehicleId: string | null; ownerId: string | null; date: string; category: string; description: string; amount: number; status: string; receipt: number; recurringExpenseId: string | null };
+type Transaction = { id: string; bookingId: string | null; date: string; amount: number; kind: string; originalKind:string|null; linkedId:string|null; status: string; method: string; reference:string };
+
+const incomeKinds = ["payment", "late_return_charge", "deposit_applied", "deposit_forfeited"];
+const pkr = (value: number) => `PKR ${value.toLocaleString("en-PK")}`;
+
+/**
+ * Posted income per transaction, with "edit amounts" corrections folded into the booking's payments so the
+ * ledger shows the final corrected amount instead of separate adjustment lines. Price adjustments only
+ * change the booking total, so they never appear as cash.
+ */
+function correctedIncome(transactions: Transaction[]) {
+  const posted = transactions.filter((row) => row.status === "posted");
+  const reversedIds = new Set(posted.filter((row) => ["refund", "reversal"].includes(row.kind.toLowerCase()) && row.linkedId).map((row) => row.linkedId));
+  const rows = posted.flatMap((row) => {
+    const kind = row.kind.toLowerCase();
+    if (incomeKinds.includes(kind)) return [{ transaction: row, amount: row.amount, edited: false }];
+    if (["refund", "reversal"].includes(kind) && incomeKinds.includes(row.originalKind?.toLowerCase() ?? "")) return [{ transaction: row, amount: -row.amount, edited: false }];
+    return [];
+  });
+  const adjustments = new Map<string, { net: number; latest: Transaction }>();
+  for (const row of posted) {
+    const kind = row.kind.toLowerCase();
+    if (!row.bookingId || !kind.startsWith("payment_adjustment_")) continue;
+    const current = adjustments.get(row.bookingId) ?? { net: 0, latest: row };
+    current.net += kind === "payment_adjustment_decrease" ? -row.amount : row.amount;
+    if (row.date > current.latest.date) current.latest = row;
+    adjustments.set(row.bookingId, current);
+  }
+  for (const [bookingId, adjustment] of adjustments) {
+    let remaining = adjustment.net;
+    const payments = rows
+      .filter((row) => row.transaction.bookingId === bookingId && row.transaction.kind.toLowerCase() === "payment" && !reversedIds.has(row.transaction.id))
+      .sort((a, b) => b.transaction.date.localeCompare(a.transaction.date));
+    for (const payment of payments) {
+      if (!remaining) break;
+      const change = remaining > 0 ? remaining : Math.max(remaining, -payment.amount);
+      payment.amount += change;
+      payment.edited = true;
+      remaining -= change;
+    }
+    if (remaining) rows.push({ transaction: { ...adjustment.latest, kind: "payment", reference: bookingId }, amount: remaining, edited: true });
+  }
+  return rows.filter((row) => row.amount !== 0 || !row.edited);
+}
 type Payout = { id: string; ownerId: string; vehicleId:string|null; paidAt: string; amount: number; method: string; reference: string };
 type SourcePayout = {id:string;bookingId:string;supplierName:string;paidAt:string;amount:number;method:string;reference:string};
 type Block = { vehicleId: string; startAt: string; endAt: string };
@@ -28,7 +72,7 @@ export type ReportPeriod = {
   ledger: { entries: LedgerEntry[]; summary: LedgerSummary };
   collections: { booked: number; collected: number; outstanding: number; overdue: number; channels: Array<{ name: string; count: number; collected: number }> };
   expenses: { approved: number; ownerResponsibility: number; receiptExceptions: number; categories: Array<{ name: string; amount: number }> };
-  owners: { managedRevenue: number; ownerShare: number; paid: number; payable: number; vehicleCount: number; rows: Array<{ id: string; name: string; terms: string; revenue: number; share: number; paid: number; payable: number; openingBalance: number }> };
+  owners: { managedRevenue: number; ownerShare: number; ownerExpenses: number; paid: number; payable: number; vehicleCount: number; rows: Array<{ id: string; name: string; terms: string; revenue: number; share: number; expenses: number; paid: number; payable: number; openingBalance: number }> };
 };
 export type ReportsData = {
   agencyName: string;
@@ -86,9 +130,11 @@ export async function getReports(context: RequestContext): Promise<ReportsData> 
     queryOne<{name:string}>("SELECT name FROM agencies WHERE id=? LIMIT 1",[context.agencyId]),
     queryAll<Vehicle>(`
     SELECT v.id, v.make || ' ' || v.model || ' - ' || v.plate AS name, v.plate,
-           b.city, v.ownership, v.owner_id AS ownerId, v.archived_at AS archivedAt
+           b.city, v.ownership, v.owner_id AS ownerId, v.archived_at AS archivedAt, v.status,
+           a.expense_responsibility AS expenseResponsibility, a.share_basis AS shareBasis, a.owner_share_percent AS ownerSharePercent
     FROM vehicles v
     JOIN branches b ON b.id=v.branch_id AND b.agency_id=v.agency_id
+    LEFT JOIN management_agreements a ON a.id=v.agreement_id AND a.agency_id=v.agency_id
     WHERE v.agency_id=?
     ORDER BY v.archived_at IS NOT NULL, v.make, v.model
   `,[context.agencyId]),
@@ -108,11 +154,11 @@ export async function getReports(context: RequestContext): Promise<ReportsData> 
   `,[context.agencyId]),
     queryAll<Cost>(`
     SELECT e.id, e.vehicle_id AS vehicleId, e.owner_id AS ownerId, e.occurred_on AS date,
-           e.category, e.description, e.amount, e.status,
+           e.category, e.description, e.amount, e.status, e.recurring_expense_id AS recurringExpenseId,
            EXISTS(SELECT 1 FROM private_files pf WHERE pf.agency_id=e.agency_id AND pf.entity_type='expense' AND pf.entity_id=e.id AND pf.status='ready') AS receipt
     FROM expenses e WHERE e.agency_id=?
   `,[context.agencyId]),
-    queryAll<Transaction>(`SELECT ft.id,ft.booking_id AS bookingId,ft.posted_at AS date,ft.amount,ft.kind,original.kind AS originalKind,ft.status,ft.method,ft.reference FROM financial_transactions ft LEFT JOIN financial_transactions original ON original.id=ft.linked_transaction_id AND original.agency_id=ft.agency_id WHERE ft.agency_id=?`,[context.agencyId]),
+    queryAll<Transaction>(`SELECT ft.id,ft.booking_id AS bookingId,ft.posted_at AS date,ft.amount,ft.kind,original.kind AS originalKind,ft.linked_transaction_id AS linkedId,ft.status,ft.method,ft.reference FROM financial_transactions ft LEFT JOIN financial_transactions original ON original.id=ft.linked_transaction_id AND original.agency_id=ft.agency_id WHERE ft.agency_id=?`,[context.agencyId]),
     queryAll<Payout>("SELECT id,owner_id AS ownerId,vehicle_id AS vehicleId,paid_at AS paidAt,amount,method,reference FROM owner_payouts WHERE agency_id=? AND status='posted'",[context.agencyId]),
     queryAll<SourcePayout>("SELECT id,booking_id AS bookingId,supplier_name AS supplierName,paid_at AS paidAt,amount,method,reference FROM source_payouts WHERE agency_id=? AND status='posted'",[context.agencyId]),
     queryAll<Block>("SELECT vehicle_id AS vehicleId,start_at AS startAt,end_at AS endAt FROM availability_blocks WHERE agency_id=? AND archived_at IS NULL",[context.agencyId]),
@@ -126,13 +172,18 @@ export async function getReports(context: RequestContext): Promise<ReportsData> 
   const bookingById=new Map(bookings.map(booking=>[booking.id,booking]));
   const completedBookings = bookings.filter((row) => row.status === "completed");
   const approvedCosts = costs.filter((row) => row.status === "approved");
+  const ownerShares = allocatedOwnerShares(completedBookings.filter((row) => row.ownerId));
+  const costOwnerPortion = (row: Cost) => {
+    const vehicle = row.vehicleId ? vehicleById.get(row.vehicleId) : undefined;
+    if (!row.ownerId && !vehicle?.ownerId) return { percent: 0, amount: 0 };
+    const percent = ownerExpensePercent({ assignedToOwner: Boolean(row.ownerId), expenseResponsibility: vehicle?.expenseResponsibility ?? null, shareBasis: vehicle?.shareBasis ?? null, ownerSharePercent: vehicle?.ownerSharePercent ?? null });
+    return { percent, amount: ownerExpenseAmount(row.amount, percent) };
+  };
   const ledgerEntries: LedgerEntry[] = [
-    ...transactions.filter(row=>{const kind=row.kind.toLowerCase();return row.status==="posted"&&(["payment","late_return_charge","deposit_applied","deposit_forfeited","payment_adjustment_increase","payment_adjustment_decrease","price_adjustment_increase","price_adjustment_decrease"].includes(kind)||(["refund","reversal"].includes(kind)&&["payment","late_return_charge","deposit_applied","deposit_forfeited"].includes(row.originalKind?.toLowerCase()??"")))}).map((transaction) => {
+    ...correctedIncome(transactions).map(({ transaction, amount, edited }) => {
       const row=transaction.bookingId?bookingById.get(transaction.bookingId):undefined;
       const vehicle = row?.vehicleId?vehicleById.get(row.vehicleId):undefined;
       const owner = row?.ownerId ? ownerById.get(row.ownerId) : undefined;
-      const isPriceAdjustment=transaction.kind.startsWith("price_adjustment_");
-      const amount=isPriceAdjustment?0:["refund","reversal","payment_adjustment_decrease"].includes(transaction.kind.toLowerCase())?-transaction.amount:transaction.amount;
       return {
         id: `TXN-${transaction.id}`,
         date: transaction.date.slice(0,10),
@@ -142,33 +193,59 @@ export async function getReports(context: RequestContext): Promise<ReportsData> 
         ownership: vehicle?.ownerId||row?.fulfillmentType==="external" ? "Managed" as const : "Owned" as const,
         ownerId: row?.ownerId??null,
         owner: owner?.name??row?.externalSupplierName??null,
-        kind: isPriceAdjustment ? "Booking adjustment" as const : "Rental income" as const,
+        kind: "Rental income" as const,
         reference: transaction.reference||transaction.id,
-        description: `${transaction.kind.replaceAll("_"," ")} · PKR ${transaction.amount.toLocaleString("en-PK")} · ${transaction.reference || transaction.method}`,
+        description: `${transaction.kind.replaceAll("_"," ")} · ${pkr(Math.abs(amount))}${edited ? " · edited" : ` · ${transaction.reference || transaction.method}`}`,
         income: amount,
         expense: 0,
         ownerMovement: 0,
         operatingResult: amount,
       };
     }),
+    ...completedBookings.filter((row) => row.ownerId && ownerShares.get(row.id)).map((row) => {
+      const vehicle = row.vehicleId ? vehicleById.get(row.vehicleId) : undefined;
+      const share = ownerShares.get(row.id) ?? 0;
+      return {
+        id: `SHARE-${row.id}`,
+        date: (row.completedAt ?? row.pickupAt).slice(0, 10),
+        vehicleId: row.vehicleId,
+        vehicle: vehicle?.name ?? "Historical managed vehicle",
+        city: vehicle?.city ?? row.city,
+        ownership: "Managed" as const,
+        ownerId: row.ownerId,
+        owner: row.ownerId ? ownerById.get(row.ownerId)?.name ?? "Owner" : null,
+        kind: "Owner share" as const,
+        reference: row.id,
+        description: row.shareBasis === "percentage"
+          ? `Owner earns ${formatPercent(row.ownerSharePercent ?? 0)} of full rental ${pkr(row.totalAmount)}`
+          : `Fixed monthly owner share · full rental ${pkr(row.totalAmount)}`,
+        income: 0,
+        expense: 0,
+        ownerMovement: share,
+        operatingResult: 0,
+      };
+    }),
     ...approvedCosts.map((row) => {
       const vehicle = row.vehicleId ? vehicleById.get(row.vehicleId) : undefined;
-      const owner = row.ownerId ? ownerById.get(row.ownerId) : undefined;
+      const ownerId = row.ownerId ?? vehicle?.ownerId ?? null;
+      const owner = ownerId ? ownerById.get(ownerId) : undefined;
+      const { percent, amount: ownerAmount } = costOwnerPortion(row);
+      const ownerNote = ownerId ? ` · owner pays ${formatPercent(percent)}${percent ? ` (${pkr(ownerAmount)})` : ""}` : "";
       return {
         id: `COST-${row.id}`,
         date: row.date.slice(0, 10),
         vehicleId: row.vehicleId,
         vehicle: vehicle?.name ?? (row.vehicleId ? `Historical vehicle (${row.vehicleId})` : "Agency-wide"),
         city: vehicle?.city ?? "All cities",
-        ownership: vehicle?.ownerId || row.ownerId ? "Managed" as const : "Owned" as const,
-        ownerId: row.ownerId,
+        ownership: ownerId ? "Managed" as const : "Owned" as const,
+        ownerId,
         owner: owner?.name ?? null,
         kind: "Expense" as const,
         reference: row.id,
-        description: `${row.category} - ${row.description}`,
+        description: `${row.category} - ${row.description}${row.recurringExpenseId ? " · recurring" : ""}${ownerNote}`,
         income: 0,
         expense: row.amount,
-        ownerMovement: row.ownerId ? -row.amount : 0,
+        ownerMovement: -ownerAmount,
         operatingResult: -row.amount,
       };
     }),
@@ -239,7 +316,7 @@ export async function getReports(context: RequestContext): Promise<ReportsData> 
           ...expense.map((row) => ({ id: row.id, label: row.description, amount: -row.amount })),
         ],
       };
-    });
+    }).filter((row) => vehicleById.get(row.id)?.status !== "deleted" || row.revenue || row.expenses);
     const channels = [...new Set(periodTransactions.map((row) => row.method || "Unspecified"))].map((name) => ({
       name,
       count: periodTransactions.filter((row) => (row.method || "Unspecified") === name).length,
@@ -260,9 +337,9 @@ export async function getReports(context: RequestContext): Promise<ReportsData> 
       const share = totalOwnerShare(rentals);
       const paid = periodPayouts.filter((row) => row.ownerId === owner.id).reduce((sum, row) => sum + row.amount, 0);
       const ownerLedger = buildLedgerEntries(ledgerEntries, { from: fromDate, to: toDate, city: "All cities", ownership: "All ownership", scope: { type: "owner", ownerId: owner.id } });
-      const openingBalance = ownerLedger.filter((row) => row.kind === "Opening owner balance").reduce((sum, row) => sum + row.ownerMovement, 0);
-      return { id: owner.id, name: owner.name, terms, revenue, share, paid, openingBalance, payable: openingBalance + share - periodCosts.filter((row) => row.ownerId === owner.id).reduce((sum, row) => sum + row.amount, 0) - paid };
-    }).filter((row) => row.revenue || row.share || row.paid || row.payable || row.openingBalance);
+      const totals = summarizeLedger(ownerLedger);
+      return { id: owner.id, name: owner.name, terms, revenue, share, expenses: totals.ownerExpenses, paid, openingBalance: totals.openingOwnerBalance, payable: totals.closingOwnerBalance };
+    }).filter((row) => row.revenue || row.share || row.expenses || row.paid || row.payable || row.openingBalance);
     const periodLedgerEntries = buildLedgerEntries(ledgerEntries, { from: fromDate, to: toDate, city: "All cities", ownership: "All ownership", scope: { type: "overall" } });
     return {
       key,
@@ -272,8 +349,8 @@ export async function getReports(context: RequestContext): Promise<ReportsData> 
       vehicles: rows,
       ledger: { entries: periodLedgerEntries, summary: summarizeLedger(periodLedgerEntries) },
       collections: { booked, collected, outstanding: Math.max(0, booked - collected), overdue: bookedBookings.filter((row) => row.returnAt < new Date().toISOString()).reduce((sum, row) => sum + row.totalAmount, 0), channels },
-      expenses: { approved: periodCosts.reduce((sum, row) => sum + row.amount, 0), ownerResponsibility: periodCosts.filter((row) => row.ownerId).reduce((sum, row) => sum + row.amount, 0), receiptExceptions: periodCosts.filter((row) => !row.receipt).length, categories },
-      owners: { managedRevenue: ownerRows.reduce((sum, row) => sum + row.revenue, 0), ownerShare: ownerRows.reduce((sum, row) => sum + row.share, 0), paid: ownerRows.reduce((sum, row) => sum + row.paid, 0), payable: ownerRows.reduce((sum, row) => sum + row.payable, 0), vehicleCount: vehicles.filter((row) => row.ownerId).length, rows: ownerRows },
+      expenses: { approved: periodCosts.reduce((sum, row) => sum + row.amount, 0), ownerResponsibility: periodCosts.reduce((sum, row) => sum + costOwnerPortion(row).amount, 0), receiptExceptions: periodCosts.filter((row) => !row.receipt).length, categories },
+      owners: { managedRevenue: ownerRows.reduce((sum, row) => sum + row.revenue, 0), ownerShare: ownerRows.reduce((sum, row) => sum + row.share, 0), ownerExpenses: ownerRows.reduce((sum, row) => sum + row.expenses, 0), paid: ownerRows.reduce((sum, row) => sum + row.paid, 0), payable: ownerRows.reduce((sum, row) => sum + row.payable, 0), vehicleCount: vehicles.filter((row) => row.ownerId && !row.archivedAt).length, rows: ownerRows },
     } satisfies ReportPeriod;
   });
 
@@ -284,7 +361,7 @@ export async function getReports(context: RequestContext): Promise<ReportsData> 
     ledgerEntries,
     dateBounds,
     ledgerAccounts: {
-      vehicles: vehicles.map((vehicle) => ({ id: vehicle.id, label: vehicle.name, city: vehicle.city, ownership: vehicle.ownership === "managed" ? "Managed" : "Owned", ownerId: vehicle.ownerId, archived: Boolean(vehicle.archivedAt) })),
+      vehicles: vehicles.filter((vehicle) => vehicle.status !== "deleted").map((vehicle) => ({ id: vehicle.id, label: vehicle.name, city: vehicle.city, ownership: vehicle.ownership === "managed" ? "Managed" : "Owned", ownerId: vehicle.ownerId, archived: Boolean(vehicle.archivedAt) })),
       owners: owners.map((owner) => ({ id: owner.id, label: owner.name })),
     },
   };
