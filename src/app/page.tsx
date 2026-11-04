@@ -4,8 +4,11 @@ import { TimeGreeting } from "@/components/dashboard/time-greeting";
 import { formatPkr } from "@/lib/utils";
 import { getSessionViewer, getWebRequestContext } from "@/server/auth/session";
 import { getDashboard } from "@/server/services/dashboard-service";
+import { listVehicles } from "@/server/services/vehicle-service";
+import { OdometerQuickUpdate } from "@/components/dashboard/odometer-quick-update";
 
 const actions = [
+  { title: "Add external income", description: "Post an amount and details to the system ledger", icon: CircleDollarSign, href: "/legacy-entry?entry=income" },
   { title: "Legacy data entry", description: "Quickly import historical records and ledger entries", icon: FileText, href: "/legacy-entry" },
   { title: "Create New Booking", description: "Reserve a vehicle for a customer", icon: CalendarDays, href: "/bookings/new" },
   { title: "Add New Vehicle", description: "Add a vehicle to your fleet", icon: CarFront, href: "/vehicles" },
@@ -15,7 +18,7 @@ const actions = [
 
 export default async function Dashboard() {
   const [viewer, context] = await Promise.all([getSessionViewer(), getWebRequestContext()]);
-  const data = await getDashboard(context);
+  const [data,vehicles]=await Promise.all([getDashboard(context),listVehicles(context)]);
   const today=new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Karachi",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
   const ledgerHref=(entry:string)=>`/reports?tab=Ledger&from=${today}&to=${today}&entry=${entry}`;
   const activityIcon = { booking: CalendarDays, vehicle: CarFront, customer: Users, finance: CircleDollarSign, other: FileText };
@@ -32,6 +35,7 @@ export default async function Dashboard() {
 
     <div className="grid gap-4 xl:grid-cols-[1.42fr_1fr]">
       <div className="space-y-4">
+        <OdometerQuickUpdate vehicles={vehicles.filter(item=>item.status!=="Archived").map(item=>({id:item.id,label:`${item.make} ${item.model} · ${item.plate}`,lastOdometer:item.lastOdometer}))}/>
         <section className="overflow-hidden rounded-xl border border-[#E3E7ED] bg-white shadow-[0_2px_7px_rgba(16,24,40,.055)]"><div className="flex items-center justify-between border-b border-[#E9ECF1] px-4 py-3.5 sm:px-5"><div className="flex items-center gap-2.5"><CalendarDays size={21}/><h2 className="text-[17px] font-bold">Today’s Pickups & Returns</h2></div><Link href="/bookings" className="hidden items-center gap-1 text-sm font-medium text-[#006FE6] hover:underline sm:flex">View all <ArrowRight size={16}/></Link></div>{data.schedule.length?<div className="divide-y divide-[#E9ECF1]">{data.schedule.map(item=><Link href={`/bookings/${item.id.split("-").slice(0,-1).join("-")}`} key={item.id} className="grid min-h-[82px] grid-cols-[82px_1fr_auto] items-center gap-3 px-4 py-3 hover:bg-[#FAFCFF] sm:grid-cols-[88px_1.2fr_1fr_90px_18px] sm:px-5"><span className={`w-fit rounded-md px-2 py-1 text-[11px] font-bold uppercase ${item.type==="Pickup"?"bg-[#E9F8EE] text-[#137A36]":"bg-[#E8F2FF] text-[#0969DA]"}`}>{item.type}</span><div className="min-w-0"><p className="truncate text-sm font-semibold">{item.vehicle}</p><span className="mt-1 inline-block rounded border px-1.5 py-0.5 text-[11px]">{item.plate}</span></div><div className="col-start-2 row-start-2 min-w-0 sm:col-start-auto sm:row-start-auto"><p className="truncate text-sm font-semibold">{item.customer}</p><p className="mt-1 flex items-center gap-1 truncate text-xs text-[#667085]"><MapPin size={11}/>{item.location}</p></div><span className="col-start-3 row-start-2 whitespace-nowrap text-xs font-semibold sm:col-start-auto sm:row-start-auto sm:text-sm">{new Intl.DateTimeFormat("en-PK",{hour:"numeric",minute:"2-digit",timeZone:"Asia/Karachi"}).format(new Date(item.time))}</span><ArrowRight size={16} className="hidden sm:block"/></Link>)}</div>:<p className="px-5 py-10 text-center text-sm text-[#667085]">No pickups or returns scheduled today.</p>}</section>
         <section className="overflow-hidden rounded-xl border border-[#E3E7ED] bg-white"><div className="flex items-center justify-between border-b px-5 py-3.5"><h2 className="text-[17px] font-bold">Active rentals</h2><Link href="/bookings?status=Checked+Out" className="text-sm font-semibold text-[#006FE6]">View all</Link></div>{data.activeRentalRows.length?<div className="divide-y">{data.activeRentalRows.map(item=><Link href={`/bookings/${item.id}`} key={item.id} className="flex items-center gap-3 p-4 hover:bg-[#FAFCFF]"><span className="grid h-9 w-9 place-items-center rounded-lg bg-[#F4F3FF] text-[#5925DC]"><CarFront size={18}/></span><div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold">{item.vehicle} · {item.plate}</p><p className="mt-1 truncate text-xs text-[#667085]">{item.customer} · {item.destinationCity}</p></div><span className="text-right text-xs text-[#667085]">Return<br/><strong className="text-[#344054]">{new Intl.DateTimeFormat("en-PK",{day:"2-digit",month:"short",hour:"numeric",minute:"2-digit",timeZone:"Asia/Karachi"}).format(new Date(item.returnAt))}</strong></span></Link>)}</div>:<p className="p-6 text-center text-sm text-[#667085]">No vehicles are currently checked out.</p>}</section>
       </div>

@@ -3,7 +3,18 @@
 import { revalidatePath } from "next/cache";
 import { getWebRequestContext } from "@/server/auth/session";
 import { asDomainError } from "@/server/domain/errors";
-import { recordLegacyBooking, type LegacyBookingInput } from "@/server/services/legacy-entry-service";
+import { recordLegacyBooking, recordDatedLedgerEntry, type LegacyBookingInput, type DatedLedgerInput } from "@/server/services/legacy-entry-service";
+
+export async function recordDatedLedgerEntryAction(input: DatedLedgerInput) {
+  try {
+    const data=await recordDatedLedgerEntry(await getWebRequestContext(),input);
+    for(const path of ["/","/reports","/expenses","/legacy-entry"]) revalidatePath(path);
+    return {ok:true as const,data};
+  } catch(error) {
+    const issue=asDomainError(error);
+    return {ok:false as const,error:{message:issue.message,fieldErrors:issue.fieldErrors??{}}};
+  }
+}
 
 export async function recordLegacyBookingAction(input: LegacyBookingInput) {
   try {

@@ -3,7 +3,15 @@
 import { revalidatePath } from "next/cache";
 import { getWebRequestContext } from "@/server/auth/session";
 import { asDomainError } from "@/server/domain/errors";
-import { archiveCustomer, createCustomer, listCustomers, updateCustomer } from "@/server/services/customer-service";
+import { archiveCustomer, createCustomer, listCustomers, updateCustomer, payCustomerBalance } from "@/server/services/customer-service";
+
+export async function payCustomerBalanceAction(id:string,input:{amount:number;method:string;reference?:string;idempotencyKey:string}) {
+  try {
+    const data=await payCustomerBalance(await getWebRequestContext(),id,input);
+    revalidatePath(`/customers/${id}`);revalidatePath("/customers");revalidatePath("/bookings");revalidatePath("/reports");revalidatePath("/");
+    return {ok:true as const,data};
+  } catch(error) { return failure(error); }
+}
 import { createCustomerCnicDraft, getCustomerCnicIntake, uploadCustomerCnic, type CustomerCnicTarget } from "@/server/services/customer-cnic-service";
 import type { CnicSide } from "@/server/services/booking-cnic-service";
 import type { CreateCustomerInput } from "@/server/validation/customer";

@@ -50,7 +50,7 @@ export type LedgerFilters = {
 };
 
 export function buildLedgerEntries(source: LedgerEntry[], filters: LedgerFilters) {
-  const scoped = source.filter((row) => matchesDimensions(row, filters) && matchesScope(row, filters.scope));
+  const scoped = source.filter((row) => matchesDimensions(row, filters) && matchesScope(row, filters.scope) && !(filters.scope.type === "owner" && row.kind === "Rental income"));
   const current = scoped.filter((row) => row.date >= filters.from && row.date <= filters.to);
   const opening = filters.scope.type === "vehicles" ? [] : ownerOpeningRows(scoped, filters.from, filters.scope);
   return [...opening, ...current].sort((a, b) => {

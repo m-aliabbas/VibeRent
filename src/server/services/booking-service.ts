@@ -550,8 +550,10 @@ export async function markBookingErroneous(context:RequestContext, bookingId:str
 /** Latest odometer recorded for a fleet vehicle on any live booking, used to prefill the next handover. */
 export async function getLastVehicleOdometer(agencyId:string, vehicleId:string|null|undefined) {
   if(!vehicleId)return undefined;
-  const row=await queryOne<{odometer:number}>(`SELECT ri.odometer FROM rental_inspections ri JOIN bookings bk ON bk.id=ri.booking_id AND bk.agency_id=ri.agency_id
-    WHERE ri.agency_id=? AND bk.vehicle_id=? AND bk.archived_at IS NULL ORDER BY ri.occurred_at DESC, ri.created_at DESC LIMIT 1`,[agencyId,vehicleId]);
+  const row=await queryOne<{odometer:number}>(`SELECT odometer FROM (
+    SELECT ri.odometer,ri.occurred_at AS reading_at FROM rental_inspections ri JOIN bookings bk ON bk.id=ri.booking_id AND bk.agency_id=ri.agency_id WHERE ri.agency_id=? AND bk.vehicle_id=? AND bk.archived_at IS NULL
+    UNION ALL SELECT sr.odometer,sr.created_at AS reading_at FROM vehicle_service_records sr WHERE sr.agency_id=? AND sr.vehicle_id=? AND sr.kind='odometer_update' AND sr.voided_at IS NULL
+  ) readings ORDER BY reading_at DESC LIMIT 1`,[agencyId,vehicleId,agencyId,vehicleId]);
   return row?.odometer;
 }
 

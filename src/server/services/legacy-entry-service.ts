@@ -14,8 +14,35 @@ export type LegacyBookingInput = {
   totalAmount: number;
   receivedAmount: number;
   paymentMethod: string;
-  expense?: { amount: number; category: string; description: string };
+  expense?: { amount: number; category: string; description: string; occurredOn?: string };
 };
+
+export type DatedLedgerInput = { kind: "income" | "expense"; amount: number; description: string; occurredOn: string; method?: string; category?: string; vehicleId?: string };
+
+/** Posts a standalone historical or current cash entry without inventing a booking. */
+export async function recordDatedLedgerEntry(context: RequestContext, input: DatedLedgerInput) {
+  requireRole(context, ["agency_owner", "fleet_manager", "rental_agent", "accountant"]);
+  if (!input || !["income", "expense"].includes(input.kind) || !Number.isSafeInteger(input.amount) || input.amount <= 0 || !input.description?.trim() || !/^\d{4}-\d{2}-\d{2}$/.test(input.occurredOn) || !Number.isFinite(Date.parse(`${input.occurredOn}T00:00:00Z`)))
+    throw new DomainError("VALIDATION_FAILED", "Enter a valid date, positive whole amount, and description.", 400);
+  return inTransaction(async () => {
+    if (input.vehicleId) {
+      const vehicle=await queryOne("SELECT id FROM vehicles WHERE agency_id=? AND id=? AND archived_at IS NULL",[context.agencyId,input.vehicleId]);
+      if (!vehicle) throw new DomainError("NOT_FOUND", "Vehicle not found.", 404);
+    }
+    const now=new Date().toISOString();
+    const id=`${input.kind==="income"?"TXN":"EXP"}-${randomUUID().slice(0,8).toUpperCase()}`;
+    if (input.kind === "income") {
+      const method=input.method?.trim() || "Cash";
+      await execute(`INSERT INTO financial_transactions (id,agency_id,booking_id,customer_id,kind,amount,method,reference,idempotency_key,status,actor_id,posted_at,created_at,updated_at) VALUES (?,?,NULL,NULL,'external_income',?,?,?,?, 'posted',?,?,?,?)`,[id,context.agencyId,input.amount,method,input.description.trim(),`external_${id}`,context.userId,`${input.occurredOn}T12:00:00.000Z`,now,now]);
+    } else {
+      const category=input.category?.trim();
+      if (!category || !(await queryOne("SELECT name FROM expense_categories WHERE agency_id=? AND active=1 AND lower(name)=lower(?)",[context.agencyId,category]))) throw new DomainError("VALIDATION_FAILED", "Choose an active expense category.",400);
+      await execute(`INSERT INTO expenses (id,agency_id,vehicle_id,amount,category,description,status,occurred_on,version,created_at,updated_at) VALUES (?,?,?,?,?,?,'approved',?,1,?,?)`,[id,context.agencyId,input.vehicleId || null,input.amount,category,input.description.trim(),input.occurredOn,now,now]);
+    }
+    await execute("INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)",[randomUUID(),context.agencyId,context.userId,`legacy.${input.kind}_posted`,input.kind==="income"?"financial_transaction":"expense",id,JSON.stringify({amount:input.amount,occurredOn:input.occurredOn,vehicleId:input.vehicleId||null}),now]);
+    return {id};
+  },{immediate:true});
+}
 
 export async function recordLegacyBooking(context: RequestContext, raw: LegacyBookingInput) {
   requireRole(context, ["agency_owner", "fleet_manager", "rental_agent"]);
@@ -30,7 +57,7 @@ export async function recordLegacyBooking(context: RequestContext, raw: LegacyBo
   if (!Number.isSafeInteger(input?.totalAmount) || input!.totalAmount! < 0) errors.totalAmount = "Enter a non-negative whole PKR amount.";
   if (!Number.isSafeInteger(input?.receivedAmount) || input!.receivedAmount! < 0 || input!.receivedAmount! > input!.totalAmount!) errors.receivedAmount = "Received amount must be between zero and the total.";
   if (input?.receivedAmount && !input.paymentMethod?.trim()) errors.paymentMethod = "Select a payment method.";
-  if (input?.expense && (!Number.isSafeInteger(input.expense.amount) || input.expense.amount <= 0 || !input.expense.category?.trim() || !input.expense.description?.trim())) errors.expense = "Enter an expense amount, category, and description.";
+  if (input?.expense && (!Number.isSafeInteger(input.expense.amount) || input.expense.amount <= 0 || !input.expense.category?.trim() || !input.expense.description?.trim() || input.expense.occurredOn && !/^\d{4}-\d{2}-\d{2}$/.test(input.expense.occurredOn))) errors.expense = "Enter an expense amount, category, description, and valid date.";
   if (Object.keys(errors).length) throw new DomainError("VALIDATION_FAILED", "Review the legacy booking details.", 400, errors);
 
   return inTransaction(async () => {
@@ -67,7 +94,7 @@ export async function recordLegacyBooking(context: RequestContext, raw: LegacyBo
     }
     if (input!.expense) {
       const expenseId=`EXP-${randomUUID().slice(0,8).toUpperCase()}`;
-      await execute(`INSERT INTO expenses (id,agency_id,vehicle_id,booking_id,customer_id,amount,category,description,status,occurred_on,version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,'approved',?,1,?,?)`,[expenseId,context.agencyId,vehicle.id,id,customer.id,input!.expense.amount,input!.expense.category.trim(),input!.expense.description.trim(),returnAt.slice(0,10),now,now]);
+      await execute(`INSERT INTO expenses (id,agency_id,vehicle_id,booking_id,customer_id,amount,category,description,status,occurred_on,version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,'approved',?,1,?,?)`,[expenseId,context.agencyId,vehicle.id,id,customer.id,input!.expense.amount,input!.expense.category.trim(),input!.expense.description.trim(),input!.expense.occurredOn || returnAt.slice(0,10),now,now]);
       await execute("INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)",[randomUUID(),context.agencyId,context.userId,"expense.approved","expense",expenseId,JSON.stringify({bookingId:id,source:"legacy_entry"}),now]);
     }
     await execute("INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)",[randomUUID(),context.agencyId,context.userId,"booking.legacy_imported","booking",id,JSON.stringify({vehicleId:vehicle.id,totalAmount:input!.totalAmount,receivedAmount:input!.receivedAmount}),now]);

@@ -45,9 +45,10 @@ const selectSql = `
     a.effective_from, a.effective_to, a.share_basis,
     a.owner_share_percent, a.owner_share_amount,
     a.expense_responsibility, a.payout_frequency,
-    (SELECT ri.odometer FROM rental_inspections ri JOIN bookings bk ON bk.id = ri.booking_id AND bk.agency_id = ri.agency_id
+    (SELECT odometer FROM (SELECT ri.odometer,ri.occurred_at AS reading_at FROM rental_inspections ri JOIN bookings bk ON bk.id = ri.booking_id AND bk.agency_id = ri.agency_id
       WHERE ri.agency_id = v.agency_id AND bk.vehicle_id = v.id AND bk.archived_at IS NULL
-      ORDER BY ri.occurred_at DESC, ri.created_at DESC LIMIT 1) AS last_odometer,
+      UNION ALL SELECT sr.odometer,sr.created_at AS reading_at FROM vehicle_service_records sr WHERE sr.agency_id=v.agency_id AND sr.vehicle_id=v.id AND sr.kind='odometer_update' AND sr.voided_at IS NULL) readings
+      ORDER BY reading_at DESC LIMIT 1) AS last_odometer,
     (SELECT max(sr.odometer) FROM vehicle_service_records sr
       WHERE sr.agency_id = v.agency_id AND sr.vehicle_id = v.id AND sr.kind = 'oil_change' AND sr.voided_at IS NULL) AS last_oil_change_odometer
   FROM vehicles v

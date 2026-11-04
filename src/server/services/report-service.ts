@@ -12,7 +12,7 @@ type Booking = { id: string; vehicleId: string | null; ownerId: string | null; s
 type Cost = { id: string; vehicleId: string | null; ownerId: string | null; date: string; category: string; description: string; amount: number; status: string; receipt: number; recurringExpenseId: string | null };
 type Transaction = { id: string; bookingId: string | null; date: string; amount: number; kind: string; originalKind:string|null; linkedId:string|null; status: string; method: string; reference:string };
 
-const incomeKinds = ["payment", "late_return_charge", "deposit_applied", "deposit_forfeited"];
+const incomeKinds = ["payment", "late_return_charge", "deposit_applied", "deposit_forfeited", "external_income"];
 const pkr = (value: number) => `PKR ${value.toLocaleString("en-PK")}`;
 
 /**
@@ -188,7 +188,7 @@ export async function getReports(context: RequestContext): Promise<ReportsData> 
         id: `TXN-${transaction.id}`,
         date: transaction.date.slice(0,10),
         vehicleId: row?.vehicleId??null,
-        vehicle: vehicle?.name??row?.externalVehicle??"Unlinked booking payment",
+        vehicle: vehicle?.name??row?.externalVehicle??"External income",
         city: vehicle?.city??row?.city??"Unknown city",
         ownership: vehicle?.ownerId||row?.fulfillmentType==="external" ? "Managed" as const : "Owned" as const,
         ownerId: row?.ownerId??null,
@@ -288,7 +288,7 @@ export async function getReports(context: RequestContext): Promise<ReportsData> 
     const periodBookings = completedBookings.filter((row) => (row.completedAt ?? row.pickupAt) >= from && (row.completedAt ?? row.pickupAt) < to);
     const bookedBookings = bookings.filter((row) => row.pickupAt >= from && row.pickupAt < to && !["draft", "cancelled", "no_show"].includes(row.status));
     const periodCosts = approvedCosts.filter((row) => row.date >= fromDate && row.date < to.slice(0, 10));
-    const periodTransactions = transactions.filter((row) => row.date >= from && row.date < to && row.status === "posted");
+    const periodTransactions = transactions.filter((row) => row.bookingId && row.date >= from && row.date < to && row.status === "posted");
     const periodPayouts = payouts.filter((row) => row.paidAt >= from && row.paidAt < to);
     const rows = vehicles.map((vehicle) => {
       const rental = periodBookings.filter((row) => row.vehicleId === vehicle.id);

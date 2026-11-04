@@ -5,6 +5,12 @@ import { getWebRequestContext } from "@/server/auth/session";
 import { asDomainError } from "@/server/domain/errors";
 import { getVehicle, getVehicleFinance, getVehicleFormOptions, deleteVehicle, listVehicles, saveVehicle, setVehicleArchived, transitionVehicleStatus } from "@/server/services/vehicle-service";
 import { getOilChangeOverview, recordOilChange, setOilChangeInterval, voidOilChange, type RecordOilChangeInput } from "@/server/services/oil-change-service";
+import { updateVehicleOdometer } from "@/server/services/odometer-service";
+
+export async function updateVehicleOdometerAction(id:string,input:{odometer:number;note?:string}) {
+  try { const data=await updateVehicleOdometer(await getWebRequestContext(),id,input);for(const path of ["/", "/vehicles",`/vehicles/${id}`,"/bookings/new"])revalidatePath(path);return {ok:true as const,data}; }
+  catch(error){return oilChangeFailure(error);}
+}
 import type { Vehicle } from "@/types/vehicle";
 import type { RepositoryResult } from "@/lib/repositories/repository";
 

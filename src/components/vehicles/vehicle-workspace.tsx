@@ -29,7 +29,7 @@ import {
 } from "lucide-react";
 import { createAvailabilityBlockAction } from "@/app/actions/bookings";
 import { getExpenseWorkspaceAction } from "@/app/actions/expenses";
-import { deleteVehicleAction, getVehicleFinanceAction, transitionVehicleStatusAction } from "@/app/actions/vehicles";
+import { deleteVehicleAction, getVehicleFinanceAction, transitionVehicleStatusAction, updateVehicleOdometerAction } from "@/app/actions/vehicles";
 import { VehicleDeleteDialog } from "@/components/vehicles/vehicle-delete-dialog";
 import {
   AvailabilityCalendar,
@@ -95,6 +95,8 @@ export function VehicleWorkspace({ vehicleId, canDeleteHistory }: { vehicleId: s
     () => vehicleStatusHistory[vehicleId] ?? [],
   );
   const [notice, setNotice] = useState("");
+  const [odometerInput,setOdometerInput]=useState("");
+  const [odometerPending,setOdometerPending]=useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deletePending, setDeletePending] = useState(false);
   const [operation, setOperation] = useState<VehicleOperation>();
@@ -330,6 +332,7 @@ export function VehicleWorkspace({ vehicleId, canDeleteHistory }: { vehicleId: s
       <VehicleDeleteDialog open={deleting} onOpenChange={setDeleting} label={`${vehicle.make} ${vehicle.model} · ${vehicle.plate}`} canDeleteHistory={canDeleteHistory} pending={deletePending} onConfirm={deleteHistory=>void removeVehicle(deleteHistory)}/>
       {tab === "overview" && (
         <div className="space-y-5">
+          <section className="rounded-xl border bg-white p-4"><h2 className="font-bold">Odometer · {vehicle.plate}</h2><p className="mt-1 text-sm text-[#667085]">Latest reading: {vehicle.lastOdometer===undefined?"Not recorded":`${vehicle.lastOdometer.toLocaleString("en-PK")} km`}</p><div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end"><div className="flex-1"><FormInput label="New reading (km)" type="number" min={vehicle.lastOdometer??0} value={odometerInput} onChange={event=>setOdometerInput(event.target.value)}/></div><Button disabled={odometerPending||!odometerInput||!Number.isSafeInteger(Number(odometerInput))||Number(odometerInput)<(vehicle.lastOdometer??0)} onClick={async()=>{setOdometerPending(true);const result=await updateVehicleOdometerAction(vehicle.id,{odometer:Number(odometerInput)});setOdometerPending(false);if(result.ok){setVehicle(current=>current?{...current,lastOdometer:result.data.odometer}:current);setOdometerInput("");setNotice("Odometer updated.")}else setNotice(result.error.message)}}>{odometerPending?"Saving…":"Update odometer"}</Button></div></section>
           <section className="grid gap-3 md:grid-cols-2">
             {[
               {

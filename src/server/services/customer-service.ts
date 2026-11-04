@@ -6,6 +6,7 @@ import type { RequestContext } from "@/server/context/request-context";
 import { DomainError } from "@/server/domain/errors";
 import { parseCreateCustomerInput } from "@/server/validation/customer";
 import { attachCustomerCnicDraft } from "@/server/services/customer-cnic-service";
+import { recordBookingPayment } from "@/server/services/booking-service";
 
 export type CustomerDto = { id: string; name: string; fatherName: string | null; phone: string; cnic: string; email: string | null; dateOfBirth: string | null; address: string | null; cnicExpiresAt: string | null; licenseNumber: string | null; licenseExpiresAt: string | null; status: string; version: number; updatedAt: string; bookingCount: number; paidAmount: number; outstanding: number };
 
@@ -14,7 +15,7 @@ export type CustomerDetailDto = CustomerDto & {
   /** Paid above booking totals (overpayments not yet refunded). */
   credit: number;
   lastRentalAt: string | null;
-  bookings: Array<{ id: string; vehicle: string; plate: string; status: string; pickupAt: string; returnAt: string; totalAmount: number }>;
+  bookings: Array<{ id: string; vehicle: string; plate: string; status: string; pickupAt: string; returnAt: string; totalAmount: number; paid: number }>;
 };
 
 const customerListSelect = `
@@ -77,8 +78,38 @@ export async function getCustomerDetail(context: RequestContext, id: string): Pr
     outstanding: bookings.filter(item => !["cancelled", "no_show"].includes(item.status)).reduce((sum, item) => sum + Math.max(0, item.totalAmount - item.paid), 0),
     credit: bookings.filter(item => !item.archivedAt).reduce((sum, item) => sum + Math.max(0, item.paid - item.totalAmount), 0),
     lastRentalAt: bookings[0]?.returnAt ?? null,
-    bookings: bookings.map(booking => ({ id: booking.id, vehicle: booking.vehicle, plate: booking.plate, status: booking.status, pickupAt: booking.pickupAt, returnAt: booking.returnAt, totalAmount: booking.totalAmount })),
+    bookings: bookings.map(booking => ({ id: booking.id, vehicle: booking.vehicle, plate: booking.plate, status: booking.status, pickupAt: booking.pickupAt, returnAt: booking.returnAt, totalAmount: booking.totalAmount, paid: booking.paid })),
   };
+}
+
+/** Allocates a customer balance payment to the newest unpaid booking first. */
+export async function payCustomerBalance(context: RequestContext, customerId: string, input: { amount: number; method: string; reference?: string; idempotencyKey: string }) {
+  requireRole(context, ["agency_owner", "fleet_manager", "rental_agent", "accountant"]);
+  if (!input || !Number.isSafeInteger(input.amount) || input.amount <= 0 || !input.method?.trim() || !input.idempotencyKey?.trim()) throw new DomainError("VALIDATION_FAILED", "Enter a positive whole amount and payment method.", 400);
+  return inTransaction(async () => {
+    await getCustomer(context, customerId);
+    const previous=await queryAll<{metadata:string}>("SELECT metadata FROM audit_events WHERE agency_id=? AND entity_type='customer' AND entity_id=? AND action='customer.balance_payment_allocated' ORDER BY occurred_at DESC",[context.agencyId,customerId]);
+    const replay=previous.map(row=>JSON.parse(row.metadata) as {idempotencyKey?:string;amount:number;method:string;reference:string;allocations:Array<{bookingId:string;amount:number}>}).find(row=>row.idempotencyKey===input.idempotencyKey);
+    if(replay){if(replay.amount!==input.amount||replay.method!==input.method.trim()||replay.reference!==(input.reference?.trim()??""))throw new DomainError("VERSION_CONFLICT","This payment retry key was already used with different details.",409);return {allocations:replay.allocations,customer:await getCustomerDetail(context,customerId)};}
+    const bookings=await queryAll<{id:string;balance:number}>(`SELECT bk.id,
+      max(0,bk.total_amount-coalesce((SELECT sum(CASE WHEN lower(ft.kind) IN ('refund','reversal','payment_adjustment_decrease') THEN -ft.amount ELSE ft.amount END) FROM financial_transactions ft WHERE ft.agency_id=bk.agency_id AND ft.booking_id=bk.id AND ft.status='posted' AND lower(ft.kind) IN ('payment','late_return_charge','deposit_applied','payment_adjustment_increase','payment_adjustment_decrease','reversal','refund')),0)) AS balance
+      FROM bookings bk WHERE bk.agency_id=? AND bk.customer_id=? AND bk.archived_at IS NULL AND bk.status NOT IN ('draft','cancelled','no_show') ORDER BY bk.pickup_at DESC,bk.created_at DESC,bk.id DESC`,[context.agencyId,customerId]);
+    const outstanding=bookings.reduce((sum,row)=>sum+row.balance,0);
+    if (input.amount>outstanding) throw new DomainError("VALIDATION_FAILED", "Payment exceeds the customer balance.",400,{amount:`Available balance is PKR ${outstanding.toLocaleString("en-PK")}.`});
+    let remaining=input.amount;
+    const allocations:Array<{bookingId:string;amount:number}>=[];
+    for (const booking of bookings) {
+      if (!remaining) break;
+      const amount=Math.min(remaining,booking.balance);
+      if (!amount) continue;
+      await recordBookingPayment(context,booking.id,{amount,method:input.method.trim(),reference:input.reference?.trim()??"",idempotencyKey:`customer_${input.idempotencyKey}_${booking.id}`});
+      allocations.push({bookingId:booking.id,amount});
+      remaining-=amount;
+    }
+    const now=new Date().toISOString();
+    await execute("INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)",[randomUUID(),context.agencyId,context.userId,"customer.balance_payment_allocated","customer",customerId,JSON.stringify({idempotencyKey:input.idempotencyKey,amount:input.amount,method:input.method.trim(),reference:input.reference?.trim()??"",allocations,order:"LIFO"}),now]);
+    return {allocations,customer:await getCustomerDetail(context,customerId)};
+  },{immediate:true});
 }
 
 export async function createCustomer(context: RequestContext, rawInput: unknown) {
