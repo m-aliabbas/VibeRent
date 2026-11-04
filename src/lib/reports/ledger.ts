@@ -11,6 +11,8 @@ export type LedgerEntry = {
   date: string;
   vehicleId: string | null;
   vehicle: string;
+  plate?: string | null;
+  rentalDays?: number;
   city: string;
   ownership: "Owned" | "Managed";
   ownerId: string | null;
@@ -23,6 +25,20 @@ export type LedgerEntry = {
   ownerMovement: number;
   operatingResult: number;
 };
+
+/** The owner's rental share and allocated costs, excluding full car takings and payouts. */
+export function ownerLedgerRows(entries: LedgerEntry[]) {
+  return entries.filter(row => row.kind === "Owner share" || (row.kind === "Expense" && row.ownerMovement < 0)).map(row => ({
+    id: row.id,
+    date: row.date,
+    plate: row.plate || "Owner account",
+    days: row.kind === "Owner share" ? row.rentalDays ?? 0 : 0,
+    income: row.kind === "Owner share" ? row.ownerMovement : 0,
+    expense: row.kind === "Expense" ? -row.ownerMovement : 0,
+    reference: row.reference,
+    description: row.description,
+  }));
+}
 
 export type LedgerSummary = {
   income: number;
@@ -50,7 +66,7 @@ export type LedgerFilters = {
 };
 
 export function buildLedgerEntries(source: LedgerEntry[], filters: LedgerFilters) {
-  const scoped = source.filter((row) => matchesDimensions(row, filters) && matchesScope(row, filters.scope) && !(filters.scope.type === "owner" && row.kind === "Rental income"));
+  const scoped = source.filter((row) => matchesDimensions(row, filters) && matchesScope(row, filters.scope) && !(filters.scope.type === "owner" && (row.kind === "Rental income" || (row.kind === "Expense" && row.ownerMovement === 0))));
   const current = scoped.filter((row) => row.date >= filters.from && row.date <= filters.to);
   const opening = filters.scope.type === "vehicles" ? [] : ownerOpeningRows(scoped, filters.from, filters.scope);
   return [...opening, ...current].sort((a, b) => {

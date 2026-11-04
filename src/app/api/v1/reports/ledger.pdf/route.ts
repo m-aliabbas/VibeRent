@@ -21,10 +21,10 @@ export async function GET(request:Request){
     const scope=resolveScope(scopeType,url,data);
     const entry=url.searchParams.get("entry")??"all";
     if(!["all","income","expense","owner-payment"].includes(entry))throw new DomainError("VALIDATION_FAILED","Unknown ledger entry filter.",400);
-    const entries=filterEntries(buildLedgerEntries(data.ledgerEntries,{from,to,city,ownership,scope}),entry);
+    const entries=filterEntries(buildLedgerEntries(data.ledgerEntries,{from,to,city,ownership,scope}),entry,scope.type==="owner");
     const accountLabel=`${entryLabel(entry)} - ${labelForScope(scope,data)}`;
     const periodLabel=`${displayDate(from)} - ${displayDate(to)}`;
-    const bytes=await createLedgerReportPdf({agencyName:data.agencyName,from,to,periodLabel,city,ownership,accountLabel,entries});
+    const bytes=await createLedgerReportPdf({agencyName:data.agencyName,from,to,periodLabel,city,ownership,accountLabel,entries,ownerView:scope.type==="owner"});
     const fileName=`viberent-${slug(accountLabel)}-${from}-to-${to}.pdf`;
     return new Response(new Uint8Array(bytes),{headers:{"content-type":"application/pdf","content-disposition":`attachment; filename="${fileName}"`,"cache-control":"private, no-store"}});
   }catch(error){
@@ -56,8 +56,8 @@ function labelForScope(scope:LedgerScope,data:Awaited<ReturnType<typeof getRepor
   return `Vehicle ledger - ${scope.vehicleIds.length} selected vehicles`;
 }
 
-function filterEntries(entries:ReturnType<typeof buildLedgerEntries>,entry:string){
-  if(entry==="income")return entries.filter(row=>row.income!==0);
+function filterEntries(entries:ReturnType<typeof buildLedgerEntries>,entry:string,ownerView:boolean){
+  if(entry==="income")return entries.filter(row=>ownerView?row.kind==="Owner share":row.income!==0);
   if(entry==="expense")return entries.filter(row=>row.kind==="Expense");
   if(entry==="owner-payment")return entries.filter(row=>["Owner settlement","Source settlement"].includes(row.kind));
   return entries;
