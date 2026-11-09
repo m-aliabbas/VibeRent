@@ -45,6 +45,8 @@ export type VehicleFinanceTransaction = {
   reference: string;
   status: string;
   postedAt: string;
+  /** Booking start date; the main date owners and staff track rentals by. */
+  bookingStart?: string;
 };
 export type VehicleFinanceSummary = {
   today: VehicleFinancePeriod;
@@ -124,12 +126,12 @@ export async function getVehicleFinance(context: RequestContext, id: string): Pr
   const recentTransactions = await queryAll<VehicleFinanceTransaction>(`
     SELECT t.id,t.booking_id AS bookingId,c.name AS customer,t.kind,t.amount,t.method,t.reference,
       CASE WHEN EXISTS(SELECT 1 FROM financial_transactions reversal WHERE reversal.agency_id=t.agency_id AND reversal.linked_transaction_id=t.id AND reversal.status='posted') THEN 'reversed' ELSE t.status END AS status,
-      t.posted_at AS postedAt
+      t.posted_at AS postedAt,b.pickup_at AS bookingStart
     FROM financial_transactions t
     JOIN bookings b ON b.id=t.booking_id AND b.agency_id=t.agency_id
     JOIN customers c ON c.id=b.customer_id AND c.agency_id=b.agency_id
     WHERE t.agency_id=? AND b.vehicle_id=?
-    ORDER BY t.posted_at DESC,t.created_at DESC
+    ORDER BY b.pickup_at DESC,t.posted_at DESC,t.created_at DESC
     LIMIT 50
   `,[context.agencyId,id]);
   const [availabilityBlocks,recentExpenses]=await Promise.all([listAvailabilityBlocks(context),listExpenses(context)]);
@@ -245,6 +247,7 @@ export async function deleteVehicle(context:RequestContext,id:string,input:{dele
     for(const file of files) await execute("DELETE FROM private_files WHERE agency_id=? AND id=?",[agency,file.id]);
     await execute("DELETE FROM vehicle_service_records WHERE agency_id=? AND vehicle_id=?",[agency,id]);
     await execute(`DELETE FROM vehicle_service_records WHERE agency_id=? AND expense_id IN (${expenseIds})`,[agency,...expenseArgs]);
+    await execute(`DELETE FROM expense_recoveries WHERE agency_id=? AND expense_id IN (${expenseIds})`,[agency,...expenseArgs]);
     await execute(`DELETE FROM expenses WHERE id IN (${expenseIds})`,expenseArgs);
     await execute("DELETE FROM recurring_expenses WHERE agency_id=? AND vehicle_id=?",[agency,id]);
     await execute("DELETE FROM owner_payouts WHERE agency_id=? AND vehicle_id=?",[agency,id]);

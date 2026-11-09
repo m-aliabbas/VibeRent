@@ -64,6 +64,20 @@
       "when": 1792999394857,
       "tag": "0008_background_jobs_and_whatsapp_gateway",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1794208724642,
+      "tag": "0009_owner_fixed_charges",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1794210321728,
+      "tag": "0010_expense_recoveries",
+      "breakpoints": true
     }
   ]
 }

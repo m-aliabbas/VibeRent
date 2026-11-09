@@ -141,3 +141,9 @@ function parseJson(value: unknown) {
   if (typeof value !== "string") return value;
   try { return JSON.parse(value); } catch { return undefined; }
 }
+
+/** Agency name and contact lines printed at the top of ledger statements. */
+export async function getReportAgencyHeader(context: RequestContext): Promise<{ agency: string; address: string | null; phone: string | null }> {
+  const row = await queryOne<{ name: string; address: string | null; phone: string | null }>("SELECT name,address,phone FROM agencies WHERE id=? LIMIT 1", [context.agencyId]);
+  return { agency: row?.name ?? "VibeRent agency", address: row?.address || null, phone: row?.phone || null };
+}

@@ -73,7 +73,7 @@ export async function listAgencyCities(context: RequestContext): Promise<Catalog
   const now = new Date().toISOString();
   await execute(
     `INSERT OR IGNORE INTO agency_cities (id,agency_id,name,active,created_at,updated_at)
-     SELECT 'city_' || lower(replace(city,' ', '_')) || '_' || substr(id,-6), agency_id, city, 1, ?, ? FROM branches WHERE agency_id=?`,
+     SELECT 'city_' || lower(replace(city,' ', '_')) || '_' || substr(id,length(id)-5), agency_id, city, 1, ?, ? FROM branches WHERE agency_id=?`,
     [now, now, context.agencyId],
   );
   await execute(

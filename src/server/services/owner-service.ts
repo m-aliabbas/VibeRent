@@ -5,18 +5,21 @@ import { requireRole } from "@/server/auth/authorize";
 import type { RequestContext } from "@/server/context/request-context";
 import { DomainError } from "@/server/domain/errors";
 import { formatPercent, ownerExpenseAmount, ownerExpensePercent } from "@/lib/owner-share";
+import { getOwnerFixedChargeSettings, listOwnerFixedCharges, type OwnerFixedChargeSettings } from "@/server/services/owner-fixed-charge-service";
 
 type AgreementRow={id:string;version:number;effectiveFrom:string;effectiveTo:string|null;shareBasis:string;ownerSharePercent:number|null;ownerShareAmount:number|null;expenseResponsibility:string;payoutFrequency:string;createdAt:string};
 type RevenueRow={id:string;date:string;pickupAt:string;returnAt:string;vehicleId:string;totalAmount:number;vehicle:string;plate:string;agreementId:string|null;agreementVersion:number|null;shareBasis:string|null;ownerSharePercent:number|null;ownerShareAmount:number|null};
-type ExpenseRow={id:string;date:string;vehicleId:string|null;plate:string|null;amount:number;fullAmount:number;percent:number;description:string};
+type ExpenseRow={id:string;date:string;vehicleId:string|null;plate:string|null;amount:number;fullAmount:number;percent:number;description:string;head:string;fixed?:boolean};
 type ExpenseSourceRow={id:string;date:string;vehicleId:string|null;amount:number;description:string;category:string;ownerId:string|null;recurringExpenseId:string|null;vehicle:string|null;plate:string|null;expenseResponsibility:string|null;shareBasis:string|null;ownerSharePercent:number|null};
 type PayoutRow={id:string;vehicleId:string|null;vehicle:string|null;plate:string|null;periodFrom:string;periodTo:string;paidAt:string;amount:number;method:string;reference:string;status:string};
 export type OwnerPayoutDto={id:string;vehicleId:string|null;vehicle:string|null;plate:string|null;periodFrom:string;periodTo:string;paidAt:string;amount:number;method:string;reference:string;status:string};
-export type OwnerStatementLine={id:string;kind:"Rental revenue"|"Owner expense"|"Payout";source:string;description:string;date:string;amount:number;agreementVersion:string;vehicleId:string|null;plate:string|null;days:number};
-export type OwnerStatementDto={id:string;period:string;periodFrom:string;periodTo:string;status:"Open"|"Paid";lines:OwnerStatementLine[];rentalRevenue:number;expenses:number;payouts:number;closing:number};
+export type OwnerStatementLine={id:string;kind:"Rental revenue"|"Owner expense"|"Fixed charge"|"Payout";source:string;description:string;date:string;amount:number;agreementVersion:string;vehicleId:string|null;plate:string|null;days:number;head:string|null;rentalFrom:string|null;rentalTo:string|null;
+  /** Cumulative owner balance after this line, carried across months like a bank statement. */
+  balance:number};
+export type OwnerStatementDto={id:string;period:string;periodFrom:string;periodTo:string;status:"Open"|"Paid";lines:OwnerStatementLine[];rentalRevenue:number;expenses:number;payouts:number;closing:number;openingBalance:number;closingBalance:number};
 export type OwnerListItem={id:string;name:string;phone:string;email:string|null;status:string;version:number;vehicleCount:number;share:string;payable:number;balanceStatus:"Due"|"Settled"|"Inactive"};
-export type OwnerDetailDto=OwnerListItem&{vehicles:Array<{id:string;name:string;plate:string;status:string}>;agreements:AgreementRow[];statements:OwnerStatementDto[];payoutHistory:OwnerPayoutDto[]};
-export type OwnerWorkspaceData={owners:OwnerListItem[];summary:{activeOwners:number;managedVehicles:number;ownerShare:number;payable:number}};
+export type OwnerDetailDto=OwnerListItem&{vehicles:Array<{id:string;name:string;plate:string;status:string}>;agreements:AgreementRow[];statements:OwnerStatementDto[];payoutHistory:OwnerPayoutDto[];totals:{income:number;expenses:number;fixedCharges:number;paid:number;balance:number}};
+export type OwnerWorkspaceData={owners:OwnerListItem[];summary:{activeOwners:number;managedVehicles:number;ownerShare:number;payable:number};fixedCharge:OwnerFixedChargeSettings};
 
 const ownerBase=`SELECT o.id,o.name,o.phone,o.email,o.status,o.version,
   (SELECT count(*) FROM vehicles v WHERE v.agency_id=o.agency_id AND v.owner_id=o.id AND v.archived_at IS NULL) AS vehicleCount
@@ -35,35 +38,44 @@ async function latestAgreement(agencyId:string,ownerId:string){return (await lis
 /** The owner's portion of an approved expense, described with the full amount, split, and recurrence. */
 function ownerExpense(row:ExpenseSourceRow):ExpenseRow{
   const percent=ownerExpensePercent({assignedToOwner:Boolean(row.ownerId),expenseResponsibility:row.expenseResponsibility,shareBasis:row.shareBasis,ownerSharePercent:row.ownerSharePercent});
-  const parts=[`${row.category}: ${row.description}`,row.plate?`${row.vehicle} · ${row.plate}`:undefined,`owner pays ${formatPercent(percent)} of PKR ${row.amount.toLocaleString("en-PK")}`,row.recurringExpenseId?"recurring":undefined];
-  return {id:row.id,date:row.date,vehicleId:row.vehicleId,plate:row.plate,amount:ownerExpenseAmount(row.amount,percent),fullAmount:row.amount,percent,description:parts.filter(Boolean).join(" · ")};
+  const parts=[`${row.category}: ${row.description}`,row.plate??undefined,`owner pays ${formatPercent(percent)} of PKR ${row.amount.toLocaleString("en-PK")}`,row.recurringExpenseId?"recurring":undefined];
+  return {id:row.id,date:row.date,vehicleId:row.vehicleId,plate:row.plate,amount:ownerExpenseAmount(row.amount,percent),fullAmount:row.amount,percent,description:parts.filter(Boolean).join(" · "),head:row.category};
 }
 function revenueDescription(row:RevenueRow){
   const full=`full rental PKR ${row.totalAmount.toLocaleString("en-PK")}`;
-  return `${row.vehicle} · ${row.plate} · ${row.shareBasis==="percentage"?`${formatPercent(row.ownerSharePercent??0)} of ${full}`:row.shareBasis==="fixed_monthly"?`fixed monthly share · ${full}`:`no agreement · ${full}`}`;
+  return `${row.plate} · ${row.shareBasis==="percentage"?`${formatPercent(row.ownerSharePercent??0)} of ${full}`:row.shareBasis==="fixed_monthly"?`fixed monthly share · ${full}`:`no agreement · ${full}`}`;
 }
 
 async function ledger(context:RequestContext,ownerId:string){
-  const [revenue,expenses,payouts]=await Promise.all([
-    queryAll<RevenueRow>(`SELECT b.id,substr(coalesce(b.completed_at,b.return_at),1,10) AS date,b.pickup_at AS pickupAt,b.return_at AS returnAt,v.id AS vehicleId,b.total_amount AS totalAmount,v.make||' '||v.model AS vehicle,v.plate,a.id AS agreementId,a.version AS agreementVersion,a.share_basis AS shareBasis,a.owner_share_percent AS ownerSharePercent,a.owner_share_amount AS ownerShareAmount FROM bookings b JOIN vehicles v ON v.id=b.vehicle_id AND v.agency_id=b.agency_id LEFT JOIN management_agreements a ON a.id=v.agreement_id AND a.agency_id=v.agency_id WHERE b.agency_id=? AND v.owner_id=? AND b.status='completed' ORDER BY date DESC`,[context.agencyId,ownerId]),
+  const [revenue,expenses,payouts,fixed,recoveries]=await Promise.all([
+    queryAll<RevenueRow>(`SELECT b.id,substr(b.pickup_at,1,10) AS date,b.pickup_at AS pickupAt,b.return_at AS returnAt,v.id AS vehicleId,b.total_amount AS totalAmount,v.make||' '||v.model AS vehicle,v.plate,a.id AS agreementId,a.version AS agreementVersion,a.share_basis AS shareBasis,a.owner_share_percent AS ownerSharePercent,a.owner_share_amount AS ownerShareAmount FROM bookings b JOIN vehicles v ON v.id=b.vehicle_id AND v.agency_id=b.agency_id LEFT JOIN management_agreements a ON a.id=v.agreement_id AND a.agency_id=v.agency_id WHERE b.agency_id=? AND v.owner_id=? AND b.status='completed' ORDER BY date DESC`,[context.agencyId,ownerId]),
     queryAll<ExpenseSourceRow>(`SELECT e.id,e.occurred_on AS date,e.vehicle_id AS vehicleId,e.amount,e.description,e.category,e.owner_id AS ownerId,e.recurring_expense_id AS recurringExpenseId,v.make||' '||v.model AS vehicle,v.plate,a.expense_responsibility AS expenseResponsibility,a.share_basis AS shareBasis,a.owner_share_percent AS ownerSharePercent
       FROM expenses e LEFT JOIN vehicles v ON v.id=e.vehicle_id AND v.agency_id=e.agency_id LEFT JOIN management_agreements a ON a.id=v.agreement_id AND a.agency_id=v.agency_id
       WHERE e.agency_id=? AND e.status='approved' AND (e.owner_id=? OR (e.owner_id IS NULL AND v.owner_id=?)) ORDER BY e.occurred_on DESC`,[context.agencyId,ownerId,ownerId]).then(rows=>rows.map(ownerExpense).filter(row=>row.amount>0)),
     queryAll<PayoutRow>(`SELECT p.id,p.vehicle_id AS vehicleId,CASE WHEN v.id IS NULL THEN NULL ELSE v.make||' '||v.model END AS vehicle,v.plate,p.period_from AS periodFrom,p.period_to AS periodTo,p.paid_at AS paidAt,p.amount,p.method,p.reference,p.status FROM owner_payouts p LEFT JOIN vehicles v ON v.id=p.vehicle_id AND v.agency_id=p.agency_id WHERE p.agency_id=? AND p.owner_id=? AND p.status='posted' ORDER BY p.paid_at DESC`,[context.agencyId,ownerId]),
+    listOwnerFixedCharges(context.agencyId,ownerId),
+    queryAll<ExpenseSourceRow&{source:string;expenseId:string}>(`SELECT r.id,r.received_on AS date,e.vehicle_id AS vehicleId,r.amount,e.description,e.category,e.owner_id AS ownerId,e.recurring_expense_id AS recurringExpenseId,v.make||' '||v.model AS vehicle,v.plate,a.expense_responsibility AS expenseResponsibility,a.share_basis AS shareBasis,a.owner_share_percent AS ownerSharePercent,r.source,e.id AS expenseId
+      FROM expense_recoveries r JOIN expenses e ON e.id=r.expense_id AND e.agency_id=r.agency_id LEFT JOIN vehicles v ON v.id=e.vehicle_id AND v.agency_id=e.agency_id LEFT JOIN management_agreements a ON a.id=v.agreement_id AND a.agency_id=v.agency_id
+      WHERE r.agency_id=? AND r.status='posted' AND e.status='approved' AND (e.owner_id=? OR (e.owner_id IS NULL AND v.owner_id=?)) ORDER BY r.received_on DESC`,[context.agencyId,ownerId,ownerId]).then(rows=>rows.map(row=>{const base=ownerExpense(row);return {...base,amount:-base.amount,description:`Returned by ${row.source} against ${row.expenseId} · ${row.category}: ${row.description}`}}).filter(row=>row.amount<0)),
   ]);
-  return {revenue,expenses,payouts};
+  const fixedRows:ExpenseRow[]=fixed.map(row=>({id:row.id,date:row.date,vehicleId:row.vehicleId,plate:row.plate,amount:row.amount,fullAmount:row.amount,percent:100,description:`${row.label} · ${row.plate} · monthly fixed charge for ${row.month}`,head:row.label,fixed:true}));
+  return {revenue,expenses:[...expenses,...fixedRows,...recoveries],payouts};
 }
 
 async function buildStatements(context:RequestContext,ownerId:string):Promise<OwnerStatementDto[]>{
   const data=await ledger(context,ownerId); const dates=[...data.revenue.map(x=>x.date),...data.expenses.map(x=>x.date),...data.payouts.map(x=>x.periodFrom)];
-  const periods=[...new Set((dates.length?dates:[new Date().toISOString().slice(0,10)]).map(d=>d.slice(0,7)))].sort().reverse();
-  return periods.map(period=>{const {from,to}=monthBounds(`${period}-01`); const lines:OwnerStatementLine[]=[];
-    const fixed=new Set<string>();for(const row of data.revenue.filter(x=>x.date>=from&&x.date<to)){const key=row.agreementId??row.id;if(row.shareBasis==="fixed_monthly"&&fixed.has(key))continue;if(row.shareBasis==="fixed_monthly")fixed.add(key);lines.push({id:`REV-${row.id}`,kind:"Rental revenue",source:row.id,description:revenueDescription(row),date:row.date,amount:shareAmount(row.totalAmount,row),agreementVersion:row.agreementVersion?`v${row.agreementVersion}`:"Unversioned",vehicleId:row.vehicleId,plate:row.plate,days:Math.max(1,Math.ceil((Date.parse(row.returnAt)-Date.parse(row.pickupAt))/86_400_000))});}
-    for(const row of data.expenses.filter(x=>x.date>=from&&x.date<to)) lines.push({id:`COST-${row.id}`,kind:"Owner expense",source:row.id,description:row.description,date:row.date,amount:-row.amount,agreementVersion:"Allocated expense",vehicleId:row.vehicleId,plate:row.plate,days:0});
-    for(const row of data.payouts.filter(x=>x.periodFrom>=from&&x.periodFrom<to)) lines.push({id:`PAY-${row.id}`,kind:"Payout",source:row.reference,description:`Payout · ${row.vehicle?`${row.vehicle} · ${row.plate}`:"Unallocated vehicle"} · ${row.method}`,date:row.paidAt,amount:-row.amount,agreementVersion:"Posted payout",vehicleId:row.vehicleId,plate:row.plate,days:0});
-    lines.sort((a,b)=>b.date.localeCompare(a.date)); const rentalRevenue=lines.filter(x=>x.kind==="Rental revenue").reduce((s,x)=>s+x.amount,0);const expenses=Math.abs(lines.filter(x=>x.kind==="Owner expense").reduce((s,x)=>s+x.amount,0));const payouts=Math.abs(lines.filter(x=>x.kind==="Payout").reduce((s,x)=>s+x.amount,0));const closing=rentalRevenue-expenses-payouts;
-    return {id:`STM-${ownerId}-${period}`,period:new Intl.DateTimeFormat("en-PK",{month:"long",year:"numeric",timeZone:"UTC"}).format(new Date(`${period}-01T00:00:00Z`)),periodFrom:from,periodTo:to,status:closing<=0?"Paid":"Open",lines,rentalRevenue,expenses,payouts,closing};
+  const periods=[...new Set((dates.length?dates:[new Date().toISOString().slice(0,10)]).map(d=>d.slice(0,7)))].sort();
+  let carried=0;
+  const statements=periods.map(period=>{const {from,to}=monthBounds(`${period}-01`); const lines:Omit<OwnerStatementLine,"balance">[]=[];
+    const fixed=new Set<string>();for(const row of data.revenue.filter(x=>x.date>=from&&x.date<to).sort((a,b)=>a.date.localeCompare(b.date)||a.id.localeCompare(b.id))){const key=row.agreementId??row.id;if(row.shareBasis==="fixed_monthly"&&fixed.has(key))continue;if(row.shareBasis==="fixed_monthly")fixed.add(key);lines.push({id:`REV-${row.id}`,kind:"Rental revenue",source:row.id,description:revenueDescription(row),date:row.date,amount:shareAmount(row.totalAmount,row),agreementVersion:row.agreementVersion?`v${row.agreementVersion}`:"Unversioned",vehicleId:row.vehicleId,plate:row.plate,days:Math.max(1,Math.ceil((Date.parse(row.returnAt)-Date.parse(row.pickupAt))/86_400_000)),head:null,rentalFrom:row.pickupAt,rentalTo:row.returnAt});}
+    for(const row of data.expenses.filter(x=>x.date>=from&&x.date<to)) lines.push({id:row.fixed?row.id:`COST-${row.id}`,kind:row.fixed?"Fixed charge":"Owner expense",source:row.fixed?row.head:row.id,description:row.description,date:row.date,amount:-row.amount,agreementVersion:row.fixed?"Monthly fixed charge":"Allocated expense",vehicleId:row.vehicleId,plate:row.plate,days:0,head:row.head,rentalFrom:null,rentalTo:null});
+    for(const row of data.payouts.filter(x=>x.periodFrom>=from&&x.periodFrom<to)) lines.push({id:`PAY-${row.id}`,kind:"Payout",source:row.reference,description:`Payout · ${row.plate??"Unallocated vehicle"} · ${row.method}`,date:row.paidAt,amount:-row.amount,agreementVersion:"Posted payout",vehicleId:row.vehicleId,plate:row.plate,days:0,head:null,rentalFrom:null,rentalTo:null});
+    lines.sort((a,b)=>a.date.slice(0,10).localeCompare(b.date.slice(0,10))||a.id.localeCompare(b.id));
+    const openingBalance=carried;let balance=carried;const withBalance=lines.map(line=>({...line,balance:(balance+=line.amount)}));carried=balance;
+    const rentalRevenue=lines.filter(x=>x.kind==="Rental revenue").reduce((s,x)=>s+x.amount,0);const expenses=Math.abs(lines.filter(x=>x.kind==="Owner expense"||x.kind==="Fixed charge").reduce((s,x)=>s+x.amount,0));const payouts=Math.abs(lines.filter(x=>x.kind==="Payout").reduce((s,x)=>s+x.amount,0));const closing=rentalRevenue-expenses-payouts;
+    return {id:`STM-${ownerId}-${period}`,period:new Intl.DateTimeFormat("en-PK",{month:"long",year:"numeric",timeZone:"UTC"}).format(new Date(`${period}-01T00:00:00Z`)),periodFrom:from,periodTo:to,status:balance<=0?"Paid" as const:"Open" as const,lines:withBalance,rentalRevenue,expenses,payouts,closing,openingBalance,closingBalance:balance};
   });
+  return statements.reverse();
 }
 
 export async function listOwners(context:RequestContext):Promise<OwnerWorkspaceData>{
@@ -74,7 +86,7 @@ export async function listOwners(context:RequestContext):Promise<OwnerWorkspaceD
     const payable=Math.max(0,totalShare(entries.revenue)-entries.expenses.reduce((s,x)=>s+x.amount,0)-entries.payouts.reduce((s,x)=>s+x.amount,0));
     return {...row,share:shareLabel(agreement),payable,balanceStatus:row.status!=="active"?"Inactive" as const:payable>0?"Due" as const:"Settled" as const};
   }));
-  return {owners,summary:{activeOwners:owners.filter(x=>x.status==="active").length,managedVehicles:owners.reduce((s,x)=>s+x.vehicleCount,0),ownerShare:owners.reduce((s,x)=>s+x.payable,0),payable:owners.reduce((s,x)=>s+x.payable,0)}};
+  return {owners,summary:{activeOwners:owners.filter(x=>x.status==="active").length,managedVehicles:owners.reduce((s,x)=>s+x.vehicleCount,0),ownerShare:owners.reduce((s,x)=>s+x.payable,0),payable:owners.reduce((s,x)=>s+x.payable,0)},fixedCharge:await getOwnerFixedChargeSettings(context)};
 }
 export async function getOwner(context:RequestContext,id:string):Promise<OwnerDetailDto>{
   const item=(await listOwners(context)).owners.find(x=>x.id===id);if(!item)throw new DomainError("NOT_FOUND","Owner not found.",404);
@@ -85,7 +97,10 @@ export async function getOwner(context:RequestContext,id:string):Promise<OwnerDe
     ledger(context,id),
   ]);
   const payoutHistory=entries.payouts.map(({id: payoutId,vehicleId,vehicle,plate,periodFrom,periodTo,paidAt,amount,method,reference,status})=>({id:payoutId,vehicleId,vehicle,plate,periodFrom,periodTo,paidAt,amount,method,reference,status}));
-  return {...item,vehicles,agreements,statements,payoutHistory};
+  const lines=statements.flatMap(statement=>statement.lines);
+  const sum=(kinds:OwnerStatementLine["kind"][])=>Math.abs(lines.filter(line=>kinds.includes(line.kind)).reduce((total,line)=>total+line.amount,0));
+  const totals={income:sum(["Rental revenue"]),expenses:sum(["Owner expense","Fixed charge"]),fixedCharges:sum(["Fixed charge"]),paid:sum(["Payout"]),balance:statements[0]?.closingBalance??0};
+  return {...item,vehicles,agreements,statements,payoutHistory,totals};
 }
 function validateOwner(input:{name:string;phone:string;email?:string|null}){const errors:Record<string,string>={};if(!input.name?.trim())errors.name="Name is required.";if(!input.phone?.trim())errors.phone="Phone is required.";if(input.email&&!/^\S+@\S+\.\S+$/.test(input.email))errors.email="Enter a valid email.";if(Object.keys(errors).length)throw new DomainError("VALIDATION_FAILED","Review the owner details.",400,errors);}
 export async function saveOwner(context:RequestContext,input:{id?:string;name:string;phone:string;email?:string|null}){

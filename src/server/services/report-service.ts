@@ -6,10 +6,11 @@ import type { LedgerEntry, LedgerSummary } from "@/lib/reports/ledger";
 import { formatPercent, ownerExpenseAmount, ownerExpensePercent } from "@/lib/owner-share";
 import { requireRole } from "@/server/auth/authorize";
 import type { RequestContext } from "@/server/context/request-context";
+import { listOwnerFixedCharges } from "@/server/services/owner-fixed-charge-service";
 
 type Vehicle = { id: string; name: string; plate: string; city: string; ownership: string; ownerId: string | null; archivedAt: string | null; status: string; expenseResponsibility: string | null; shareBasis: string | null; ownerSharePercent: number | null };
-type Booking = { id: string; vehicleId: string | null; ownerId: string | null; source: string; pickupAt: string; returnAt: string; completedAt: string | null; status: string; totalAmount: number; shareBasis: string | null; ownerSharePercent: number | null; ownerShareAmount: number | null; fulfillmentType:"fleet"|"external"; externalVehicle:string|null; externalPlate:string|null; externalSupplierName:string|null; city:string };
-type Cost = { id: string; vehicleId: string | null; ownerId: string | null; date: string; category: string; description: string; amount: number; status: string; receipt: number; recurringExpenseId: string | null };
+type Booking = { id: string; vehicleId: string | null; ownerId: string | null; customer: string | null; meter: number | null; source: string; pickupAt: string; returnAt: string; completedAt: string | null; status: string; totalAmount: number; shareBasis: string | null; ownerSharePercent: number | null; ownerShareAmount: number | null; fulfillmentType:"fleet"|"external"; externalVehicle:string|null; externalPlate:string|null; externalSupplierName:string|null; city:string; destinationCity:string };
+type Cost = { id: string; vehicleId: string | null; ownerId: string | null; customer: string | null; meter: number | null; date: string; category: string; description: string; amount: number; status: string; receipt: number; recurringExpenseId: string | null };
 type Transaction = { id: string; bookingId: string | null; date: string; amount: number; kind: string; originalKind:string|null; linkedId:string|null; status: string; method: string; reference:string };
 
 const incomeKinds = ["payment", "late_return_charge", "deposit_applied", "deposit_forfeited", "external_income"];
@@ -55,6 +56,7 @@ function correctedIncome(transactions: Transaction[]) {
   return rows.filter((row) => row.amount !== 0 || !row.edited);
 }
 type Payout = { id: string; ownerId: string; vehicleId:string|null; paidAt: string; amount: number; method: string; reference: string };
+type Recovery = { id: string; expenseId: string; date: string; amount: number; source: string; method: string; reference: string };
 type SourcePayout = {id:string;bookingId:string;supplierName:string;paidAt:string;amount:number;method:string;reference:string};
 type Block = { vehicleId: string; startAt: string; endAt: string };
 
@@ -76,6 +78,7 @@ export type ReportPeriod = {
 };
 export type ReportsData = {
   agencyName: string;
+  agencyContact: { address: string | null; phone: string | null };
   periods: ReportPeriod[];
   cities: string[];
   ledgerEntries: LedgerEntry[];
@@ -83,6 +86,7 @@ export type ReportsData = {
   ledgerAccounts: {
     vehicles: Array<{ id: string; label: string; city: string; ownership: "Owned" | "Managed"; ownerId: string | null; archived: boolean }>;
     owners: Array<{ id: string; label: string }>;
+    expenseHeads: string[];
   };
 };
 
@@ -101,14 +105,15 @@ function ownerShare(total: number, row: Booking) {
   return row.shareBasis === "percentage" ? Math.round(total * (row.ownerSharePercent ?? 0) / 100) : row.ownerShareAmount ?? 0;
 }
 
+/** Owner ledgers are dated by the booking start so owners can match entries against their tracker data. */
 function bookingMonth(row: Booking) {
-  return (row.completedAt ?? row.pickupAt).slice(0, 7);
+  return row.pickupAt.slice(0, 7);
 }
 
 function allocatedOwnerShares(rows: Booking[]) {
   const fixed = new Set<string>();
   const values = new Map<string, number>();
-  for (const row of [...rows].sort((a,b)=>(a.completedAt??a.pickupAt).localeCompare(b.completedAt??b.pickupAt)||a.id.localeCompare(b.id))) {
+  for (const row of [...rows].sort((a,b)=>a.pickupAt.localeCompare(b.pickupAt)||a.id.localeCompare(b.id))) {
     if (row.shareBasis !== "fixed_monthly") {
       values.set(row.id, ownerShare(row.totalAmount, row));
       continue;
@@ -126,8 +131,24 @@ function totalOwnerShare(rows: Booking[]) {
 
 export async function getReports(context: RequestContext): Promise<ReportsData> {
   requireRole(context, ["agency_owner", "fleet_manager", "accountant"]);
-  const [agencyRow,vehicles,bookings,costs,transactions,payouts,sourcePayouts,blocks,owners,agreementTerms] = await Promise.all([
-    queryOne<{name:string}>("SELECT name FROM agencies WHERE id=? LIMIT 1",[context.agencyId]),
+  return buildReports(context);
+}
+
+export type OwnerLedgerData = { entries: LedgerEntry[]; dateBounds: { min: string; max: string }; cars: Array<{ id: string; plate: string }> };
+
+/** The owner's slice of the agency ledger, for the owner profile (same rows and math as Reports → Ledger). */
+export async function getOwnerLedger(context: RequestContext, ownerId: string): Promise<OwnerLedgerData> {
+  requireRole(context, ["agency_owner", "fleet_manager", "rental_agent", "accountant"]);
+  const data = await buildReports(context);
+  const entries = data.ledgerEntries.filter((row) => row.ownerId === ownerId);
+  const cars = new Map<string, string>();
+  for (const row of entries) if (row.vehicleId && row.plate) cars.set(row.vehicleId, row.plate);
+  return { entries, dateBounds: data.dateBounds, cars: [...cars].map(([id, plate]) => ({ id, plate })).sort((a, b) => a.plate.localeCompare(b.plate)) };
+}
+
+async function buildReports(context: RequestContext): Promise<ReportsData> {
+  const [agencyRow,vehicles,bookings,costs,transactions,payouts,sourcePayouts,blocks,owners,agreementTerms,fixedCharges,recoveries] = await Promise.all([
+    queryOne<{name:string;address:string|null;phone:string|null}>("SELECT name,address,phone FROM agencies WHERE id=? LIMIT 1",[context.agencyId]),
     queryAll<Vehicle>(`
     SELECT v.id, v.make || ' ' || v.model || ' - ' || v.plate AS name, v.plate,
            b.city, v.ownership, v.owner_id AS ownerId, v.archived_at AS archivedAt, v.status,
@@ -145,8 +166,11 @@ export async function getReports(context: RequestContext): Promise<ReportsData> 
            a.owner_share_percent AS ownerSharePercent, a.owner_share_amount AS ownerShareAmount,
            b.fulfillment_type AS fulfillmentType,
            CASE WHEN b.fulfillment_type='external' THEN b.external_vehicle_make||' '||b.external_vehicle_model||coalesce(' '||b.external_vehicle_year,'') END AS externalVehicle,
-           b.external_vehicle_plate AS externalPlate,b.external_supplier_name AS externalSupplierName,br.city
+           b.external_vehicle_plate AS externalPlate,b.external_supplier_name AS externalSupplierName,br.city,b.destination_city AS destinationCity,
+           c.name AS customer,
+           (SELECT ri.odometer FROM rental_inspections ri WHERE ri.agency_id=b.agency_id AND ri.booking_id=b.id AND ri.kind='checkin' LIMIT 1) AS meter
     FROM bookings b
+    LEFT JOIN customers c ON c.id=b.customer_id AND c.agency_id=b.agency_id
     LEFT JOIN vehicles v ON v.id=b.vehicle_id AND v.agency_id=b.agency_id
     LEFT JOIN management_agreements a ON a.id=v.agreement_id AND a.agency_id=v.agency_id
     JOIN branches br ON br.id=b.branch_id AND br.agency_id=b.agency_id
@@ -154,9 +178,10 @@ export async function getReports(context: RequestContext): Promise<ReportsData> 
   `,[context.agencyId]),
     queryAll<Cost>(`
     SELECT e.id, e.vehicle_id AS vehicleId, e.owner_id AS ownerId, e.occurred_on AS date,
-           e.category, e.description, e.amount, e.status, e.recurring_expense_id AS recurringExpenseId,
+           e.category, e.description, e.amount, e.status, e.recurring_expense_id AS recurringExpenseId, c.name AS customer,
+           (SELECT max(sr.odometer) FROM vehicle_service_records sr WHERE sr.agency_id=e.agency_id AND sr.expense_id=e.id AND sr.voided_at IS NULL) AS meter,
            EXISTS(SELECT 1 FROM private_files pf WHERE pf.agency_id=e.agency_id AND pf.entity_type='expense' AND pf.entity_id=e.id AND pf.status='ready') AS receipt
-    FROM expenses e WHERE e.agency_id=?
+    FROM expenses e LEFT JOIN customers c ON c.id=e.customer_id AND c.agency_id=e.agency_id WHERE e.agency_id=?
   `,[context.agencyId]),
     queryAll<Transaction>(`SELECT ft.id,ft.booking_id AS bookingId,ft.posted_at AS date,ft.amount,ft.kind,original.kind AS originalKind,ft.linked_transaction_id AS linkedId,ft.status,ft.method,ft.reference FROM financial_transactions ft LEFT JOIN financial_transactions original ON original.id=ft.linked_transaction_id AND original.agency_id=ft.agency_id WHERE ft.agency_id=?`,[context.agencyId]),
     queryAll<Payout>("SELECT id,owner_id AS ownerId,vehicle_id AS vehicleId,paid_at AS paidAt,amount,method,reference FROM owner_payouts WHERE agency_id=? AND status='posted'",[context.agencyId]),
@@ -164,12 +189,15 @@ export async function getReports(context: RequestContext): Promise<ReportsData> 
     queryAll<Block>("SELECT vehicle_id AS vehicleId,start_at AS startAt,end_at AS endAt FROM availability_blocks WHERE agency_id=? AND archived_at IS NULL",[context.agencyId]),
     queryAll<{ id: string; name: string }>("SELECT id,name FROM owners WHERE agency_id=? ORDER BY name",[context.agencyId]),
     queryAll<{ownerId:string;shareBasis:string;ownerSharePercent:number|null;ownerShareAmount:number|null}>("SELECT a.owner_id AS ownerId,a.share_basis AS shareBasis,a.owner_share_percent AS ownerSharePercent,a.owner_share_amount AS ownerShareAmount FROM management_agreements a WHERE a.agency_id=? AND a.version=(SELECT max(version) FROM management_agreements newer WHERE newer.agency_id=a.agency_id AND newer.owner_id=a.owner_id)",[context.agencyId]),
+    listOwnerFixedCharges(context.agencyId),
+    queryAll<Recovery>("SELECT id,expense_id AS expenseId,received_on AS date,amount,source,method,reference FROM expense_recoveries WHERE agency_id=? AND status='posted'",[context.agencyId]),
   ]);
   const agency = agencyRow?.name ?? "VibeRent agency";
 
   const vehicleById = new Map(vehicles.map((vehicle) => [vehicle.id, vehicle]));
   const ownerById = new Map(owners.map((owner) => [owner.id, owner]));
   const bookingById=new Map(bookings.map(booking=>[booking.id,booking]));
+  const costById=new Map(costs.map(cost=>[cost.id,cost]));
   const completedBookings = bookings.filter((row) => row.status === "completed");
   const approvedCosts = costs.filter((row) => row.status === "approved");
   const ownerShares = allocatedOwnerShares(completedBookings.filter((row) => row.ownerId));
@@ -186,17 +214,18 @@ export async function getReports(context: RequestContext): Promise<ReportsData> 
       const owner = row?.ownerId ? ownerById.get(row.ownerId) : undefined;
       return {
         id: `TXN-${transaction.id}`,
-        date: transaction.date.slice(0,10),
+        date: (row?.pickupAt ?? transaction.date).slice(0,10),
         vehicleId: row?.vehicleId??null,
-        vehicle: vehicle?.name??row?.externalVehicle??"External income",
+        vehicle: vehicle?.plate??row?.externalPlate??"External income",
         plate: vehicle?.plate??row?.externalPlate??null,
+        customer: row?.customer??null,
         city: vehicle?.city??row?.city??"Unknown city",
         ownership: vehicle?.ownerId||row?.fulfillmentType==="external" ? "Managed" as const : "Owned" as const,
         ownerId: row?.ownerId??null,
         owner: owner?.name??row?.externalSupplierName??null,
         kind: "Rental income" as const,
         reference: transaction.reference||transaction.id,
-        description: `${transaction.kind.replaceAll("_"," ")} · ${pkr(Math.abs(amount))}${edited ? " · edited" : ` · ${transaction.reference || transaction.method}`}`,
+        description: `${transaction.kind.replaceAll("_"," ")} · ${pkr(Math.abs(amount))}${edited ? " · edited" : ` · ${transaction.reference || transaction.method}`}${row ? ` · received ${transaction.date.slice(0,10)}` : ""}`,
         income: amount,
         expense: 0,
         ownerMovement: 0,
@@ -208,11 +237,17 @@ export async function getReports(context: RequestContext): Promise<ReportsData> 
       const share = ownerShares.get(row.id) ?? 0;
       return {
         id: `SHARE-${row.id}`,
-        date: (row.completedAt ?? row.pickupAt).slice(0, 10),
+        date: row.pickupAt.slice(0, 10),
         vehicleId: row.vehicleId,
-        vehicle: vehicle?.name ?? "Historical managed vehicle",
+        vehicle: vehicle?.plate ?? "Historical managed vehicle",
         plate: vehicle?.plate??null,
+        customer: row.customer,
+        grossRent: row.totalAmount,
+        meter: row.meter,
         rentalDays: Math.max(1,Math.ceil((Date.parse(row.returnAt)-Date.parse(row.pickupAt))/86_400_000)),
+        rentalFrom: row.pickupAt,
+        rentalTo: row.returnAt,
+        destinationCity: row.destinationCity,
         city: vehicle?.city ?? row.city,
         ownership: "Managed" as const,
         ownerId: row.ownerId,
@@ -238,13 +273,16 @@ export async function getReports(context: RequestContext): Promise<ReportsData> 
         id: `COST-${row.id}`,
         date: row.date.slice(0, 10),
         vehicleId: row.vehicleId,
-        vehicle: vehicle?.name ?? (row.vehicleId ? `Historical vehicle (${row.vehicleId})` : "Agency-wide"),
+        vehicle: vehicle?.plate ?? (row.vehicleId ? "Historical vehicle" : "Agency-wide"),
         plate: vehicle?.plate??null,
+        customer: row.customer,
+        meter: row.meter,
         city: vehicle?.city ?? "All cities",
         ownership: ownerId ? "Managed" as const : "Owned" as const,
         ownerId,
         owner: owner?.name ?? null,
         kind: "Expense" as const,
+        category: row.category,
         reference: row.id,
         description: `${row.category} - ${row.description}${row.recurringExpenseId ? " · recurring" : ""}${ownerNote}`,
         income: 0,
@@ -257,7 +295,7 @@ export async function getReports(context: RequestContext): Promise<ReportsData> 
       id: `PAY-${row.id}`,
       date: row.paidAt.slice(0, 10),
       vehicleId: row.vehicleId,
-      vehicle: row.vehicleId?vehicleById.get(row.vehicleId)?.name??"Historical managed vehicle":"Owner account",
+      vehicle: row.vehicleId?vehicleById.get(row.vehicleId)?.plate??"Historical managed vehicle":"Owner account",
       plate: row.vehicleId?vehicleById.get(row.vehicleId)?.plate??null:null,
       city: row.vehicleId?vehicleById.get(row.vehicleId)?.city??"Unknown city":"All cities",
       ownership: "Managed" as const,
@@ -271,6 +309,54 @@ export async function getReports(context: RequestContext): Promise<ReportsData> 
       ownerMovement: -row.amount,
       operatingResult: -row.amount,
     })),
+    ...fixedCharges.map((row) => ({
+      id: row.id,
+      date: row.date,
+      vehicleId: row.vehicleId,
+      vehicle: vehicleById.get(row.vehicleId)?.plate ?? row.plate,
+      plate: row.plate,
+      city: row.city,
+      ownership: "Managed" as const,
+      ownerId: row.ownerId,
+      owner: ownerById.get(row.ownerId)?.name ?? "Owner",
+      kind: "Fixed charge" as const,
+      category: row.label,
+      reference: `${row.label} ${row.month}`,
+      description: `${row.label} - monthly fixed charge for ${row.month}`,
+      income: 0,
+      expense: 0,
+      ownerMovement: -row.amount,
+      operatingResult: 0,
+    })),
+    ...recoveries.flatMap((row) => {
+      const cost = costById.get(row.expenseId);
+      if (!cost || cost.status !== "approved") return [];
+      const vehicle = cost.vehicleId ? vehicleById.get(cost.vehicleId) : undefined;
+      const ownerId = cost.ownerId ?? vehicle?.ownerId ?? null;
+      const { percent } = costOwnerPortion(cost);
+      const ownerAmount = ownerId ? ownerExpenseAmount(row.amount, percent) : 0;
+      return [{
+        id: `RCV-${row.id}`,
+        date: row.date.slice(0, 10),
+        vehicleId: cost.vehicleId,
+        vehicle: vehicle?.plate ?? (cost.vehicleId ? "Historical vehicle" : "Agency-wide"),
+        plate: vehicle?.plate ?? null,
+        customer: cost.customer,
+        city: vehicle?.city ?? "All cities",
+        ownership: ownerId ? "Managed" as const : "Owned" as const,
+        ownerId,
+        owner: ownerId ? ownerById.get(ownerId)?.name ?? null : null,
+        kind: "Expense recovery" as const,
+        category: cost.category,
+        sourceId: cost.id,
+        reference: row.reference || row.id,
+        description: `Returned by ${row.source} against ${cost.id} - ${cost.description}${ownerAmount ? ` · owner credited ${pkr(ownerAmount)}` : ""}`,
+        income: 0,
+        expense: -row.amount,
+        ownerMovement: ownerAmount,
+        operatingResult: row.amount,
+      }];
+    }),
     ...sourcePayouts.map(row=>{const booking=bookingById.get(row.bookingId);return {id:`SRC-${row.id}`,date:row.paidAt.slice(0,10),vehicleId:null,vehicle:booking?.externalVehicle??"Externally sourced vehicle",city:booking?.city??"Unknown city",ownership:"Managed" as const,ownerId:null,owner:row.supplierName,kind:"Source settlement" as const,reference:row.reference||row.id,description:`${row.method.replaceAll("_"," ")} source payment`,income:0,expense:0,ownerMovement:-row.amount,operatingResult:-row.amount}}),
   ].sort((a, b) => a.date.localeCompare(b.date) || a.kind.localeCompare(b.kind) || a.id.localeCompare(b.id));
 
@@ -279,7 +365,7 @@ export async function getReports(context: RequestContext): Promise<ReportsData> 
   const latestDate = dates.at(-1);
   const dateBounds = { min: dates[0] ?? `${today.slice(0, 7)}-01`, max: latestDate && latestDate > today ? latestDate : today };
   const dateKeys = [
-    ...bookings.map((row) => (row.completedAt ?? row.pickupAt).slice(0, 7)),
+    ...bookings.map((row) => row.pickupAt.slice(0, 7)),
     ...costs.map((row) => row.date.slice(0, 7)),
     ...transactions.map((row) => row.date.slice(0, 7)),
     ...payouts.map((row) => row.paidAt.slice(0, 7)),
@@ -290,7 +376,7 @@ export async function getReports(context: RequestContext): Promise<ReportsData> 
     const fromDate = from.slice(0, 10);
     const toDate = new Date(Date.parse(to) - 86_400_000).toISOString().slice(0, 10);
     const days = (Date.parse(to) - Date.parse(from)) / 86_400_000;
-    const periodBookings = completedBookings.filter((row) => (row.completedAt ?? row.pickupAt) >= from && (row.completedAt ?? row.pickupAt) < to);
+    const periodBookings = completedBookings.filter((row) => row.pickupAt >= from && row.pickupAt < to);
     const bookedBookings = bookings.filter((row) => row.pickupAt >= from && row.pickupAt < to && !["draft", "cancelled", "no_show"].includes(row.status));
     const periodCosts = approvedCosts.filter((row) => row.date >= fromDate && row.date < to.slice(0, 10));
     const periodTransactions = transactions.filter((row) => row.bookingId && row.date >= from && row.date < to && row.status === "posted");
@@ -361,13 +447,15 @@ export async function getReports(context: RequestContext): Promise<ReportsData> 
 
   return {
     agencyName: agency,
+    agencyContact: { address: agencyRow?.address ?? null, phone: agencyRow?.phone ?? null },
     periods,
     cities: [...new Set(vehicles.map((vehicle) => vehicle.city))].sort(),
     ledgerEntries,
     dateBounds,
     ledgerAccounts: {
-      vehicles: vehicles.filter((vehicle) => vehicle.status !== "deleted").map((vehicle) => ({ id: vehicle.id, label: vehicle.name, city: vehicle.city, ownership: vehicle.ownership === "managed" ? "Managed" : "Owned", ownerId: vehicle.ownerId, archived: Boolean(vehicle.archivedAt) })),
+      vehicles: vehicles.filter((vehicle) => vehicle.status !== "deleted").map((vehicle) => ({ id: vehicle.id, label: vehicle.plate, city: vehicle.city, ownership: vehicle.ownership === "managed" ? "Managed" : "Owned", ownerId: vehicle.ownerId, archived: Boolean(vehicle.archivedAt) })),
       owners: owners.map((owner) => ({ id: owner.id, label: owner.name })),
+      expenseHeads: [...new Set(ledgerEntries.filter((row) => row.category).map((row) => row.category!))].sort(),
     },
   };
 }

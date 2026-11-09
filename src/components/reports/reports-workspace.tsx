@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect,useMemo,useState } from "react";
-import { CarFront,Download,ExternalLink,FileText,Globe2,UserRound } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { CarFront, Download, ExternalLink, FileText, Globe2, UserRound } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FormCombobox } from "@/components/forms/form-combobox";
@@ -11,96 +11,936 @@ import { PageHeader } from "@/components/shared/page-header";
 import { Toast } from "@/components/shared/toast";
 import { EmptyState } from "@/components/shared/empty-state";
 import { formatPkr } from "@/lib/utils";
-import { downloadFromUrl,saveBlob } from "@/lib/download";
-import { buildLedgerEntries,ownerLedgerRows,summarizeLedger } from "@/lib/reports/ledger";
-import type { LedgerEntry,LedgerScope } from "@/lib/reports/ledger";
-import type { ReportsData,ReportSource,VehicleReportRow } from "@/server/services/report-service";
+import { downloadFromUrl, saveBlob } from "@/lib/download";
+import {
+  buildLedgerEntries,
+  filterLedgerEntries,
+  ledgerOpeningResult,
+  ownerLedgerByCar,
+  runningResultBalances,
+  summarizeLedger,
+} from "@/lib/reports/ledger";
+import type { LedgerEntry, LedgerEntryType, LedgerScope } from "@/lib/reports/ledger";
+import { OwnerCarSheet } from "@/components/reports/owner-car-sheet";
+import type { ReportsData, ReportSource, VehicleReportRow } from "@/server/services/report-service";
 
-type Tab="Ledger"|"Vehicle P&L"|"Revenue & collections"|"Utilization"|"Expenses"|"Owners";
-const tabs:Tab[]=["Ledger","Vehicle P&L","Revenue & collections","Utilization","Expenses","Owners"];
-type LedgerEntryType="all"|"income"|"expense"|"owner-payment";
-const ledgerEntryTypes:{value:LedgerEntryType;label:string}[]=[
-  {value:"all",label:"All entries"},
-  {value:"income",label:"Income"},
-  {value:"expense",label:"Expenses"},
-  {value:"owner-payment",label:"Owner & source payments"},
+type Tab = "Ledger" | "Vehicle P&L" | "Revenue & collections" | "Utilization" | "Expenses" | "Owners";
+const tabs: Tab[] = ["Ledger", "Vehicle P&L", "Revenue & collections", "Utilization", "Expenses", "Owners"];
+const ledgerEntryTypes: { value: LedgerEntryType; label: string }[] = [
+  { value: "all", label: "All entries" },
+  { value: "income", label: "Income" },
+  { value: "expense", label: "Expenses" },
+  { value: "owner-payment", label: "Owner & source payments" },
 ];
 
-export function ReportsWorkspace({data}:{data:ReportsData}) {
-  const defaultTo=data.dateBounds.max;
-  const [tab,setTab]=useState<Tab>("Ledger");
-  const [periodKey,setPeriod]=useState(data.periods[0]?.key??"");
-  const [from,setFrom]=useState(`${defaultTo.slice(0,7)}-01`);
-  const [to,setTo]=useState(defaultTo);
-  const [city,setCity]=useState("All cities");
-  const [ownership,setOwnership]=useState("All ownership");
-  const [scopeType,setScopeType]=useState<LedgerScope["type"]>("overall");
-  const [ownerId,setOwnerId]=useState(data.ledgerAccounts.owners[0]?.id??"");
-  const [vehicleOwnerIds,setVehicleOwnerIds]=useState<string[]>([]);
-  const [vehicleIds,setVehicleIds]=useState<string[]>(data.ledgerAccounts.vehicles.filter(item=>!item.archived).map(item=>item.id));
-  const [entryType,setEntryType]=useState<LedgerEntryType>("all");
-  const [drill,setDrill]=useState<{title:string;sources:ReportSource[]}>();
-  const [notice,setNotice]=useState("");
-  const [pdfBusy,setPdfBusy]=useState(false);
-  useEffect(()=>{const params=new URLSearchParams(window.location.search);const value=params.get("tab");const requestedEntry=params.get("entry");queueMicrotask(()=>{if(tabs.includes(value as Tab))setTab(value as Tab);if(/^\d{4}-\d{2}-\d{2}$/.test(params.get("from")??""))setFrom(params.get("from")!);if(/^\d{4}-\d{2}-\d{2}$/.test(params.get("to")??""))setTo(params.get("to")!);if(ledgerEntryTypes.some(item=>item.value===requestedEntry))setEntryType(requestedEntry as LedgerEntryType);const requestedOwner=params.get("ownerId");if(params.get("scope")==="owner"&&data.ledgerAccounts.owners.some(item=>item.id===requestedOwner)){setScopeType("owner");setOwnerId(requestedOwner!);if(!params.has("from"))setFrom(data.dateBounds.min)}})},[data.dateBounds.min,data.ledgerAccounts.owners]);
-  const period=data.periods.find(item=>item.key===periodKey)??data.periods[0];
-  const filtered=useMemo(()=>period?.vehicles.filter(row=>(city==="All cities"||row.city===city)&&(ownership==="All ownership"||row.ownership===ownership))??[],[period,city,ownership]);
-  const ownerNames=useMemo(()=>new Map(data.ledgerAccounts.owners.map(item=>[item.id,item.label])),[data.ledgerAccounts.owners]);
-  const baseAvailableVehicles=useMemo(()=>data.ledgerAccounts.vehicles.filter(item=>(city==="All cities"||item.city===city)&&(ownership==="All ownership"||item.ownership===ownership)),[data.ledgerAccounts.vehicles,city,ownership]);
-  const availableVehicles=useMemo(()=>baseAvailableVehicles.filter(item=>!vehicleOwnerIds.length||(item.ownerId&&vehicleOwnerIds.includes(item.ownerId))),[baseAvailableVehicles,vehicleOwnerIds]);
-  const ownerVehicleOptions=useMemo(()=>data.ledgerAccounts.owners.map(item=>{const count=baseAvailableVehicles.filter(vehicle=>vehicle.ownerId===item.id&&!vehicle.archived).length;return {value:item.id,label:item.label,description:`${count} matching ${count===1?"vehicle":"vehicles"}`,disabled:count===0}}),[data.ledgerAccounts.owners,baseAvailableVehicles]);
-  const selectedVehicleIds=useMemo(()=>vehicleIds.filter(id=>availableVehicles.some(item=>item.id===id)),[vehicleIds,availableVehicles]);
-  const scope=useMemo<LedgerScope>(()=>scopeType==="owner"?{type:"owner",ownerId}:scopeType==="vehicles"?{type:"vehicles",vehicleIds:selectedVehicleIds}:{type:"overall"},[scopeType,ownerId,selectedVehicleIds]);
-  const rangeValid=Boolean(from&&to&&from<=to);
-  const ledgerEntries=useMemo(()=>{const rows=rangeValid?buildLedgerEntries(data.ledgerEntries,{from,to,city,ownership,scope}):[];return rows.filter(row=>entryType==="all"||(entryType==="income"&&(scopeType==="owner"?row.kind==="Owner share":row.income!==0))||(entryType==="expense"&&row.kind==="Expense")||(entryType==="owner-payment"&&["Owner settlement","Source settlement"].includes(row.kind)))},[data.ledgerEntries,from,to,city,ownership,scope,scopeType,rangeValid,entryType]);
-  const owner=data.ledgerAccounts.owners.find(item=>item.id===ownerId);
-  const oneVehicle=selectedVehicleIds.length===1?data.ledgerAccounts.vehicles.find(item=>item.id===selectedVehicleIds[0]):undefined;
-  const baseLedgerTitle=scopeType==="owner"?`Owner ledger · ${owner?.label??"Select owner"}`:scopeType==="vehicles"?(oneVehicle?`Vehicle ledger · ${oneVehicle.label}`:`Vehicle ledger · ${selectedVehicleIds.length} vehicles`):"Whole-system ledger";
-  const entryTypeLabel=ledgerEntryTypes.find(item=>item.value===entryType)?.label??"All entries";
-  const ledgerTitle=entryType==="all"?baseLedgerTitle:`${entryTypeLabel} · ${baseLedgerTitle}`;
-  const rangeLabel=rangeValid?`${formatDate(from)} – ${formatDate(to)}`:"Choose a valid date range";
-  async function exportCsv(){if(!period)return;const content=tab==="Ledger"&&scopeType==="owner"?["date,car_number,days_car_went,income,expense,reference,details",...ownerLedgerRows(ledgerEntries).map(row=>[row.date,row.plate,row.days||"",row.income,row.expense,row.reference,row.description].map(csv).join(",")),"","full_ledger_details","date,car_number,entry,reference,details,owner_movement",...ledgerEntries.map(row=>[row.date,row.plate??"Owner account",row.kind,row.reference,row.description,row.ownerMovement].map(csv).join(","))].join("\n"):tab==="Ledger"?["date,vehicle,owner,entry,reference,description,income,expense,owner_movement,operating_result",...ledgerEntries.map(row=>[row.date,row.vehicle,row.owner??"",row.kind,row.reference,row.description,row.income,row.expense,row.ownerMovement,row.operatingResult].map(csv).join(","))].join("\n"):["vehicle,city,ownership,revenue,expenses,owner_share,utilization",...filtered.map(row=>[row.vehicle,row.city,row.ownership,row.revenue,row.expenses,row.ownerShare,row.utilization].map(csv).join(","))].join("\n");const name=tab==="Ledger"?`viberent-ledger-${from}-to-${to}.csv`:`viberent-${period.key}-${tab.toLowerCase().replaceAll(" ","-")}.csv`;try{const result=await saveBlob(new Blob([content],{type:"text/csv"}),name);setNotice(result.path?`Report saved to ${result.path}`:"The filtered report was exported.")}catch(error){setNotice(error instanceof Error?error.message:"The report could not be exported.")}}
-  async function exportPdf(){if(!rangeValid||pdfBusy||(scopeType==="owner"&&!ownerId)||(scopeType==="vehicles"&&!selectedVehicleIds.length))return;setPdfBusy(true);try{const query=new URLSearchParams({from,to,city,ownership,scope:scopeType,entry:entryType});if(scopeType==="owner")query.set("ownerId",ownerId);if(scopeType==="vehicles")selectedVehicleIds.forEach(id=>query.append("vehicleId",id));const result=await downloadFromUrl(`/api/v1/reports/ledger.pdf?${query}`,`viberent-${entryType}-ledger-${from}-to-${to}.pdf`);setNotice(result.path?`PDF saved to ${result.path}`:"The ledger PDF was downloaded.")}catch(error){setNotice(error instanceof Error?error.message:"The PDF could not be generated.")}finally{setPdfBusy(false)}}
-  function setPreset(value:"day"|"month"|"year"|"all"){const end=data.dateBounds.max;setTo(end);setFrom(value==="day"?end:value==="month"?`${end.slice(0,7)}-01`:value==="year"?`${end.slice(0,4)}-01-01`:data.dateBounds.min)}
-  function changeOwnership(value:string){setOwnership(value);if(value==="Owned")setVehicleOwnerIds([])}
-  function changeVehicleOwners(nextOwnerIds:string[]){setVehicleOwnerIds(nextOwnerIds);if(nextOwnerIds.length)setVehicleIds(current=>current.filter(id=>{const vehicle=data.ledgerAccounts.vehicles.find(item=>item.id===id);return Boolean(vehicle?.ownerId&&nextOwnerIds.includes(vehicle.ownerId))}))}
-  function changeVisibleVehicles(nextVehicleIds:string[]){setVehicleIds(current=>[...current.filter(id=>!availableVehicles.some(item=>item.id===id)),...nextVehicleIds])}
-  if(!period)return <EmptyState title="No report data" description="Operational activity will populate reports automatically."/>;
-  return <div className="space-y-6"><Toast message={notice} onDismiss={()=>setNotice("")}/><div className="print-hidden"><PageHeader eyebrow="Performance" title="Reports" description="Whole-system, owner, and multi-vehicle ledgers for any date range." actions={<><Button variant="secondary" onClick={exportCsv} disabled={tab==="Ledger"&&!rangeValid}><Download size={16}/>Export CSV</Button>{tab==="Ledger"&&<Button onClick={exportPdf} disabled={pdfBusy||!rangeValid||(scopeType==="owner"&&!ownerId)||(scopeType==="vehicles"&&!selectedVehicleIds.length)}><FileText size={16}/>{pdfBusy?"Preparing PDF…":"Download PDF"}</Button>}</>}/></div><div className="print-hidden flex gap-1 overflow-x-auto rounded-xl border bg-white p-2">{tabs.map(item=><Button key={item} size="sm" variant={tab===item?"primary":"ghost"} className="shrink-0" onClick={()=>{setTab(item);setDrill(undefined)}}>{item}</Button>)}</div>{tab==="Ledger"?<><section className="print-hidden rounded-xl border bg-white p-4"><div className="flex flex-wrap gap-2"><Button size="sm" variant="secondary" onClick={()=>setPreset("day")}>Day</Button><Button size="sm" variant="secondary" onClick={()=>setPreset("month")}>Month</Button><Button size="sm" variant="secondary" onClick={()=>setPreset("year")}>Year</Button><Button size="sm" variant="secondary" onClick={()=>setPreset("all")}>All time</Button></div><div className="mt-4"><p className="text-xs font-semibold text-[#344054]">Ledger entries</p><div className="mt-2 flex gap-2 overflow-x-auto pb-1" role="group" aria-label="Ledger entry type">{ledgerEntryTypes.map(item=><Button key={item.value} size="sm" variant={entryType===item.value?"primary":"secondary"} className="shrink-0" aria-pressed={entryType===item.value} onClick={()=>setEntryType(item.value)}>{item.label}</Button>)}</div></div><div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><Label title="From date"><input type="date" value={from} onChange={event=>setFrom(event.target.value)} className="field"/></Label><Label title="To date"><input type="date" value={to} onChange={event=>setTo(event.target.value)} className="field"/></Label><Label title="City"><select value={city} onChange={event=>setCity(event.target.value)} className="field"><option>All cities</option>{data.cities.map(item=><option key={item}>{item}</option>)}</select></Label><Label title="Ownership"><select value={ownership} onChange={event=>changeOwnership(event.target.value)} className="field"><option>All ownership</option><option>Owned</option><option>Managed</option></select></Label></div>{!rangeValid&&<p role="alert" className="mt-3 rounded-lg bg-[#FEF3F2] p-3 text-sm text-[#B42318]">The from date must be on or before the to date.</p>}</section><section className="print-hidden rounded-xl border bg-white p-4 sm:p-5"><div><p className="text-xs font-bold uppercase tracking-[.12em] text-[#667085]">Report for</p><p className="mt-1 text-sm text-[#667085]">Choose the account view, then narrow it down without leaving the report.</p></div><div className="mt-4 grid gap-2 sm:grid-cols-3"><ScopeButton active={scopeType==="overall"} title="Whole system" description="All income and expenses" icon={Globe2} onClick={()=>setScopeType("overall")}/><ScopeButton active={scopeType==="owner"} title="Specific owner" description="Balance and linked vehicles" icon={UserRound} onClick={()=>setScopeType("owner")}/><ScopeButton active={scopeType==="vehicles"} title="Vehicles" description="One or multiple vehicles" icon={CarFront} onClick={()=>setScopeType("vehicles")}/></div>{scopeType==="owner"&&<div className="mt-5 max-w-lg rounded-xl bg-[#F8FAFC] p-4"><FormCombobox label="Owner" value={ownerId} onValueChange={setOwnerId} placeholder="Choose an owner" searchPlaceholder="Search owner…" emptyText="No owners found" options={data.ledgerAccounts.owners.map(item=>({value:item.id,label:item.label,keywords:data.ledgerAccounts.vehicles.filter(vehicle=>vehicle.ownerId===item.id).map(vehicle=>vehicle.label).join(" ")}))}/><p className="mt-2 text-xs leading-5 text-[#667085]">The ledger automatically includes this owner’s opening balance, linked vehicles, expenses, and settlements.</p></div>}{scopeType==="vehicles"&&<div className="mt-5 rounded-xl border border-[#EAECF0] bg-[#F8FAFC] p-4"><div className="grid gap-4 lg:grid-cols-2"><FormMultiSelect label="Filter by owner (optional)" value={vehicleOwnerIds} onValueChange={changeVehicleOwners} options={ownerVehicleOptions} placeholder={ownership==="Owned"?"Owned vehicles have no external owner":"All owners"} searchPlaceholder="Search owner…" emptyText="No owners match the current filters" disabled={ownership==="Owned"}/><FormMultiSelect label="Vehicles" value={selectedVehicleIds} onValueChange={changeVisibleVehicles} options={availableVehicles.map(item=>({value:item.id,label:item.label,description:`${item.city} · ${item.ownership}${item.ownerId?` · ${ownerNames.get(item.ownerId)??"Owner"}`:""}${item.archived?" · Archived":""}`,keywords:`${item.city} ${item.ownership} ${item.ownerId?ownerNames.get(item.ownerId)??"":""}`}))} placeholder="Choose vehicles" searchPlaceholder="Search make, model, plate or city…" emptyText="No vehicles match the selected owner and report filters"/></div><div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[#667085]"><CarFront size={14}/><span>{selectedVehicleIds.length?`${selectedVehicleIds.length} ${selectedVehicleIds.length===1?"vehicle":"vehicles"} included in this report.`:"Select at least one vehicle to generate the report."}</span>{vehicleOwnerIds.length>0&&<><span aria-hidden="true">·</span><span>Only vehicles linked to {vehicleOwnerIds.length===1?ownerNames.get(vehicleOwnerIds[0])??"the selected owner":`${vehicleOwnerIds.length} selected owners`} are shown.</span></>}</div></div>}</section></>:<div className="print-hidden rounded-xl border bg-white p-3"><div className="grid gap-3 sm:grid-cols-3"><Label title="Period"><select value={periodKey} onChange={event=>setPeriod(event.target.value)} className="field">{data.periods.map(item=><option key={item.key} value={item.key}>{item.label}</option>)}</select></Label><Label title="City"><select value={city} onChange={event=>setCity(event.target.value)} className="field"><option>All cities</option>{data.cities.map(item=><option key={item}>{item}</option>)}</select></Label><Label title="Ownership"><select value={ownership} onChange={event=>changeOwnership(event.target.value)} className="field"><option>All ownership</option><option>Owned</option><option>Managed</option></select></Label></div></div>}<section className="print-surface space-y-6"><header className="hidden print:block"><p className="text-xs font-bold uppercase tracking-[.16em] text-[#006FE6]">VibeRent report</p><h1 className="mt-1 text-2xl font-bold">{tab==="Ledger"?ledgerTitle:tab}</h1><p className="mt-1 text-sm text-[#667085]">{tab==="Ledger"?rangeLabel:period.label} · {city} · {ownership}</p></header>{tab==="Ledger"&&<LedgerReport entries={ledgerEntries} title={ledgerTitle} period={rangeLabel} ownerView={scopeType==="owner"}/>} {tab==="Vehicle P&L"&&<VehiclePnl rows={filtered} onDrill={setDrill}/>} {tab==="Revenue & collections"&&<Collections data={period.collections}/>} {tab==="Utilization"&&<Utilization rows={filtered}/>} {tab==="Expenses"&&<ExpenseAnalysis data={period.expenses}/>} {tab==="Owners"&&<OwnerReport data={period.owners}/>} {drill&&<DrillDown data={drill} onClose={()=>setDrill(undefined)}/>}<div className="print-hidden rounded-xl border border-[#B2DDFF] bg-[#EFF8FF] p-4 text-xs text-[#175CD3]">Opening owner balances are calculated from activity before the selected from date. Settlements appear on their posted date. Car reports exclude owner-level payouts because those payouts are not allocated to an individual vehicle.</div></section></div>;
+export function ReportsWorkspace({ data }: { data: ReportsData }) {
+  const defaultTo = data.dateBounds.max;
+  const [tab, setTab] = useState<Tab>("Ledger");
+  const [periodKey, setPeriod] = useState(data.periods[0]?.key ?? "");
+  const [from, setFrom] = useState(`${defaultTo.slice(0, 7)}-01`);
+  const [to, setTo] = useState(defaultTo);
+  const [city, setCity] = useState("All cities");
+  const [ownership, setOwnership] = useState("All ownership");
+  const [scopeType, setScopeType] = useState<LedgerScope["type"]>("overall");
+  const [ownerId, setOwnerId] = useState(data.ledgerAccounts.owners[0]?.id ?? "");
+  const [vehicleOwnerIds, setVehicleOwnerIds] = useState<string[]>([]);
+  const [vehicleIds, setVehicleIds] = useState<string[]>(data.ledgerAccounts.vehicles.filter((item) => !item.archived).map((item) => item.id));
+  const [entryType, setEntryType] = useState<LedgerEntryType>("all");
+  const [expenseHead, setExpenseHead] = useState("");
+  const [drill, setDrill] = useState<{ title: string; sources: ReportSource[] }>();
+  const [notice, setNotice] = useState("");
+  const [pdfBusy, setPdfBusy] = useState(false);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const value = params.get("tab");
+    const requestedEntry = params.get("entry");
+    queueMicrotask(() => {
+      if (tabs.includes(value as Tab)) setTab(value as Tab);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(params.get("from") ?? "")) setFrom(params.get("from")!);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(params.get("to") ?? "")) setTo(params.get("to")!);
+      if (ledgerEntryTypes.some((item) => item.value === requestedEntry)) setEntryType(requestedEntry as LedgerEntryType);
+      if (requestedEntry === "expense" && data.ledgerAccounts.expenseHeads.includes(params.get("head") ?? "")) setExpenseHead(params.get("head")!);
+      const requestedOwner = params.get("ownerId");
+      if (params.get("scope") === "owner" && data.ledgerAccounts.owners.some((item) => item.id === requestedOwner)) {
+        setScopeType("owner");
+        setOwnerId(requestedOwner!);
+        if (!params.has("from")) setFrom(data.dateBounds.min);
+      }
+    });
+  }, [data.dateBounds.min, data.ledgerAccounts.owners, data.ledgerAccounts.expenseHeads]);
+  const period = data.periods.find((item) => item.key === periodKey) ?? data.periods[0];
+  const filtered = useMemo(
+    () =>
+      period?.vehicles.filter((row) => (city === "All cities" || row.city === city) && (ownership === "All ownership" || row.ownership === ownership)) ?? [],
+    [period, city, ownership],
+  );
+  const ownerNames = useMemo(() => new Map(data.ledgerAccounts.owners.map((item) => [item.id, item.label])), [data.ledgerAccounts.owners]);
+  const baseAvailableVehicles = useMemo(
+    () =>
+      data.ledgerAccounts.vehicles.filter(
+        (item) => (city === "All cities" || item.city === city) && (ownership === "All ownership" || item.ownership === ownership),
+      ),
+    [data.ledgerAccounts.vehicles, city, ownership],
+  );
+  const availableVehicles = useMemo(
+    () => baseAvailableVehicles.filter((item) => !vehicleOwnerIds.length || (item.ownerId && vehicleOwnerIds.includes(item.ownerId))),
+    [baseAvailableVehicles, vehicleOwnerIds],
+  );
+  const ownerVehicleOptions = useMemo(
+    () =>
+      data.ledgerAccounts.owners.map((item) => {
+        const count = baseAvailableVehicles.filter((vehicle) => vehicle.ownerId === item.id && !vehicle.archived).length;
+        return { value: item.id, label: item.label, description: `${count} matching ${count === 1 ? "vehicle" : "vehicles"}`, disabled: count === 0 };
+      }),
+    [data.ledgerAccounts.owners, baseAvailableVehicles],
+  );
+  const selectedVehicleIds = useMemo(() => vehicleIds.filter((id) => availableVehicles.some((item) => item.id === id)), [vehicleIds, availableVehicles]);
+  const scope = useMemo<LedgerScope>(
+    () =>
+      scopeType === "owner"
+        ? { type: "owner", ownerId }
+        : scopeType === "vehicles"
+          ? { type: "vehicles", vehicleIds: selectedVehicleIds }
+          : { type: "overall" },
+    [scopeType, ownerId, selectedVehicleIds],
+  );
+  const rangeValid = Boolean(from && to && from <= to);
+  const activeHead = entryType === "expense" ? expenseHead : "";
+  const ledgerEntries = useMemo(() => {
+    const rows = rangeValid ? buildLedgerEntries(data.ledgerEntries, { from, to, city, ownership, scope }) : [];
+    return filterLedgerEntries(rows, entryType, scopeType === "owner", activeHead);
+  }, [data.ledgerEntries, from, to, city, ownership, scope, scopeType, rangeValid, entryType, activeHead]);
+  const openingResult = useMemo(
+    () => (rangeValid && entryType === "all" ? ledgerOpeningResult(data.ledgerEntries, { from, to, city, ownership, scope }) : 0),
+    [data.ledgerEntries, from, to, city, ownership, scope, rangeValid, entryType],
+  );
+  const owner = data.ledgerAccounts.owners.find((item) => item.id === ownerId);
+  const oneVehicle = selectedVehicleIds.length === 1 ? data.ledgerAccounts.vehicles.find((item) => item.id === selectedVehicleIds[0]) : undefined;
+  const baseLedgerTitle =
+    scopeType === "owner"
+      ? `Owner ledger · ${owner?.label ?? "Select owner"}`
+      : scopeType === "vehicles"
+        ? oneVehicle
+          ? `Vehicle ledger · ${oneVehicle.label}`
+          : `Vehicle ledger · ${selectedVehicleIds.length} vehicles`
+        : "Whole-system ledger";
+  const entryTypeLabel = ledgerEntryTypes.find((item) => item.value === entryType)?.label ?? "All entries";
+  const ledgerTitle = activeHead
+    ? `${activeHead} expenses · ${baseLedgerTitle}`
+    : entryType === "all"
+      ? baseLedgerTitle
+      : `${entryTypeLabel} · ${baseLedgerTitle}`;
+  const rangeLabel = rangeValid ? `${formatDate(from)} – ${formatDate(to)}` : "Choose a valid date range";
+  const balances = useMemo(() => runningResultBalances(ledgerEntries, openingResult), [ledgerEntries, openingResult]);
+  async function exportCsv() {
+    if (!period) return;
+    const content =
+      tab === "Ledger" && scopeType === "owner"
+        ? [
+            "car_number,date,customer,description,entry,expense_head,days,rent,owner_share,cash_out,meter,remaining,reference",
+            ...ownerLedgerByCar(ledgerEntries).flatMap((car) =>
+              car.rows.map((row) =>
+                [row.plate, row.date, row.customer ?? "", row.kind === "Rental share" ? row.destination ?? "" : row.description, row.kind, row.head ?? "", row.days || "", row.rent || "", row.income || "", row.expense + row.paid || "", row.meter ?? "", row.balance, row.reference]
+                  .map(csv)
+                  .join(","),
+              ),
+            ),
+          ].join("\n")
+        : tab === "Ledger"
+          ? [
+              "date,vehicle,owner,entry,expense_head,reference,description,income,expense,owner_movement,operating_result,balance",
+              ...(openingResult ? [["", "Opening balance", "", "", "", "", "", "", "", "", "", openingResult].map(csv).join(",")] : []),
+              ...ledgerEntries.map((row) =>
+                [
+                  row.date,
+                  row.vehicle,
+                  row.owner ?? "",
+                  row.kind,
+                  row.category ?? "",
+                  row.reference,
+                  row.description,
+                  row.income,
+                  row.expense,
+                  row.ownerMovement,
+                  row.operatingResult,
+                  balances.get(row.id) ?? 0,
+                ]
+                  .map(csv)
+                  .join(","),
+              ),
+            ].join("\n")
+          : [
+              "vehicle,city,ownership,revenue,expenses,owner_share,utilization",
+              ...filtered.map((row) => [row.vehicle, row.city, row.ownership, row.revenue, row.expenses, row.ownerShare, row.utilization].map(csv).join(",")),
+            ].join("\n");
+    const name = tab === "Ledger" ? `viberent-ledger-${from}-to-${to}.csv` : `viberent-${period.key}-${tab.toLowerCase().replaceAll(" ", "-")}.csv`;
+    try {
+      const result = await saveBlob(new Blob([content], { type: "text/csv" }), name);
+      setNotice(result.path ? `Report saved to ${result.path}` : "The filtered report was exported.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "The report could not be exported.");
+    }
+  }
+  async function exportPdf() {
+    if (!rangeValid || pdfBusy || (scopeType === "owner" && !ownerId) || (scopeType === "vehicles" && !selectedVehicleIds.length)) return;
+    setPdfBusy(true);
+    try {
+      const query = new URLSearchParams({ from, to, city, ownership, scope: scopeType, entry: entryType });
+      if (activeHead) query.set("head", activeHead);
+      if (scopeType === "owner") query.set("ownerId", ownerId);
+      if (scopeType === "vehicles") selectedVehicleIds.forEach((id) => query.append("vehicleId", id));
+      const result = await downloadFromUrl(`/api/v1/reports/ledger.pdf?${query}`, `viberent-${entryType}-ledger-${from}-to-${to}.pdf`);
+      setNotice(result.path ? `PDF saved to ${result.path}` : "The ledger PDF was downloaded.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "The PDF could not be generated.");
+    } finally {
+      setPdfBusy(false);
+    }
+  }
+  function setPreset(value: "day" | "month" | "year" | "all") {
+    const end = data.dateBounds.max;
+    setTo(end);
+    setFrom(value === "day" ? end : value === "month" ? `${end.slice(0, 7)}-01` : value === "year" ? `${end.slice(0, 4)}-01-01` : data.dateBounds.min);
+  }
+  function changeOwnership(value: string) {
+    setOwnership(value);
+    if (value === "Owned") setVehicleOwnerIds([]);
+  }
+  function changeVehicleOwners(nextOwnerIds: string[]) {
+    setVehicleOwnerIds(nextOwnerIds);
+    if (nextOwnerIds.length)
+      setVehicleIds((current) =>
+        current.filter((id) => {
+          const vehicle = data.ledgerAccounts.vehicles.find((item) => item.id === id);
+          return Boolean(vehicle?.ownerId && nextOwnerIds.includes(vehicle.ownerId));
+        }),
+      );
+  }
+  function changeVisibleVehicles(nextVehicleIds: string[]) {
+    setVehicleIds((current) => [...current.filter((id) => !availableVehicles.some((item) => item.id === id)), ...nextVehicleIds]);
+  }
+  if (!period) return <EmptyState title="No report data" description="Operational activity will populate reports automatically." />;
+  return (
+    <div className="space-y-6">
+      <Toast message={notice} onDismiss={() => setNotice("")} />
+      <div className="print-hidden">
+        <PageHeader
+          eyebrow="Performance"
+          title="Reports"
+          description="Whole-system, owner, and multi-vehicle ledgers for any date range."
+          actions={
+            <>
+              <Button variant="secondary" onClick={exportCsv} disabled={tab === "Ledger" && !rangeValid}>
+                <Download size={16} />
+                Export CSV
+              </Button>
+              {tab === "Ledger" && (
+                <Button
+                  onClick={exportPdf}
+                  disabled={pdfBusy || !rangeValid || (scopeType === "owner" && !ownerId) || (scopeType === "vehicles" && !selectedVehicleIds.length)}
+                >
+                  <FileText size={16} />
+                  {pdfBusy ? "Preparing PDF…" : "Download PDF"}
+                </Button>
+              )}
+            </>
+          }
+        />
+      </div>
+      <div className="print-hidden flex gap-1 overflow-x-auto rounded-xl border bg-white p-2">
+        {tabs.map((item) => (
+          <Button
+            key={item}
+            size="sm"
+            variant={tab === item ? "primary" : "ghost"}
+            className="shrink-0"
+            onClick={() => {
+              setTab(item);
+              setDrill(undefined);
+            }}
+          >
+            {item}
+          </Button>
+        ))}
+      </div>
+      {tab === "Ledger" ? (
+        <>
+          <section className="print-hidden rounded-xl border bg-white p-4">
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" variant="secondary" onClick={() => setPreset("day")}>
+                Day
+              </Button>
+              <Button size="sm" variant="secondary" onClick={() => setPreset("month")}>
+                Month
+              </Button>
+              <Button size="sm" variant="secondary" onClick={() => setPreset("year")}>
+                Year
+              </Button>
+              <Button size="sm" variant="secondary" onClick={() => setPreset("all")}>
+                All time
+              </Button>
+            </div>
+            <div className="mt-4">
+              <p className="text-xs font-semibold text-[#344054]">Ledger entries</p>
+              <div className="mt-2 flex gap-2 overflow-x-auto pb-1" role="group" aria-label="Ledger entry type">
+                {ledgerEntryTypes.map((item) => (
+                  <Button
+                    key={item.value}
+                    size="sm"
+                    variant={entryType === item.value ? "primary" : "secondary"}
+                    className="shrink-0"
+                    aria-pressed={entryType === item.value}
+                    onClick={() => setEntryType(item.value)}
+                  >
+                    {item.label}
+                  </Button>
+                ))}
+              </div>
+              {entryType === "expense" && (
+                <div className="mt-3 max-w-sm">
+                  <Label title="Expense head">
+                    <select value={expenseHead} onChange={(event) => setExpenseHead(event.target.value)} className="field">
+                      <option value="">All expense heads</option>
+                      {data.ledgerAccounts.expenseHeads.map((item) => (
+                        <option key={item}>{item}</option>
+                      ))}
+                    </select>
+                  </Label>
+                </div>
+              )}
+            </div>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <Label title="From date">
+                <input type="date" value={from} onChange={(event) => setFrom(event.target.value)} className="field" />
+              </Label>
+              <Label title="To date">
+                <input type="date" value={to} onChange={(event) => setTo(event.target.value)} className="field" />
+              </Label>
+              <Label title="City">
+                <select value={city} onChange={(event) => setCity(event.target.value)} className="field">
+                  <option>All cities</option>
+                  {data.cities.map((item) => (
+                    <option key={item}>{item}</option>
+                  ))}
+                </select>
+              </Label>
+              <Label title="Ownership">
+                <select value={ownership} onChange={(event) => changeOwnership(event.target.value)} className="field">
+                  <option>All ownership</option>
+                  <option>Owned</option>
+                  <option>Managed</option>
+                </select>
+              </Label>
+            </div>
+            {!rangeValid && (
+              <p role="alert" className="mt-3 rounded-lg bg-[#FEF3F2] p-3 text-sm text-[#B42318]">
+                The from date must be on or before the to date.
+              </p>
+            )}
+          </section>
+          <section className="print-hidden rounded-xl border bg-white p-4 sm:p-5">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[.12em] text-[#667085]">Report for</p>
+              <p className="mt-1 text-sm text-[#667085]">Choose the account view, then narrow it down without leaving the report.</p>
+            </div>
+            <div className="mt-4 grid gap-2 sm:grid-cols-3">
+              <ScopeButton
+                active={scopeType === "overall"}
+                title="Whole system"
+                description="All income and expenses"
+                icon={Globe2}
+                onClick={() => setScopeType("overall")}
+              />
+              <ScopeButton
+                active={scopeType === "owner"}
+                title="Specific owner"
+                description="Balance and linked vehicles"
+                icon={UserRound}
+                onClick={() => setScopeType("owner")}
+              />
+              <ScopeButton
+                active={scopeType === "vehicles"}
+                title="Vehicles"
+                description="One or multiple vehicles"
+                icon={CarFront}
+                onClick={() => setScopeType("vehicles")}
+              />
+            </div>
+            {scopeType === "owner" && (
+              <div className="mt-5 max-w-lg rounded-xl bg-[#F8FAFC] p-4">
+                <FormCombobox
+                  label="Owner"
+                  value={ownerId}
+                  onValueChange={setOwnerId}
+                  placeholder="Choose an owner"
+                  searchPlaceholder="Search owner…"
+                  emptyText="No owners found"
+                  options={data.ledgerAccounts.owners.map((item) => ({
+                    value: item.id,
+                    label: item.label,
+                    keywords: data.ledgerAccounts.vehicles
+                      .filter((vehicle) => vehicle.ownerId === item.id)
+                      .map((vehicle) => vehicle.label)
+                      .join(" "),
+                  }))}
+                />
+                <p className="mt-2 text-xs leading-5 text-[#667085]">
+                  The ledger automatically includes this owner’s opening balance, linked vehicles, expenses, and settlements.
+                </p>
+              </div>
+            )}
+            {scopeType === "vehicles" && (
+              <div className="mt-5 rounded-xl border border-[#EAECF0] bg-[#F8FAFC] p-4">
+                <div className="grid gap-4 lg:grid-cols-2">
+                  <FormMultiSelect
+                    label="Filter by owner (optional)"
+                    value={vehicleOwnerIds}
+                    onValueChange={changeVehicleOwners}
+                    options={ownerVehicleOptions}
+                    placeholder={ownership === "Owned" ? "Owned vehicles have no external owner" : "All owners"}
+                    searchPlaceholder="Search owner…"
+                    emptyText="No owners match the current filters"
+                    disabled={ownership === "Owned"}
+                  />
+                  <FormMultiSelect
+                    label="Vehicles"
+                    value={selectedVehicleIds}
+                    onValueChange={changeVisibleVehicles}
+                    options={availableVehicles.map((item) => ({
+                      value: item.id,
+                      label: item.label,
+                      description: `${item.city} · ${item.ownership}${item.ownerId ? ` · ${ownerNames.get(item.ownerId) ?? "Owner"}` : ""}${item.archived ? " · Archived" : ""}`,
+                      keywords: `${item.city} ${item.ownership} ${item.ownerId ? (ownerNames.get(item.ownerId) ?? "") : ""}`,
+                    }))}
+                    placeholder="Choose vehicles"
+                    searchPlaceholder="Search make, model, plate or city…"
+                    emptyText="No vehicles match the selected owner and report filters"
+                  />
+                </div>
+                <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[#667085]">
+                  <CarFront size={14} />
+                  <span>
+                    {selectedVehicleIds.length
+                      ? `${selectedVehicleIds.length} ${selectedVehicleIds.length === 1 ? "vehicle" : "vehicles"} included in this report.`
+                      : "Select at least one vehicle to generate the report."}
+                  </span>
+                  {vehicleOwnerIds.length > 0 && (
+                    <>
+                      <span aria-hidden="true">·</span>
+                      <span>
+                        Only vehicles linked to{" "}
+                        {vehicleOwnerIds.length === 1
+                          ? (ownerNames.get(vehicleOwnerIds[0]) ?? "the selected owner")
+                          : `${vehicleOwnerIds.length} selected owners`}{" "}
+                        are shown.
+                      </span>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+          </section>
+        </>
+      ) : (
+        <div className="print-hidden rounded-xl border bg-white p-3">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Label title="Period">
+              <select value={periodKey} onChange={(event) => setPeriod(event.target.value)} className="field">
+                {data.periods.map((item) => (
+                  <option key={item.key} value={item.key}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </Label>
+            <Label title="City">
+              <select value={city} onChange={(event) => setCity(event.target.value)} className="field">
+                <option>All cities</option>
+                {data.cities.map((item) => (
+                  <option key={item}>{item}</option>
+                ))}
+              </select>
+            </Label>
+            <Label title="Ownership">
+              <select value={ownership} onChange={(event) => changeOwnership(event.target.value)} className="field">
+                <option>All ownership</option>
+                <option>Owned</option>
+                <option>Managed</option>
+              </select>
+            </Label>
+          </div>
+        </div>
+      )}
+      <section className="print-surface space-y-6">
+        <header className="hidden print:block">
+          <p className="text-xs font-bold uppercase tracking-[.16em] text-[#006FE6]">VibeRent report</p>
+          <h1 className="mt-1 text-2xl font-bold">{tab === "Ledger" ? ledgerTitle : tab}</h1>
+          <p className="mt-1 text-sm text-[#667085]">
+            {tab === "Ledger" ? rangeLabel : period.label} · {city} · {ownership}
+          </p>
+        </header>
+        {tab === "Ledger" && <LedgerReport
+            entries={ledgerEntries}
+            title={ledgerTitle}
+            period={rangeLabel}
+            ownerView={scopeType === "owner"}
+            openingResult={openingResult}
+            balances={balances}
+          />}{" "}
+        {tab === "Vehicle P&L" && <VehiclePnl rows={filtered} onDrill={setDrill} />}{" "}
+        {tab === "Revenue & collections" && <Collections data={period.collections} />} {tab === "Utilization" && <Utilization rows={filtered} />}{" "}
+        {tab === "Expenses" && <ExpenseAnalysis data={period.expenses} />} {tab === "Owners" && <OwnerReport data={period.owners} />}{" "}
+        {drill && <DrillDown data={drill} onClose={() => setDrill(undefined)} />}
+        <div className="print-hidden rounded-xl border border-[#B2DDFF] bg-[#EFF8FF] p-4 text-xs text-[#175CD3]">
+          Balances run cumulatively like a bank statement, starting from activity before the selected from date. Booking income and owner shares are dated
+          by the booking start date; settlements appear on their posted date. Car reports exclude owner-level payouts that are not allocated to a vehicle.
+        </div>
+      </section>
+    </div>
+  );
 }
 
-function csv(value:string|number){const text=String(value);return /[",\n]/.test(text)?`"${text.replaceAll('"','""')}"`:text}
-function Label({title,children}:{title:string;children:React.ReactNode}){return <label className="text-xs font-semibold">{title}{children}</label>}
-function ScopeButton({active,title,description,icon:Icon,onClick}:{active:boolean;title:string;description:string;icon:LucideIcon;onClick:()=>void}){return <button type="button" aria-pressed={active} onClick={onClick} className={`group flex min-h-20 items-center gap-3 rounded-xl border p-3 text-left outline-none transition-all focus:ring-2 focus:ring-[#006FE6]/20 ${active?"border-[#006FE6] bg-[#EFF8FF] shadow-[0_0_0_1px_#006FE6]":"bg-white hover:border-[#98A2B3] hover:bg-[#F8FAFC]"}`}><span className={`flex size-9 shrink-0 items-center justify-center rounded-lg ${active?"bg-[#006FE6] text-white":"bg-[#F2F4F7] text-[#475467] group-hover:bg-white"}`}><Icon size={18}/></span><span className="min-w-0"><strong className="block text-sm">{title}</strong><span className="mt-0.5 block text-xs text-[#667085]">{description}</span></span></button>}
-function LedgerReport({entries,title,period,ownerView}:{entries:LedgerEntry[];title:string;period:string;ownerView:boolean}){
-  const totals=summarizeLedger(entries);
-  return <>
-    <section className="rounded-xl border border-[#B2DDFF] bg-[#EFF8FF] p-4"><p className="text-xs font-bold uppercase tracking-[.14em] text-[#175CD3]">TL;DR · {period}</p><h2 className="mt-2 text-lg font-bold text-[#19191F]">{title}</h2>{ownerView
-      ?<p className="mt-2 text-sm leading-6 text-[#344054]">Opening balance <strong>{formatPkr(totals.openingOwnerBalance)}</strong>. The owner earned <strong>{formatPkr(totals.ownerShare)}</strong> as their share of rentals, carried <strong>{formatPkr(totals.ownerExpenses)}</strong> of expenses (including recurring), and was paid <strong>{formatPkr(totals.ownerSettlements)}</strong>. Balance owed to the owner is <strong>{formatPkr(totals.closingOwnerBalance)}</strong>.</p>
-      :<p className="mt-2 text-sm leading-6 text-[#344054]">Posted income is <strong>{formatPkr(totals.income)}</strong>. Approved expenses are <strong>{formatPkr(totals.expenses)}</strong>, owner and source payments are <strong>{formatPkr(totals.ownerSettlements)}</strong>, and net cash profit is <strong>{formatPkr(totals.operatingResult)}</strong>.</p>}</section>
-    {ownerView
-      ?<section className="grid grid-cols-2 gap-3 lg:grid-cols-4"><Metric label="Owner share earned" value={formatPkr(totals.ownerShare)} note="Owner allocation from completed rentals"/><Metric label="Owner's expenses" value={formatPkr(totals.ownerExpenses)} note="Owner allocation of approved costs"/><Metric label="Paid to owner" value={formatPkr(totals.ownerSettlements)} note="Posted payouts"/><Metric label="Owner balance" value={formatPkr(totals.closingOwnerBalance)} note={`Opening ${formatPkr(totals.openingOwnerBalance)}`}/></section>
-      :<section className="grid grid-cols-2 gap-3 lg:grid-cols-4"><Metric label="Posted income" value={formatPkr(totals.income)} note="Payments net of reversals"/><Metric label="Approved expenses" value={formatPkr(totals.expenses)} note={`${formatPkr(totals.ownerExpenses)} owner-allocated`}/><Metric label="Owner & source payments" value={formatPkr(totals.ownerSettlements)} note="Posted payout ledger"/><Metric label="Net cash profit" value={formatPkr(totals.operatingResult)} note="Income − expenses − payouts"/></section>}
-    {ownerView ? <OwnerLedgerTable entries={entries}/> : entries.length?<><div className="hidden overflow-x-auto rounded-xl border bg-white md:block"><table className="w-full min-w-[940px] text-left text-sm"><thead className="bg-[#F8FAFC] text-xs text-[#667085]"><tr>{["Date","Vehicle / owner","Entry","Reference","Income","Expense","Owner / source","Net result"].map(item=><th key={item} className="p-3 font-semibold">{item}</th>)}</tr></thead><tbody>{entries.map(row=><tr key={row.id} className="border-t align-top"><td className="whitespace-nowrap p-3">{formatDate(row.date)}</td><td className="p-3"><strong>{row.vehicle}</strong>{row.owner&&<p className="mt-1 text-xs text-[#667085]">{row.owner}</p>}</td><td className="p-3"><strong>{row.kind}</strong><p className="mt-1 max-w-[230px] text-xs text-[#667085]">{row.description}</p></td><td className="p-3 text-xs font-semibold text-[#475467]">{row.reference}</td><MoneyCell value={row.income}/><MoneyCell value={row.expense} negative/><MoneyCell value={row.ownerMovement} signed/><MoneyCell value={row.operatingResult} signed/></tr>)}</tbody></table></div><div className="space-y-3 md:hidden">{entries.map(row=><article key={row.id} className="rounded-xl border bg-white p-4"><div className="flex items-start justify-between gap-3"><div><p className="text-xs text-[#667085]">{formatDate(row.date)} · {row.reference}</p><h3 className="mt-1 font-bold">{row.vehicle}</h3>{row.owner&&<p className="text-xs text-[#667085]">{row.owner}</p>}</div><span className="rounded-full bg-[#F2F4F7] px-2 py-1 text-[11px] font-semibold">{row.kind}</span></div><p className="mt-3 text-sm text-[#475467]">{row.description}</p><dl className="mt-4 grid grid-cols-2 gap-3 text-xs"><MobileAmount label="Income" value={row.income}/><MobileAmount label="Expense" value={-row.expense}/><MobileAmount label="Owner / source" value={row.ownerMovement}/><MobileAmount label="Net result" value={row.operatingResult}/></dl></article>)}</div></>:<EmptyState title="No ledger entries" description="No posted income, approved expenses, or owner/source payments match these filters."/>}
-
-  </>;
+function csv(value: string | number) {
+  const text = String(value);
+  return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }
-function MoneyCell({value,negative=false,signed=false}:{value:number;negative?:boolean;signed?:boolean}){const display=negative&&value?-value:value;return <td className={`whitespace-nowrap p-3 font-semibold ${display<0?"text-[#B42318]":display>0?"text-[#067647]":"text-[#667085]"}`}>{signed&&display>0?"+":""}{formatPkr(display)}</td>}
-function OwnerLedgerTable({entries}:{entries:LedgerEntry[]}){
-  const rows=ownerLedgerRows(entries);
-  return <section className="rounded-xl border bg-white">
-    <div className="border-b p-4"><h3 className="font-bold">Owner ledger</h3><p className="mt-1 text-xs text-[#667085]">Income is the owner’s rental share. Expense is only the owner’s allocated cost. Payouts are shown in full details below.</p></div>
-    {rows.length?<><div className="hidden md:block"><table className="w-full text-left text-sm"><thead className="bg-[#F8FAFC] text-xs text-[#667085]"><tr>{["Date","Car number","Days car went","Income","Expense"].map(label=><th key={label} className="p-3 font-semibold">{label}</th>)}</tr></thead><tbody>{rows.map(row=><tr key={row.id} className="border-t"><td className="p-3">{formatDate(row.date)}</td><td className="p-3 font-semibold">{row.plate}</td><td className="p-3">{row.days||"—"}</td><td className="p-3 text-[#067647]">{row.income?formatPkr(row.income):"—"}</td><td className="p-3 text-[#B42318]">{row.expense?formatPkr(row.expense):"—"}</td></tr>)}</tbody></table></div><div className="divide-y md:hidden">{rows.map(row=><article key={row.id} className="p-4 text-sm"><div className="flex justify-between gap-2"><strong>{row.plate}</strong><span>{formatDate(row.date)}</span></div><p className="mt-1 text-xs text-[#667085]">Days car went: {row.days||"—"}</p><div className="mt-2 flex justify-between gap-3"><span>Income: {row.income?formatPkr(row.income):"—"}</span><span>Expense: {row.expense?formatPkr(row.expense):"—"}</span></div></article>)}</div></>:<p className="p-6 text-sm text-[#667085]">No owner share or allocated expense matches these filters.</p>}
-    <details className="border-t p-4" open><summary className="cursor-pointer font-semibold text-[#006FE6]">Full ledger details</summary><div className="mt-3 divide-y rounded-lg border">{entries.map(row=><div key={row.id} className="grid gap-2 p-3 text-sm sm:grid-cols-[130px_1fr_auto]"><div>{formatDate(row.date)}<p className="text-xs text-[#667085]">{row.plate??"Owner account"}</p></div><div><strong>{row.kind}</strong><p className="text-xs text-[#667085]">{row.reference} · {row.description}</p>{row.rentalDays&&<p className="text-xs text-[#667085]">{row.rentalDays} rental days</p>}</div><strong className="tabular-nums">{formatPkr(row.ownerMovement)}</strong></div>)}</div></details>
-  </section>;
+function Label({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <label className="text-xs font-semibold">
+      {title}
+      {children}
+    </label>
+  );
 }
-function MobileAmount({label,value}:{label:string;value:number}){return <div className="rounded-lg bg-[#F8FAFC] p-2"><dt className="text-[#667085]">{label}</dt><dd className={`mt-1 font-bold ${value<0?"text-[#B42318]":value>0?"text-[#067647]":""}`}>{value>0?"+":""}{formatPkr(value)}</dd></div>}
-function formatDate(value:string){return new Intl.DateTimeFormat("en-PK",{day:"2-digit",month:"short",year:"numeric",timeZone:"UTC"}).format(new Date(`${value.slice(0,10)}T00:00:00Z`))}
-function VehiclePnl({rows,onDrill}:{rows:VehicleReportRow[];onDrill:(value:{title:string;sources:ReportSource[]})=>void}){const totals=rows.reduce((sum,row)=>({revenue:sum.revenue+row.revenue,expenses:sum.expenses+row.expenses,share:sum.share+row.ownerShare}),{revenue:0,expenses:0,share:0});return <><section className="grid grid-cols-2 gap-3 lg:grid-cols-4"><Metric label="Rental revenue" value={formatPkr(totals.revenue)} note="Completed rentals"/><Metric label="Direct expenses" value={formatPkr(totals.expenses)} note="Approved vehicle costs"/><Metric label="Owner share" value={formatPkr(totals.share)} note="Effective linked agreements"/><Metric label="Contribution" value={formatPkr(totals.revenue-totals.expenses-totals.share)} note="Revenue − costs − owner share"/></section>{rows.length?<Table headers={["Vehicle","Revenue","Expenses","Owner share","Contribution","Utilization"]}>{rows.map(row=><tr key={row.id} className="border-t"><td className="p-3 font-semibold">{row.vehicle}<p className="text-xs font-normal text-[#667085]">{row.city} · {row.ownership}</p></td>{[[row.revenue,"Revenue"],[row.expenses,"Expenses"],[row.ownerShare,"Owner share"],[row.revenue-row.expenses-row.ownerShare,"Contribution"]].map(([value,label])=><td key={label} className="p-3"><button className="font-semibold text-[#006FE6]" onClick={()=>onDrill({title:`${row.vehicle} · ${label}`,sources:row.sources})}>{formatPkr(value as number)}</button></td>)}<td className="p-3">{row.utilization}%</td></tr>)}</Table>:<EmptyState title="No vehicles match" description="Change the city or ownership filter."/>}</>}
-function Collections({data}:{data:ReportsData["periods"][number]["collections"]}){return <><section className="grid grid-cols-2 gap-3 lg:grid-cols-4"><Metric label="Booked revenue" value={formatPkr(data.booked)} note="Eligible bookings in period"/><Metric label="Collected cash" value={formatPkr(data.collected)} note="Posted transactions"/><Metric label="Outstanding" value={formatPkr(data.outstanding)} note="Booked less collected"/><Metric label="Overdue exposure" value={formatPkr(data.overdue)} note="Past-return open bookings"/></section><div className="rounded-xl border border-[#B2DDFF] bg-[#EFF8FF] p-4 text-sm text-[#175CD3]"><strong>Collection method breakdown</strong><p className="mt-1 text-xs">Cash collected groups posted payments, deposit applications, refunds, and reversals by the payment method recorded on each transaction.</p></div><Table headers={["Payment method","Transactions","Collected","Share of collections"]}>{data.channels.map(row=><tr key={row.name} className="border-t"><td className="p-3 font-semibold">{row.name}</td><td className="p-3">{row.count}</td><td className="p-3 font-semibold">{formatPkr(row.collected)}</td><td className="p-3">{data.collected?Math.round(row.collected/data.collected*100):0}%</td></tr>)}</Table></>}
-function Utilization({rows}:{rows:VehicleReportRow[]}){return <><div className="rounded-xl border bg-white p-4 text-xs text-[#667085]"><strong className="text-[#344054]">Definition:</strong> overlapping occupied days ÷ eligible days, with recorded availability-block downtime excluded.</div><Table headers={["Vehicle","Eligible days","Downtime","Occupied","Utilization"]}>{rows.map(row=><tr key={row.id} className="border-t"><td className="p-3 font-semibold">{row.vehicle}</td><td className="p-3">{row.availableDays}</td><td className="p-3">{row.downtime} days</td><td className="p-3">{Math.round(row.availableDays*row.utilization/100*10)/10} days</td><td className="p-3"><strong>{row.utilization}%</strong><div className="mt-1 h-1.5 rounded bg-[#EAECF0]"><span className="block h-full rounded bg-[#006FE6]" style={{width:`${row.utilization}%`}}/></div></td></tr>)}</Table></>}
-function ExpenseAnalysis({data}:{data:ReportsData["periods"][number]["expenses"]}){const largest=data.categories[0];return <><div className="rounded-xl border border-[#FEDF89] bg-[#FFFAEB] p-4 text-sm text-[#93370D]"><strong>What “expenses” includes</strong><p className="mt-1 text-xs leading-5">Only approved expense records whose occurrence date falls inside the selected reporting month are included. Draft, submitted, rejected, and reversed items are excluded. Vehicle P&amp;L includes vehicle-linked costs; this tab also includes agency-wide and owner-allocated costs.</p></div><section className="grid grid-cols-2 gap-3 lg:grid-cols-4"><Metric label="Approved expenses" value={formatPkr(data.approved)} note="Selected reporting period"/><Metric label="Largest category" value={largest?.name??"None"} note={largest?formatPkr(largest.amount):"No approved costs"}/><Metric label="Owner responsibility" value={formatPkr(data.ownerResponsibility)} note="Allocated to an owner"/><Metric label="Receipt exceptions" value={String(data.receiptExceptions)} note="Approved without a ready receipt"/></section><Table headers={["Category","Approved amount","Share","Scope"]}>{data.categories.map(row=><tr key={row.name} className="border-t"><td className="p-3 font-semibold">{row.name}</td><td className="p-3">{formatPkr(row.amount)}</td><td className="p-3">{data.approved?Math.round(row.amount/data.approved*100):0}%</td><td className="p-3">Approved in selected month</td></tr>)}</Table></>}
-function OwnerReport({data}:{data:ReportsData["periods"][number]["owners"]}){return <><section className="grid grid-cols-2 gap-3 lg:grid-cols-4"><Metric label="Managed vehicles" value={String(data.vehicleCount)} note="Owner accounts"/><Metric label="Owner share" value={formatPkr(data.ownerShare)} note="Linked agreements"/><Metric label="Owner expenses" value={formatPkr(data.ownerExpenses)} note="Owner's share of vehicle costs"/><Metric label="Closing payable" value={formatPkr(data.payable)} note={`After ${formatPkr(data.paid)} paid to owners`}/></section><Table headers={["Owner","Share terms","Opening balance","Owner share","Owner expenses","Paid to owner","Closing balance"]}>{data.rows.map(row=><tr key={row.id} className="border-t"><td className="p-3 font-semibold"><Link className="text-[#006FE6]" href={`/owners/${row.id}`}>{row.name}</Link></td><td className="p-3 text-xs">{row.terms}</td><td className="p-3">{formatPkr(row.openingBalance)}</td><td className="p-3">{formatPkr(row.share)}</td><td className="p-3">{formatPkr(-row.expenses)}</td><td className="p-3">{formatPkr(-row.paid)}</td><td className="p-3 font-semibold">{formatPkr(row.payable)}</td></tr>)}</Table></>}
-function DrillDown({data,onClose}:{data:{title:string;sources:ReportSource[]};onClose:()=>void}){return <section className="rounded-xl border border-[#B2DDFF] bg-white p-4"><div className="flex justify-between"><div><h2 className="font-bold">Source drill-down</h2><p className="text-xs text-[#667085]">{data.title}</p></div><Button size="sm" variant="ghost" onClick={onClose}>Close</Button></div>{data.sources.length?<div className="mt-4 space-y-2">{data.sources.map(row=><div key={`${row.id}-${row.label}`} className="flex items-center justify-between rounded-lg bg-[#F8FAFC] p-3 text-sm"><span><strong>{row.id}</strong> · {row.label}</span><span className="flex items-center gap-2 font-semibold">{formatPkr(row.amount)}<ExternalLink size={14}/></span></div>)}</div>:<p className="mt-4 text-sm text-[#667085]">No source records contribute to this value.</p>}</section>}
-function Metric({label,value,note}:{label:string;value:string;note:string}){return <div className="rounded-xl border bg-white p-4"><p className="text-xs text-[#667085]">{label}</p><p className="mt-2 text-xl font-bold">{value}</p><p className="mt-1 text-xs text-[#667085]">{note}</p></div>}
-function Table({headers,children}:{headers:string[];children:React.ReactNode}){return <div className="overflow-x-auto rounded-xl border bg-white"><table className="w-full min-w-[720px] text-left text-sm"><thead className="bg-[#F8FAFC] text-xs text-[#667085]"><tr>{headers.map(header=><th key={header} className="p-3 font-semibold">{header}</th>)}</tr></thead><tbody>{children}</tbody></table></div>}
+function ScopeButton({
+  active,
+  title,
+  description,
+  icon: Icon,
+  onClick,
+}: {
+  active: boolean;
+  title: string;
+  description: string;
+  icon: LucideIcon;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      onClick={onClick}
+      className={`group flex min-h-20 items-center gap-3 rounded-xl border p-3 text-left outline-none transition-all focus:ring-2 focus:ring-[#006FE6]/20 ${active ? "border-[#006FE6] bg-[#EFF8FF] shadow-[0_0_0_1px_#006FE6]" : "bg-white hover:border-[#98A2B3] hover:bg-[#F8FAFC]"}`}
+    >
+      <span
+        className={`flex size-9 shrink-0 items-center justify-center rounded-lg ${active ? "bg-[#006FE6] text-white" : "bg-[#F2F4F7] text-[#475467] group-hover:bg-white"}`}
+      >
+        <Icon size={18} />
+      </span>
+      <span className="min-w-0">
+        <strong className="block text-sm">{title}</strong>
+        <span className="mt-0.5 block text-xs text-[#667085]">{description}</span>
+      </span>
+    </button>
+  );
+}
+function LedgerReport({
+  entries,
+  title,
+  period,
+  ownerView,
+  openingResult,
+  balances,
+}: {
+  entries: LedgerEntry[];
+  title: string;
+  period: string;
+  ownerView: boolean;
+  openingResult: number;
+  balances: Map<string, number>;
+}) {
+  const totals = summarizeLedger(entries);
+  const closing = entries.length ? (balances.get(entries.at(-1)!.id) ?? openingResult) : openingResult;
+  return (
+    <>
+      <section className="rounded-xl border border-[#B2DDFF] bg-[#EFF8FF] p-4">
+        <p className="text-xs font-bold uppercase tracking-[.14em] text-[#175CD3]">TL;DR · {period}</p>
+        <h2 className="mt-2 text-lg font-bold text-[#19191F]">{title}</h2>
+        {ownerView ? (
+          <p className="mt-2 text-sm leading-6 text-[#344054]">
+            Opening balance <strong>{formatPkr(totals.openingOwnerBalance)}</strong>. The owner earned <strong>{formatPkr(totals.ownerShare)}</strong> as their
+            share of rentals, carried <strong>{formatPkr(totals.ownerExpenses)}</strong> of expenses and fixed charges, and was paid{" "}
+            <strong>{formatPkr(totals.ownerSettlements)}</strong>. Closing balance <strong>{formatPkr(totals.closingOwnerBalance)}</strong>.
+          </p>
+        ) : (
+          <p className="mt-2 text-sm leading-6 text-[#344054]">
+            Posted income is <strong>{formatPkr(totals.income)}</strong>. Approved expenses are <strong>{formatPkr(totals.expenses)}</strong>, owner and source
+            payments are <strong>{formatPkr(totals.ownerSettlements)}</strong>, and net cash profit is <strong>{formatPkr(totals.operatingResult)}</strong>.
+          </p>
+        )}
+      </section>
+      {ownerView ? (
+        <section className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+          <Metric label="Opening balance" value={formatPkr(totals.openingOwnerBalance)} note="Brought forward" />
+          <Metric label="Owner share earned" value={formatPkr(totals.ownerShare)} note="Owner allocation from rentals" />
+          <Metric
+            label="Owner's expenses"
+            value={formatPkr(totals.ownerExpenses)}
+            note={totals.fixedCharges ? `Includes ${formatPkr(totals.fixedCharges)} fixed charges` : "Owner allocation of approved costs"}
+          />
+          <Metric label="Paid to owner" value={formatPkr(totals.ownerSettlements)} note="Posted payouts" />
+          <Metric label="Closing balance" value={formatPkr(totals.closingOwnerBalance)} note="Payable to owner" />
+        </section>
+      ) : (
+        <section className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+          <Metric label="Opening balance" value={formatPkr(openingResult)} note="Net result before this range" />
+          <Metric label="Posted income" value={formatPkr(totals.income)} note="Payments net of reversals" />
+          <Metric label="Net expenses" value={formatPkr(totals.expenses)} note={totals.recovered ? `After ${formatPkr(totals.recovered)} recovered` : `${formatPkr(totals.ownerExpenses)} owner-allocated`} />
+          <Metric label="Owner & source payments" value={formatPkr(totals.ownerSettlements)} note="Posted payout ledger" />
+          <Metric label="Closing balance" value={formatPkr(closing)} note="Opening + income − expenses − payouts" />
+        </section>
+      )}
+      {ownerView ? (
+        <OwnerLedgerTable entries={entries} period={period} />
+      ) : entries.length ? (
+        <>
+          <div className="hidden overflow-x-auto rounded-xl border bg-white md:block">
+            <table className="w-full min-w-[1020px] text-left text-sm">
+              <thead className="bg-[#F8FAFC] text-xs text-[#667085]">
+                <tr>
+                  {["Date", "Vehicle / owner", "Entry", "Reference", "Income", "Expense", "Owner / source", "Net result", "Balance"].map((item) => (
+                    <th key={item} className="p-3 font-semibold">
+                      {item}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {openingResult !== 0 && (
+                  <tr className="border-t bg-[#F8FAFC]">
+                    <td className="p-3" colSpan={8}>
+                      <strong>Opening balance</strong>
+                      <p className="mt-1 text-xs text-[#667085]">Net result carried forward from before this date range</p>
+                    </td>
+                    <MoneyCell value={openingResult} signed />
+                  </tr>
+                )}
+                {entries.map((row) => (
+                  <tr key={row.id} className="border-t align-top">
+                    <td className="whitespace-nowrap p-3">{formatDate(row.date)}</td>
+                    <td className="p-3">
+                      <strong>{row.vehicle}</strong>
+                      {row.owner && <p className="mt-1 text-xs text-[#667085]">{row.owner}</p>}
+                    </td>
+                    <td className="p-3">
+                      <strong>{row.kind}</strong>
+                      {row.category && <HeadBadge head={row.category} />}
+                      <p className="mt-1 max-w-[230px] text-xs text-[#667085]">{row.description}</p>
+                    </td>
+                    <td className="p-3 text-xs font-semibold text-[#475467]">{row.reference}</td>
+                    <MoneyCell value={row.income} />
+                    <MoneyCell value={row.expense} negative />
+                    <MoneyCell value={row.ownerMovement} signed />
+                    <MoneyCell value={row.operatingResult} signed />
+                    <MoneyCell value={balances.get(row.id) ?? 0} signed />
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="space-y-3 md:hidden">
+            {openingResult !== 0 && (
+              <div className="flex justify-between rounded-xl border bg-[#F8FAFC] p-4 text-sm">
+                <strong>Opening balance</strong>
+                <strong>{formatPkr(openingResult)}</strong>
+              </div>
+            )}
+            {entries.map((row) => (
+              <article key={row.id} className="rounded-xl border bg-white p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs text-[#667085]">
+                      {formatDate(row.date)} · {row.reference}
+                    </p>
+                    <h3 className="mt-1 font-bold">{row.vehicle}</h3>
+                    {row.owner && <p className="text-xs text-[#667085]">{row.owner}</p>}
+                  </div>
+                  <span className="rounded-full bg-[#F2F4F7] px-2 py-1 text-[11px] font-semibold">{row.category ? `${row.kind} · ${row.category}` : row.kind}</span>
+                </div>
+                <p className="mt-3 text-sm text-[#475467]">{row.description}</p>
+                <dl className="mt-4 grid grid-cols-2 gap-3 text-xs">
+                  <MobileAmount label="Income" value={row.income} />
+                  <MobileAmount label="Expense" value={-row.expense} />
+                  <MobileAmount label="Owner / source" value={row.ownerMovement} />
+                  <MobileAmount label="Balance" value={balances.get(row.id) ?? 0} />
+                </dl>
+              </article>
+            ))}
+          </div>
+        </>
+      ) : (
+        <EmptyState title="No ledger entries" description="No posted income, approved expenses, or owner/source payments match these filters." />
+      )}
+    </>
+  );
+}
+function HeadBadge({ head }: { head: string }) {
+  return <span className="ml-2 inline-block rounded-full bg-[#F2F4F7] px-2 py-0.5 text-[11px] font-semibold text-[#344054]">{head}</span>;
+}
+function MoneyCell({ value, negative = false, signed = false }: { value: number; negative?: boolean; signed?: boolean }) {
+  const display = negative && value ? -value : value;
+  return (
+    <td className={`whitespace-nowrap p-3 font-semibold ${display < 0 ? "text-[#B42318]" : display > 0 ? "text-[#067647]" : "text-[#667085]"}`}>
+      {signed && display > 0 ? "+" : ""}
+      {formatPkr(display)}
+    </td>
+  );
+}
+/** Owner statement split per car, each in the owner's familiar sheet layout. */
+function OwnerLedgerTable({ entries, period }: { entries: LedgerEntry[]; period: string }) {
+  const cars = ownerLedgerByCar(entries);
+  if (!cars.length)
+    return (
+      <section className="rounded-xl border bg-white p-6 text-sm text-[#667085]">No owner share, allocated expense, or payout matches these filters.</section>
+    );
+  return (
+    <div className="space-y-5">
+      {cars.map((car) => (
+        <OwnerCarSheet key={car.key} car={car} period={period} />
+      ))}
+    </div>
+  );
+}
+function MobileAmount({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-lg bg-[#F8FAFC] p-2">
+      <dt className="text-[#667085]">{label}</dt>
+      <dd className={`mt-1 font-bold ${value < 0 ? "text-[#B42318]" : value > 0 ? "text-[#067647]" : ""}`}>
+        {value > 0 ? "+" : ""}
+        {formatPkr(value)}
+      </dd>
+    </div>
+  );
+}
+function formatDate(value: string) {
+  return new Intl.DateTimeFormat("en-PK", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" }).format(
+    new Date(`${value.slice(0, 10)}T00:00:00Z`),
+  );
+}
+function VehiclePnl({ rows, onDrill }: { rows: VehicleReportRow[]; onDrill: (value: { title: string; sources: ReportSource[] }) => void }) {
+  const totals = rows.reduce((sum, row) => ({ revenue: sum.revenue + row.revenue, expenses: sum.expenses + row.expenses, share: sum.share + row.ownerShare }), {
+    revenue: 0,
+    expenses: 0,
+    share: 0,
+  });
+  return (
+    <>
+      <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Metric label="Rental revenue" value={formatPkr(totals.revenue)} note="Completed rentals" />
+        <Metric label="Direct expenses" value={formatPkr(totals.expenses)} note="Approved vehicle costs" />
+        <Metric label="Owner share" value={formatPkr(totals.share)} note="Effective linked agreements" />
+        <Metric label="Contribution" value={formatPkr(totals.revenue - totals.expenses - totals.share)} note="Revenue − costs − owner share" />
+      </section>
+      {rows.length ? (
+        <Table headers={["Vehicle", "Revenue", "Expenses", "Owner share", "Contribution", "Utilization"]}>
+          {rows.map((row) => (
+            <tr key={row.id} className="border-t">
+              <td className="p-3 font-semibold">
+                {row.vehicle}
+                <p className="text-xs font-normal text-[#667085]">
+                  {row.city} · {row.ownership}
+                </p>
+              </td>
+              {[
+                [row.revenue, "Revenue"],
+                [row.expenses, "Expenses"],
+                [row.ownerShare, "Owner share"],
+                [row.revenue - row.expenses - row.ownerShare, "Contribution"],
+              ].map(([value, label]) => (
+                <td key={label} className="p-3">
+                  <button className="font-semibold text-[#006FE6]" onClick={() => onDrill({ title: `${row.vehicle} · ${label}`, sources: row.sources })}>
+                    {formatPkr(value as number)}
+                  </button>
+                </td>
+              ))}
+              <td className="p-3">{row.utilization}%</td>
+            </tr>
+          ))}
+        </Table>
+      ) : (
+        <EmptyState title="No vehicles match" description="Change the city or ownership filter." />
+      )}
+    </>
+  );
+}
+function Collections({ data }: { data: ReportsData["periods"][number]["collections"] }) {
+  return (
+    <>
+      <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Metric label="Booked revenue" value={formatPkr(data.booked)} note="Eligible bookings in period" />
+        <Metric label="Collected cash" value={formatPkr(data.collected)} note="Posted transactions" />
+        <Metric label="Outstanding" value={formatPkr(data.outstanding)} note="Booked less collected" />
+        <Metric label="Overdue exposure" value={formatPkr(data.overdue)} note="Past-return open bookings" />
+      </section>
+      <div className="rounded-xl border border-[#B2DDFF] bg-[#EFF8FF] p-4 text-sm text-[#175CD3]">
+        <strong>Collection method breakdown</strong>
+        <p className="mt-1 text-xs">
+          Cash collected groups posted payments, deposit applications, refunds, and reversals by the payment method recorded on each transaction.
+        </p>
+      </div>
+      <Table headers={["Payment method", "Transactions", "Collected", "Share of collections"]}>
+        {data.channels.map((row) => (
+          <tr key={row.name} className="border-t">
+            <td className="p-3 font-semibold">{row.name}</td>
+            <td className="p-3">{row.count}</td>
+            <td className="p-3 font-semibold">{formatPkr(row.collected)}</td>
+            <td className="p-3">{data.collected ? Math.round((row.collected / data.collected) * 100) : 0}%</td>
+          </tr>
+        ))}
+      </Table>
+    </>
+  );
+}
+function Utilization({ rows }: { rows: VehicleReportRow[] }) {
+  return (
+    <>
+      <div className="rounded-xl border bg-white p-4 text-xs text-[#667085]">
+        <strong className="text-[#344054]">Definition:</strong> overlapping occupied days ÷ eligible days, with recorded availability-block downtime excluded.
+      </div>
+      <Table headers={["Vehicle", "Eligible days", "Downtime", "Occupied", "Utilization"]}>
+        {rows.map((row) => (
+          <tr key={row.id} className="border-t">
+            <td className="p-3 font-semibold">{row.vehicle}</td>
+            <td className="p-3">{row.availableDays}</td>
+            <td className="p-3">{row.downtime} days</td>
+            <td className="p-3">{Math.round(((row.availableDays * row.utilization) / 100) * 10) / 10} days</td>
+            <td className="p-3">
+              <strong>{row.utilization}%</strong>
+              <div className="mt-1 h-1.5 rounded bg-[#EAECF0]">
+                <span className="block h-full rounded bg-[#006FE6]" style={{ width: `${row.utilization}%` }} />
+              </div>
+            </td>
+          </tr>
+        ))}
+      </Table>
+    </>
+  );
+}
+function ExpenseAnalysis({ data }: { data: ReportsData["periods"][number]["expenses"] }) {
+  const largest = data.categories[0];
+  return (
+    <>
+      <div className="rounded-xl border border-[#FEDF89] bg-[#FFFAEB] p-4 text-sm text-[#93370D]">
+        <strong>What “expenses” includes</strong>
+        <p className="mt-1 text-xs leading-5">
+          Only approved expense records whose occurrence date falls inside the selected reporting month are included. Draft, submitted, rejected, and reversed
+          items are excluded. Vehicle P&amp;L includes vehicle-linked costs; this tab also includes agency-wide and owner-allocated costs.
+        </p>
+      </div>
+      <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Metric label="Approved expenses" value={formatPkr(data.approved)} note="Selected reporting period" />
+        <Metric label="Largest category" value={largest?.name ?? "None"} note={largest ? formatPkr(largest.amount) : "No approved costs"} />
+        <Metric label="Owner responsibility" value={formatPkr(data.ownerResponsibility)} note="Allocated to an owner" />
+        <Metric label="Receipt exceptions" value={String(data.receiptExceptions)} note="Approved without a ready receipt" />
+      </section>
+      <Table headers={["Category", "Approved amount", "Share", "Scope"]}>
+        {data.categories.map((row) => (
+          <tr key={row.name} className="border-t">
+            <td className="p-3 font-semibold">{row.name}</td>
+            <td className="p-3">{formatPkr(row.amount)}</td>
+            <td className="p-3">{data.approved ? Math.round((row.amount / data.approved) * 100) : 0}%</td>
+            <td className="p-3">Approved in selected month</td>
+          </tr>
+        ))}
+      </Table>
+    </>
+  );
+}
+function OwnerReport({ data }: { data: ReportsData["periods"][number]["owners"] }) {
+  return (
+    <>
+      <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Metric label="Managed vehicles" value={String(data.vehicleCount)} note="Owner accounts" />
+        <Metric label="Owner share" value={formatPkr(data.ownerShare)} note="Linked agreements" />
+        <Metric label="Owner expenses" value={formatPkr(data.ownerExpenses)} note="Owner's share of vehicle costs" />
+        <Metric label="Closing payable" value={formatPkr(data.payable)} note={`After ${formatPkr(data.paid)} paid to owners`} />
+      </section>
+      <Table headers={["Owner", "Share terms", "Opening balance", "Owner share", "Owner expenses", "Paid to owner", "Closing balance"]}>
+        {data.rows.map((row) => (
+          <tr key={row.id} className="border-t">
+            <td className="p-3 font-semibold">
+              <Link className="text-[#006FE6]" href={`/owners/${row.id}`}>
+                {row.name}
+              </Link>
+            </td>
+            <td className="p-3 text-xs">{row.terms}</td>
+            <td className="p-3">{formatPkr(row.openingBalance)}</td>
+            <td className="p-3">{formatPkr(row.share)}</td>
+            <td className="p-3">{formatPkr(-row.expenses)}</td>
+            <td className="p-3">{formatPkr(-row.paid)}</td>
+            <td className="p-3 font-semibold">{formatPkr(row.payable)}</td>
+          </tr>
+        ))}
+      </Table>
+    </>
+  );
+}
+function DrillDown({ data, onClose }: { data: { title: string; sources: ReportSource[] }; onClose: () => void }) {
+  return (
+    <section className="rounded-xl border border-[#B2DDFF] bg-white p-4">
+      <div className="flex justify-between">
+        <div>
+          <h2 className="font-bold">Source drill-down</h2>
+          <p className="text-xs text-[#667085]">{data.title}</p>
+        </div>
+        <Button size="sm" variant="ghost" onClick={onClose}>
+          Close
+        </Button>
+      </div>
+      {data.sources.length ? (
+        <div className="mt-4 space-y-2">
+          {data.sources.map((row) => (
+            <div key={`${row.id}-${row.label}`} className="flex items-center justify-between rounded-lg bg-[#F8FAFC] p-3 text-sm">
+              <span>
+                <strong>{row.id}</strong> · {row.label}
+              </span>
+              <span className="flex items-center gap-2 font-semibold">
+                {formatPkr(row.amount)}
+                <ExternalLink size={14} />
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-4 text-sm text-[#667085]">No source records contribute to this value.</p>
+      )}
+    </section>
+  );
+}
+function Metric({ label, value, note }: { label: string; value: string; note: string }) {
+  return (
+    <div className="rounded-xl border bg-white p-4">
+      <p className="text-xs text-[#667085]">{label}</p>
+      <p className="mt-2 text-xl font-bold">{value}</p>
+      <p className="mt-1 text-xs text-[#667085]">{note}</p>
+    </div>
+  );
+}
+function Table({ headers, children }: { headers: string[]; children: React.ReactNode }) {
+  return (
+    <div className="overflow-x-auto rounded-xl border bg-white">
+      <table className="w-full min-w-[720px] text-left text-sm">
+        <thead className="bg-[#F8FAFC] text-xs text-[#667085]">
+          <tr>
+            {headers.map((header) => (
+              <th key={header} className="p-3 font-semibold">
+                {header}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>{children}</tbody>
+      </table>
+    </div>
+  );
+}

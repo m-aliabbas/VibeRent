@@ -12,7 +12,7 @@ import { getWebRequestContext } from "@/server/auth/session";
 import { getExpenseWorkspace } from "@/server/services/expense-service";
 import { listOwners } from "@/server/services/owner-service";
 import { getReports } from "@/server/services/report-service";
-import { listDrivers } from "@/server/services/driver-service";
+import { listDriverSummaries, listDrivers } from "@/server/services/driver-service";
 import { listGuarantors } from "@/server/services/guarantor-service";
 import { listArchive } from "@/server/services/archive-service";
 import { getOrganizationSettings } from "@/server/services/organization-settings-service";
@@ -68,10 +68,10 @@ export default async function SectionPage({
   if (!data) notFound();
   if (section === "customers") return <CustomersModule />;
   if (section === "bookings") return <BookingsWorkspace />;
-  if (section === "owners") return <OwnersWorkspace data={await listOwners(await getWebRequestContext())} />;
+  if (section === "owners") { const context = await getWebRequestContext(); return <OwnersWorkspace data={await listOwners(context)} canEditFixedCharge={context.roles.some(role=>["agency_owner","accountant"].includes(role))} />; }
   if (section === "expenses") return <ExpensesWorkspace data={await getExpenseWorkspace(await getWebRequestContext())} />;
   if (section === "reports") return <ReportsWorkspace data={await getReports(await getWebRequestContext())} />;
-  if (section === "drivers") return <DriversWorkspace initial={await listDrivers(await getWebRequestContext())} />;
+  if (section === "drivers") { const context = await getWebRequestContext(); const [drivers, summaries] = await Promise.all([listDrivers(context), listDriverSummaries(context)]); return <DriversWorkspace initial={drivers} summaries={summaries} />; }
   if (section === "guarantors") return <GuarantorsWorkspace initial={await listGuarantors(await getWebRequestContext())} />;
   if (section === "archive") { const context = await getWebRequestContext(); return <ArchiveWorkspace initial={await listArchive(context)} canRestore={context.roles.some(role=>["agency_owner","fleet_manager"].includes(role))} canPurge={context.roles.includes("agency_owner")}/>; }
   if (section === "settings") {

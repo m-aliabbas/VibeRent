@@ -1,5 +1,5 @@
-import { buildLedgerEntries } from "@/lib/reports/ledger";
-import type { LedgerScope } from "@/lib/reports/ledger";
+import { buildLedgerEntries, filterLedgerEntries, ledgerOpeningResult } from "@/lib/reports/ledger";
+import type { LedgerEntryType, LedgerScope } from "@/lib/reports/ledger";
 import { getWebRequestContext } from "@/server/auth/session";
 import { createLedgerReportPdf } from "@/server/documents/ledger-report";
 import { DomainError,asDomainError } from "@/server/domain/errors";
@@ -21,10 +21,16 @@ export async function GET(request:Request){
     const scope=resolveScope(scopeType,url,data);
     const entry=url.searchParams.get("entry")??"all";
     if(!["all","income","expense","owner-payment"].includes(entry))throw new DomainError("VALIDATION_FAILED","Unknown ledger entry filter.",400);
-    const entries=filterEntries(buildLedgerEntries(data.ledgerEntries,{from,to,city,ownership,scope}),entry,scope.type==="owner");
-    const accountLabel=`${entryLabel(entry)} - ${labelForScope(scope,data)}`;
+    const expenseHead=entry==="expense"?(url.searchParams.get("head")??""):"";
+    if(expenseHead&&!data.ledgerAccounts.expenseHeads.includes(expenseHead))throw new DomainError("VALIDATION_FAILED","Unknown expense head.",400);
+    const filters={from,to,city,ownership,scope};
+    const carId=scope.type==="owner"?url.searchParams.get("vehicleId")??"":"";
+    if(carId&&!data.ledgerAccounts.vehicles.some(item=>item.id===carId&&item.ownerId===(scope.type==="owner"?scope.ownerId:"")))throw new DomainError("VALIDATION_FAILED","Unknown car for this owner.",400);
+    const entries=filterLedgerEntries(buildLedgerEntries(data.ledgerEntries,filters),entry as LedgerEntryType,scope.type==="owner",expenseHead).filter(row=>!carId||row.vehicleId===carId);
+    const openingResult=entry==="all"?ledgerOpeningResult(data.ledgerEntries,filters):0;
+    const accountLabel=`${expenseHead?`${expenseHead} expenses`:entryLabel(entry)} - ${labelForScope(scope,data)}`;
     const periodLabel=`${displayDate(from)} - ${displayDate(to)}`;
-    const bytes=await createLedgerReportPdf({agencyName:data.agencyName,from,to,periodLabel,city,ownership,accountLabel,entries,ownerView:scope.type==="owner"});
+    const bytes=await createLedgerReportPdf({agencyName:data.agencyName,agencyAddress:data.agencyContact.address,agencyPhone:data.agencyContact.phone,from,to,periodLabel,city,ownership,accountLabel,entries,openingResult,ownerView:scope.type==="owner"});
     const fileName=`viberent-${slug(accountLabel)}-${from}-to-${to}.pdf`;
     return new Response(new Uint8Array(bytes),{headers:{"content-type":"application/pdf","content-disposition":`attachment; filename="${fileName}"`,"cache-control":"private, no-store"}});
   }catch(error){
@@ -54,13 +60,6 @@ function labelForScope(scope:LedgerScope,data:Awaited<ReturnType<typeof getRepor
   if(scope.type==="owner")return `Owner ledger - ${data.ledgerAccounts.owners.find(item=>item.id===scope.ownerId)?.label??"Owner"}`;
   if(scope.vehicleIds.length===1)return `Vehicle ledger - ${data.ledgerAccounts.vehicles.find(item=>item.id===scope.vehicleIds[0])?.label??"Vehicle"}`;
   return `Vehicle ledger - ${scope.vehicleIds.length} selected vehicles`;
-}
-
-function filterEntries(entries:ReturnType<typeof buildLedgerEntries>,entry:string,ownerView:boolean){
-  if(entry==="income")return entries.filter(row=>ownerView?row.kind==="Owner share":row.income!==0);
-  if(entry==="expense")return entries.filter(row=>row.kind==="Expense");
-  if(entry==="owner-payment")return entries.filter(row=>["Owner settlement","Source settlement"].includes(row.kind));
-  return entries;
 }
 
 function entryLabel(entry:string){

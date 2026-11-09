@@ -38,6 +38,7 @@ const tables: TableSpec[] = [
   { name: "rental_inspections", tenantColumn: "agency_id", conflictKey: "id" },
   { name: "recurring_expenses", tenantColumn: "agency_id", conflictKey: "id" },
   { name: "expenses", tenantColumn: "agency_id", conflictKey: "id" },
+  { name: "expense_recoveries", tenantColumn: "agency_id", conflictKey: "id" },
   { name: "vehicle_service_records", tenantColumn: "agency_id", conflictKey: "id" },
   { name: "financial_transactions", tenantColumn: "agency_id", conflictKey: "id" },
   { name: "owner_payouts", tenantColumn: "agency_id", conflictKey: "id" },

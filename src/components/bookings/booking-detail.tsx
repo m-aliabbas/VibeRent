@@ -54,6 +54,7 @@ export function BookingDetail({initial,vehicles}:{initial:BookingListItem;vehicl
     </section>
     <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">{[["Booking total",formatPkr(total)],["Paid",formatPkr(booking.paid)],balance<0?["Customer credit",formatPkr(-balance)]:["Balance",formatPkr(balance)],["Deposit",formatPkr(booking.deposit)]].map(([label,value])=><div key={label} className="rounded-xl border border-[#E8ECF2] bg-white p-4"><p className="text-xs text-[#667085]">{label}</p><p className="mt-2 text-lg font-bold">{value}</p></div>)}</section>
     <div className="flex flex-wrap justify-end gap-2">{financePurpose==="default"&&<Button size="sm" variant="secondary" onClick={()=>setMode("edit-amounts")}><Pencil size={15}/>Edit amounts</Button>}<BookingFinance bookingId={booking.id} customer={booking.customer} balance={balance} depositHeld={booking.depositHeld ?? 0} transactions={booking.transactions ?? []} purpose={financePurpose} onChanged={(updated,message)=>{setBooking(updated);setNotice(message)}}/></div>
+    {booking.rentalMode==="with_driver"&&financePurpose==="default"&&<WithDriverExtras booking={booking} onChanged={updated=>{setBooking(updated);setNotice("Booking extra added. You can record a payment above.")}}/>}
     <div className="grid gap-5 lg:grid-cols-2">
       <DetailPanel title="Reservation"><dl className="grid grid-cols-2 gap-4 text-sm"><Fact label="Pickup" value={formatDate(booking.pickupAt)}/><Fact label="Return" value={formatDate(booking.returnAt)}/><Fact label="Current branch" value={booking.city}/><Fact label="Going to" value={booking.destinationCity}/><Fact label="Daily rate" value={formatPkr(booking.dailyRate)}/><Fact label="Mileage pricing" value={booking.mileageRate?`${formatPkr(booking.mileageRate)}/km · ${booking.estimatedKm} km estimated`:"Not applied"}/><Fact label="Notes" value={booking.notes||"None"}/></dl></DetailPanel>
       <DetailPanel title="Readiness"><div className="space-y-3">{[["Customer identity","Verified"],["Driving license","Valid on file"],["Deposit",booking.paid>=booking.deposit?"Received":`${formatPkr(Math.max(0,booking.deposit-booking.paid))} still required`],["Vehicle availability","Reserved for this booking"]].map(([label,value],index)=><div key={label} className="flex gap-3 rounded-lg bg-[#F8FAFC] p-3"><span className={index===2&&booking.paid<booking.deposit?"text-[#B54708]":"text-[#067647]"}>{index===2?<CreditCard size={17}/>:<ShieldCheck size={17}/>}</span><div><p className="text-xs text-[#667085]">{label}</p><p className="text-sm font-semibold">{value}</p></div></div>)}</div></DetailPanel>
@@ -75,6 +76,24 @@ export function BookingDetail({initial,vehicles}:{initial:BookingListItem;vehicl
     {mode==="source-payout"&&<SourcePayoutDialog booking={booking} onClose={()=>setMode(undefined)} onSave={next=>{setBooking(next);setMode(undefined);setNotice("Source payment posted to the rental ledger.")}}/>}
     {mode==="delete"&&<DeleteBookingDialog booking={booking} onClose={()=>setMode(undefined)} onChanged={(updated,message)=>{setBooking(updated);setNotice(message)}} onDeleted={()=>{router.push("/bookings");router.refresh()}}/>}
   </div>;
+}
+
+function WithDriverExtras({booking,onChanged}:{booking:BookingListItem;onChanged:(updated:BookingListItem)=>void}){
+  const [amount,setAmount]=useState("");
+  const [description,setDescription]=useState("");
+  const [pending,setPending]=useState(false);
+  const [error,setError]=useState("");
+  const value=Number(amount);
+  const valid=amount.trim()!==""&&Number.isSafeInteger(value)&&value>0&&description.trim().length>=5;
+  async function add(){
+    if(!valid||pending)return;
+    setPending(true);setError("");
+    const result=await editBookingAmountsAction(booking.id,{total:booking.totalAmount+value,paid:booking.paid,reason:`Booking extra: ${description.trim()}`,version:booking.version});
+    setPending(false);
+    if(!result.ok){setError(result.error.message);return}
+    setAmount("");setDescription("");onChanged(result.data);
+  }
+  return <section className="rounded-xl border border-[#E8ECF2] bg-white p-4 sm:p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="font-bold">Booking extras</h2><p className="mt-1 text-xs text-[#667085]">Add a with-driver charge to this booking, then use Record payment above to collect it.</p></div><span className="rounded-lg bg-[#F8FAFC] px-3 py-2 text-sm font-semibold">Extras {formatPkr(booking.extras)}</span></div><div className="mt-4 grid gap-3 sm:grid-cols-[180px_1fr_auto] sm:items-end"><FormInput label="Extra amount (PKR)" type="number" min={1} step={1} value={amount} onChange={event=>setAmount(event.target.value)} placeholder="0"/><FormInput label="What is this extra for?" value={description} onChange={event=>setDescription(event.target.value)} placeholder="e.g. additional driver hours"/><Button disabled={!valid||pending} onClick={()=>void add()}>{pending?"Adding…":"Add extra"}</Button></div>{error&&<p role="alert" className="mt-3 text-sm text-[#B42318]">{error}</p>}</section>;
 }
 
 function EditAmountsDialog({booking,onClose,onSave}:{booking:BookingListItem;onClose:()=>void;onSave:(next:BookingListItem)=>void}) {

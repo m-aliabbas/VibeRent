@@ -1,7 +1,7 @@
 "use server";
 import { getWebRequestContext } from "@/server/auth/session";
 import { asDomainError } from "@/server/domain/errors";
-import { createExpense, getExpenseWorkspace, transitionExpense, updateExpense } from "@/server/services/expense-service";
+import { createExpense, getExpenseWorkspace, recordExpenseRecovery, reverseExpenseRecovery, transitionExpense, updateExpense } from "@/server/services/expense-service";
 import { notices, withNotices } from "@/server/notifications/notices";
 import type { CreateExpenseInput, ExpenseStatus } from "@/server/validation/expense";
 import { createRecurringExpense, setRecurringExpenseStatus, updateRecurringExpense, type CreateRecurringExpenseInput, type RecurringExpenseStatus, type UpdateRecurringExpenseInput } from "@/server/services/recurring-expense-service";
@@ -11,6 +11,8 @@ function failure(error:unknown){const issue=asDomainError(error);return {ok:fals
 export async function createExpenseAction(input:CreateExpenseInput){try{const context=await getWebRequestContext();const data=await withNotices(()=>createExpense(context,input),async expense=>({notificationDelivery:await notices.expense(context,"server",expense)}));return {ok:true as const,data};}catch(error){return failure(error)}}
 export async function updateExpenseAction(id:string,input:CreateExpenseInput){try{return {ok:true as const,data:await updateExpense(await getWebRequestContext(),id,input)};}catch(error){return failure(error)}}
 export async function transitionExpenseAction(id:string,status:ExpenseStatus){try{return {ok:true as const,data:await transitionExpense(await getWebRequestContext(),id,status)};}catch(error){return failure(error)}}
+export async function recordExpenseRecoveryAction(id:string,input:{amount:number;receivedOn:string;source:string;method:string;reference:string;note:string;idempotencyKey:string}){try{const data=await recordExpenseRecovery(await getWebRequestContext(),id,input);revalidatePath("/reports");return {ok:true as const,data};}catch(error){return failure(error)}}
+export async function reverseExpenseRecoveryAction(id:string,recoveryId:string){try{const data=await reverseExpenseRecovery(await getWebRequestContext(),id,recoveryId);revalidatePath("/reports");return {ok:true as const,data};}catch(error){return failure(error)}}
 export async function getExpenseWorkspaceAction(){try{return {ok:true as const,data:await getExpenseWorkspace(await getWebRequestContext())};}catch(error){return failure(error)}}
 
 function revalidateRecurring(vehicleId?:string|null){revalidatePath("/expenses");revalidatePath("/");revalidatePath("/reports");if(vehicleId)revalidatePath(`/vehicles/${vehicleId}`);}
