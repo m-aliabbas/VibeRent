@@ -67,11 +67,11 @@ async function insertDelivery(agencyId: string, requestedBy: string | null, mode
       const existing = await queryOne<{ id: string; status: NotificationStatus }>("SELECT id,status FROM notification_deliveries WHERE agency_id=? AND idempotency_key=? LIMIT 1", [agencyId, idempotencyKey]);
       return existing?.status === "sent"
         ? { status: "skipped", message: `${kind.label} was already sent on WhatsApp.`, deliveryId: existing.id }
-        : { status: "queued", message: `${kind.label} is being sent on WhatsApp.`, deliveryId: existing?.id };
+        : { status: "queued", message: await queuedMessage(agencyId, kind.label), deliveryId: existing?.id };
     }
     if (mode === "client") return { status: "skipped", message: `${kind.label} was not sent by VibeRent. Share it from the device.`, deliveryId: id };
     await enqueueJob("notify.render", { deliveryId: id }, { singletonKey: id });
-    return { status: "queued", message: `${kind.label} is being sent on WhatsApp.`, deliveryId: id };
+    return { status: "queued", message: await queuedMessage(agencyId, kind.label), deliveryId: id };
   }, { immediate: true });
 }
 
@@ -127,4 +127,12 @@ function toDto(row: NotificationDeliveryRow): NotificationDeliveryDto {
     attempts: row.attempts, lastErrorCode: row.lastErrorCode, documentUrl: row.documentFileId ? `/api/v1/files/${row.documentFileId}` : null,
     sentAt: row.sentAt, createdAt: row.createdAt, updatedAt: row.updatedAt,
   };
+}
+
+/** Say "being sent" only when WhatsApp is actually connected; otherwise be honest that it is waiting. */
+async function queuedMessage(agencyId: string, label: string) {
+  const session = await queryOne<{ status: string }>("SELECT status FROM whatsapp_sessions WHERE agency_id=? LIMIT 1", [agencyId]);
+  return session?.status === "connected"
+    ? `${label} is being sent on WhatsApp.`
+    : `${label} is waiting: WhatsApp is not connected. Connect it on the WhatsApp page to send.`;
 }

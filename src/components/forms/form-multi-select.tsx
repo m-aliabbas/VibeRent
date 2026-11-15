@@ -89,7 +89,7 @@ export function FormMultiSelect({
             setOpen(true);
           }
         }}
-        className="flex h-11 w-full items-center justify-between gap-3 rounded-[9px] border border-[#D0D5DD] bg-white px-3 text-left text-sm outline-none transition-colors hover:border-[#98A2B3] focus:border-[#006FE6] focus:ring-2 focus:ring-[#006FE6]/10 disabled:cursor-not-allowed disabled:bg-[#F2F4F7] disabled:text-[#98A2B3]"
+        className="flex h-11 w-full items-center justify-between gap-3 rounded-[9px] border border-[#D0D5DD] bg-white px-3 text-left text-sm outline-none transition-colors hover:border-[#98A2B3] focus:border-[#006FE6] focus:ring-2 focus:ring-[#006FE6]/10 disabled:cursor-not-allowed disabled:bg-[#F2F4F7] disabled:text-[#667085]"
       >
         <span className={`min-w-0 truncate ${selectedOptions.length ? "font-medium text-[#19191F]" : "text-[#667085]"}`}>{summary}</span>
         <span className="flex shrink-0 items-center gap-1.5">
@@ -111,7 +111,7 @@ export function FormMultiSelect({
                 onKeyDown={event => event.key === "Escape" && setOpen(false)}
                 placeholder={searchPlaceholder}
                 aria-label={searchPlaceholder}
-                className="h-10 w-full rounded-lg border border-[#D0D5DD] bg-white pl-9 pr-8 text-sm outline-none placeholder:text-[#98A2B3] focus:border-[#006FE6] focus:ring-2 focus:ring-[#006FE6]/10"
+                className="h-10 w-full rounded-lg border border-[#D0D5DD] bg-white pl-9 pr-8 text-sm outline-none placeholder:text-[#667085] focus:border-[#006FE6] focus:ring-2 focus:ring-[#006FE6]/10"
               />
               {query && <button type="button" aria-label="Clear search" onClick={() => setQuery("")} className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-[#667085] hover:bg-[#F2F4F7]"><X size={14} /></button>}
             </div>

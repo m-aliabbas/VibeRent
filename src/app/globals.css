@@ -125,3 +125,23 @@ button, a { -webkit-tap-highlight-color: transparent; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
 }
+
+/* Keyboard focus is always visible (WCAG 2.4.7). Components may refine it. */
+@layer base {
+  :where(a, button, [role="button"], [role="radio"], [role="tab"], [role="menuitem"], [tabindex]:not([tabindex="-1"]), summary):focus-visible {
+    outline: 2px solid #006FE6;
+    outline-offset: 2px;
+  }
+  :where(input, select, textarea):focus-visible {
+    outline: 2px solid rgb(0 111 230 / 0.35);
+    outline-offset: 0;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+  }
+}
+
+/* Tailwind v4 draws a bare `border` in currentColor (black). Default every border to the neutral line colour. */
+@layer base {
+  *, ::before, ::after, ::backdrop { border-color: #E4E7EC; }
+}

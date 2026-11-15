@@ -129,7 +129,7 @@ export const paymentReceiptCounters = sqliteTable("payment_receipt_counters", {
   agencyId:text("agency_id").primaryKey().references(()=>agencies.id,{onDelete:"cascade"}), nextNumber:integer("next_number").notNull().default(1), ...timestamps,
 });
 export const whatsappSettings = sqliteTable("whatsapp_settings", {
-  agencyId:text("agency_id").primaryKey().references(()=>agencies.id,{onDelete:"cascade"}), sessionId:text("session_id").notNull().unique(), ownerPhoneNormalized:text("owner_phone_normalized"), listeningEnabled:integer("listening_enabled",{mode:"boolean"}).notNull().default(false), ...timestamps,
+  agencyId:text("agency_id").primaryKey().references(()=>agencies.id,{onDelete:"cascade"}), sessionId:text("session_id").notNull().unique(), ownerPhoneNormalized:text("owner_phone_normalized"), listeningEnabled:integer("listening_enabled",{mode:"boolean"}).notNull().default(false), monthEndStatements:integer("month_end_statements",{mode:"boolean"}).notNull().default(false), ...timestamps,
 });
 export const bookingDrafts = sqliteTable("booking_drafts", {
   id:text("id").primaryKey(), agencyId:text("agency_id").notNull().references(()=>agencies.id,{onDelete:"cascade"}), actorId:text("actor_id").notNull().references(()=>users.id), publicNumber:integer("public_number").notNull(), status:text("status",{enum:["active","consumed","expired"]}).notNull().default("active"), expiresAt:text("expires_at").notNull(), consumedAt:text("consumed_at"), ...timestamps,

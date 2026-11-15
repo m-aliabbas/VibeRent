@@ -71,14 +71,14 @@ export function OilChangePanel({ vehicleId, vehicleLabel, archived, onChanged }:
       </div>
       <Fact icon={<Gauge size={16} />} label="Latest odometer" value={overview.currentOdometer !== undefined ? km(overview.currentOdometer) : "Not recorded"} detail="From check-outs, check-ins and oil changes" />
       <div className="rounded-[10px] border border-[#EAECF0] p-4">
-        <div className="flex items-center justify-between gap-2"><p className="text-xs text-[#667085]">Change every</p><button type="button" disabled={archived} onClick={() => setEditingInterval(true)} className="inline-flex min-h-8 items-center gap-1 rounded-md px-2 text-xs font-semibold text-[#006FE6] hover:bg-[#EFF8FF] disabled:text-[#98A2B3]"><Pencil size={13} />Edit</button></div>
+        <div className="flex items-center justify-between gap-2"><p className="text-xs text-[#667085]">Change every</p><button type="button" disabled={archived} onClick={() => setEditingInterval(true)} className="inline-flex min-h-8 items-center gap-1 rounded-md px-2 text-xs font-semibold text-[#006FE6] hover:bg-[#EFF8FF] disabled:text-[#667085]"><Pencil size={13} />Edit</button></div>
         <p className="mt-2 text-lg font-bold">{km(overview.intervalKm)}</p>
       </div>
     </div>
     <h3 className="mt-6 text-sm font-bold text-[#344054]">History</h3>
     {overview.history.length ? <div className="mt-3 space-y-2">{overview.history.map((item, index) => <div key={item.id} className="grid gap-2 rounded-[10px] border border-[#EAECF0] p-4 sm:grid-cols-[110px_1fr_auto_auto] sm:items-center">
       <p className="text-xs text-[#667085]">{formatDay(item.servicedOn)}</p>
-      <div className="min-w-0"><p className="text-sm font-semibold">{km(item.odometer)} · {item.workshop}{index === 0 && <span className="ml-2 rounded-full bg-[#EFF8FF] px-2 py-0.5 text-[11px] font-semibold text-[#175CD3]">Latest</span>}</p><p className="mt-0.5 text-xs text-[#667085]">{[item.notes, item.expenseId ? `Expense ${item.expenseId}` : "", item.recordedBy ? `by ${item.recordedBy}` : ""].filter(Boolean).join(" · ") || "No notes"}</p></div>
+      <div className="min-w-0"><p className="text-sm font-semibold">{km(item.odometer)} · {item.workshop}{index === 0 && <span className="ml-2 rounded-full bg-[#EFF8FF] px-2 py-0.5 text-xs font-semibold text-[#175CD3]">Latest</span>}</p><p className="mt-0.5 text-xs text-[#667085]">{[item.notes, item.expenseId ? `Expense ${item.expenseId}` : "", item.recordedBy ? `by ${item.recordedBy}` : ""].filter(Boolean).join(" · ") || "No notes"}</p></div>
       <p className="text-sm font-bold">{item.cost ? formatPkr(item.cost) : "No cost"}</p>
       <Button size="sm" variant="ghost" aria-label={`Remove oil change at ${km(item.odometer)}`} onClick={() => setRemoving(item)}><Trash2 size={15} />Remove</Button>
     </div>)}</div> : <div className="mt-3 rounded-[10px] border border-dashed p-8 text-center text-sm text-[#667085]">No oil changes recorded for {vehicleLabel} yet.</div>}

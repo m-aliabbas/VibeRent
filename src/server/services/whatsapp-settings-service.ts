@@ -1,4 +1,6 @@
 import "server-only";
+import { randomUUID } from "node:crypto";
+import { queueMonthEndStatements } from "@/server/notifications/month-end-statements";
 
 import QRCode from "qrcode";
 import { execute, inTransaction, queryOne } from "@/db/query";
@@ -19,7 +21,7 @@ export type WhatsAppRuntimeSnapshot = {
 };
 type SettingsRow={sessionId:string;ownerNumber:string|null;listeningEnabled:number};
 type SessionRow={desiredState:"connected"|"disconnected";status:string;qrPayload:string|null;qrUpdatedAt:string|null;linkedJid:string|null;lastError:string|null;heartbeatAt:string|null;updatedAt:string};
-export type WhatsAppSettingsDto={ownerNumber:string;listeningEnabled:boolean;sessionId:string;runtime:WhatsAppRuntimeSnapshot};
+export type WhatsAppSettingsDto={ownerNumber:string;listeningEnabled:boolean;monthEndStatements:boolean;sessionId:string;runtime:WhatsAppRuntimeSnapshot};
 
 /** A gateway that stopped refreshing its heartbeat for this long is treated as offline. */
 const gatewayOfflineAfterMs=60_000;
@@ -29,7 +31,7 @@ const statuses:WhatsAppConnectionStatus[]=["idle","connecting","connected","disc
 
 function requireOwner(context:RequestContext){requireRole(context,["agency_owner"]);}
 function sessionId(agencyId:string){return `agency-${agencyId.replace(/[^a-z0-9_-]/gi,"_").slice(0,80)}`;}
-function readRow(agencyId:string){return queryOne<SettingsRow>("SELECT session_id AS sessionId,owner_phone_normalized AS ownerNumber,listening_enabled AS listeningEnabled FROM whatsapp_settings WHERE agency_id=? LIMIT 1",[agencyId]);}
+function readRow(agencyId:string){return queryOne<SettingsRow&{monthEndStatements?:number|boolean|null}>("SELECT session_id AS sessionId,owner_phone_normalized AS ownerNumber,listening_enabled AS listeningEnabled,month_end_statements AS monthEndStatements FROM whatsapp_settings WHERE agency_id=? LIMIT 1",[agencyId]);}
 function readSession(agencyId:string){return queryOne<SessionRow>("SELECT desired_state AS desiredState,status,qr_payload AS qrPayload,qr_updated_at AS qrUpdatedAt,linked_jid AS linkedJid,last_error AS lastError,heartbeat_at AS heartbeatAt,updated_at AS updatedAt FROM whatsapp_sessions WHERE agency_id=? LIMIT 1",[agencyId]);}
 
 /** The connection as reported by the WhatsApp gateway, read from the database by any web replica. */
@@ -51,7 +53,7 @@ export async function getWhatsAppSettings(context:RequestContext):Promise<WhatsA
   const id=row?.sessionId??sessionId(context.agencyId);
   const canManage=context.roles.includes("agency_owner");
   const runtime=await runtimeSnapshot(context.agencyId,row);
-  return {ownerNumber:canManage?row?.ownerNumber??"":"",listeningEnabled:Boolean(row?.listeningEnabled),sessionId:id,runtime:canManage?runtime:{...runtime,qrDataUrl:null,linkedJid:null,ownerNumber:null,lastError:null}};
+  return {ownerNumber:canManage?row?.ownerNumber??"":"",listeningEnabled:Boolean(row?.listeningEnabled),monthEndStatements:Boolean(row?.monthEndStatements),sessionId:id,runtime:canManage?runtime:{...runtime,qrDataUrl:null,linkedJid:null,ownerNumber:null,lastError:null}};
 }
 
 /** The gateway picks up a new owner number or listening switch on its next reconcile pass (within seconds). */
@@ -100,4 +102,22 @@ async function requestSessionChange(context:RequestContext,desiredState:"connect
     await execute(`INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (lower(hex(randomblob(16))),?,?,?,?,?,?,?)`,[context.agencyId,context.userId,`whatsapp.${action}_requested`,"agency",context.agencyId,JSON.stringify({sessionId:id}),now]);
     await enqueueJob("wa.control",{agencyId:context.agencyId,action},{singletonKey:`${context.agencyId}:${action}`});
   },{immediate:true});
+}
+
+/** Turns the month-end statement run on or off for this agency (sent on the 1st for the month that closed). */
+export async function saveMonthEndStatements(context:RequestContext,enabled:boolean){
+  requireOwner(context);
+  const id=sessionId(context.agencyId);const now=new Date().toISOString();
+  await inTransaction(async ()=>{
+    await execute(`INSERT INTO whatsapp_settings (agency_id,session_id,listening_enabled,month_end_statements,created_at,updated_at) VALUES (?,?,0,?,?,?)
+      ON CONFLICT(agency_id) DO UPDATE SET month_end_statements=excluded.month_end_statements,updated_at=excluded.updated_at`,[context.agencyId,id,enabled?1:0,now,now]);
+    await execute(`INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)`,[randomUUID(),context.agencyId,context.userId,"whatsapp.month_end_statements_updated","agency",context.agencyId,JSON.stringify({enabled}),now]);
+  },{immediate:true});
+  return getWhatsAppSettings(context);
+}
+
+/** Queues last month's statement to every customer with a balance right now (same keys as the scheduled run, so nobody gets it twice). */
+export async function sendMonthEndStatementsNow(context:RequestContext){
+  requireRole(context,["agency_owner","accountant"]);
+  return {queued:await queueMonthEndStatements(new Date(),context.agencyId)};
 }

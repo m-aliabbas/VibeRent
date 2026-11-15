@@ -1,5 +1,6 @@
 import "server-only";
 
+import { withAgencyInstants } from "@/server/context/agency-time-zone";
 import { randomUUID } from "node:crypto";
 import { execute, inTransaction, queryOne } from "@/db/query";
 import { requireRole } from "@/server/auth/authorize";
@@ -46,7 +47,7 @@ export async function recordDatedLedgerEntry(context: RequestContext, input: Dat
 
 export async function recordLegacyBooking(context: RequestContext, raw: LegacyBookingInput) {
   requireRole(context, ["agency_owner", "fleet_manager", "rental_agent"]);
-  const input = raw as Partial<LegacyBookingInput> | null;
+  const input = await withAgencyInstants(context.agencyId, raw as Partial<LegacyBookingInput> | null, ["pickupAt", "returnAt"]);
   const errors: Record<string, string> = {};
   if (!input?.vehicleId) errors.vehicleId = "Select a vehicle.";
   if (!input?.customerId) errors.customerId = "Select a customer.";

@@ -1,5 +1,6 @@
 "use client";
 
+import { formatInZone } from "@/lib/timezone";
 import * as Dialog from "@radix-ui/react-dialog";
 import Link from "next/link";
 import Image from "next/image";
@@ -10,11 +11,9 @@ import {
   ArrowRightLeft,
   CalendarPlus,
   Camera,
-  CarFront,
   CircleDollarSign,
   FileCheck2,
   FileText,
-  Gauge,
   MapPin,
   Pencil,
   Plus,
@@ -39,6 +38,10 @@ import { ExpenseDialog, type RecurringSaveResult } from "@/components/expenses/e
 import { RecurringExpenseList } from "@/components/expenses/recurring-expenses";
 import { FormInput } from "@/components/forms/form-controls";
 import { Button } from "@/components/ui/button";
+import { Kbd } from "@/components/ui/kbd";
+import { OverflowMenu } from "@/components/shared/action-menu";
+import { useHotkey } from "@/lib/hotkeys";
+import type React from "react";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { InlineError } from "@/components/shared/inline-error";
 import { LoadingState } from "@/components/shared/loading-state";
@@ -232,6 +235,7 @@ export function VehicleWorkspace({ vehicleId, canDeleteHistory }: { vehicleId: s
   };
   const removeVehicle=async(deleteHistory:boolean)=>{if(!vehicle)return;setDeletePending(true);const result=await deleteVehicleAction(vehicle.id,deleteHistory);setDeletePending(false);if(result.ok){router.push("/vehicles");router.refresh()}else{setNotice(result.error.message);setDeleting(false)}};
 
+  const bookable = ["Available", "Booked"].includes(vehicle.status);
   return (
     <div className="space-y-6">
       <Toast message={notice} onDismiss={() => setNotice("")} />
@@ -244,9 +248,6 @@ export function VehicleWorkspace({ vehicleId, canDeleteHistory }: { vehicleId: s
       </Link>
       <section className="flex flex-col gap-5 rounded-xl border border-[#E8ECF2] bg-white p-5 shadow-[0_1px_2px_rgba(16,24,40,.03)] sm:flex-row sm:items-center sm:justify-between">
         <div className="flex min-w-0 items-center gap-4">
-          <span className="grid h-14 w-14 shrink-0 place-items-center rounded-xl bg-[#EAF4FF] text-[#006FE6]">
-            <CarFront size={27} />
-          </span>
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="text-2xl font-bold tracking-[-.03em]">
@@ -256,7 +257,7 @@ export function VehicleWorkspace({ vehicleId, canDeleteHistory }: { vehicleId: s
               {needsOilChange(vehicle.oilChange) && <button type="button" onClick={() => setTab("maintenance")} className="rounded-full" aria-label="Open oil change details"><OilChangeBadge summary={vehicle.oilChange} /></button>}
             </div>
             <p className="mt-1 flex flex-wrap items-center gap-x-2 text-sm text-[#667085]">
-              <strong className="text-[#344054]">{vehicle.plate}</strong>
+              <strong className="font-mono text-[#344054]">{vehicle.plate}</strong>
               <span>·</span>
               <span>
                 {vehicle.year} {vehicle.category}
@@ -269,43 +270,27 @@ export function VehicleWorkspace({ vehicleId, canDeleteHistory }: { vehicleId: s
             </p>
           </div>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Button asChild variant="secondary">
-            <Link href="/bookings">
-              <CalendarPlus size={17} />
-              Create booking
-            </Link>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="secondary" shortcut="e" onClick={() => setEditing(true)}>
+            <Pencil size={17} />
+            Edit
           </Button>
-          <Button variant="secondary" onClick={() => setChangingStatus(true)}>
+          <Button variant="secondary" shortcut="s" onClick={() => setChangingStatus(true)}>
             <Repeat2 size={17} />
             Change status
           </Button>
-          <Button
-            variant="secondary"
-            onClick={() => setOperation("maintenance")}
-          >
-            <Wrench size={17} />
-            Maintenance
-          </Button>
-          <Button variant="secondary" disabled={!expenseData} onClick={() => setAddingExpense(true)}>
-            <Plus size={17} />
-            Add expense
-          </Button>
-          <Button variant="secondary" onClick={() => setOperation("transfer")}>
-            <ArrowRightLeft size={17} />
-            Transfer
-          </Button>
-          <Button variant="secondary" onClick={() => setOperation("rate")}>
-            <CircleDollarSign size={17} />
-            Rate card
-          </Button>
-          <Button onClick={() => setEditing(true)}>
-            <Pencil size={17} />
-            Edit vehicle
-          </Button>
-          <Button variant="danger" onClick={()=>setDeleting(true)}>
-            <Trash2 size={17}/>
-            Delete vehicle
+          <OverflowMenu label="More vehicle actions" items={[
+            { label: "Maintenance", icon: <Wrench size={15} />, onSelect: () => setOperation("maintenance") },
+            { label: "Add expense", icon: <Plus size={15} />, onSelect: () => setAddingExpense(true), disabled: !expenseData },
+            { label: "Transfer to another city", icon: <ArrowRightLeft size={15} />, onSelect: () => setOperation("transfer") },
+            { label: "Rate card", icon: <CircleDollarSign size={15} />, onSelect: () => setOperation("rate") },
+            { label: "Delete vehicle…", icon: <Trash2 size={15} />, onSelect: () => setDeleting(true), danger: true, separatorBefore: true },
+          ]} />
+          <Button asChild shortcut="b" className={!bookable ? "pointer-events-none opacity-50" : undefined} aria-disabled={!bookable} title={!bookable ? `${vehicle.status} vehicles cannot be booked` : vehicle.status === "Booked" ? "Out now — you can reserve it for later dates" : undefined}>
+            <Link href="/bookings/new" onClick={(event) => { if (!bookable) { event.preventDefault(); return; } sessionStorage.removeItem("viberent-booking-draft"); sessionStorage.setItem("viberent-booking-draft", JSON.stringify({ vehicleId: vehicle.id, city: vehicle.city })); }}>
+              <CalendarPlus size={17} />
+              Create booking
+            </Link>
           </Button>
         </div>
       </section>
@@ -315,16 +300,10 @@ export function VehicleWorkspace({ vehicleId, canDeleteHistory }: { vehicleId: s
           role="tablist"
           aria-label="Vehicle records"
         >
-          {tabs.map((item) => (
-            <button
-              key={item.id}
-              role="tab"
-              aria-selected={tab === item.id}
-              onClick={() => setTab(item.id)}
-              className={`min-h-11 border-b-2 px-4 text-sm font-semibold ${tab === item.id ? "border-[#006FE6] text-[#006FE6]" : "border-transparent text-[#667085] hover:text-[#344054]"}`}
-            >
+          {tabs.map((item, index) => (
+            <TabButton key={item.id} combo={`alt+${index + 1}`} selected={tab === item.id} onSelect={() => setTab(item.id)}>
               {item.label}
-            </button>
+            </TabButton>
           ))}
         </div>
       </div>
@@ -332,51 +311,21 @@ export function VehicleWorkspace({ vehicleId, canDeleteHistory }: { vehicleId: s
       <VehicleDeleteDialog open={deleting} onOpenChange={setDeleting} label={`${vehicle.make} ${vehicle.model} · ${vehicle.plate}`} canDeleteHistory={canDeleteHistory} pending={deletePending} onConfirm={deleteHistory=>void removeVehicle(deleteHistory)}/>
       {tab === "overview" && (
         <div className="space-y-5">
-          <section className="rounded-xl border bg-white p-4"><h2 className="font-bold">Odometer · {vehicle.plate}</h2><p className="mt-1 text-sm text-[#667085]">Latest reading: {vehicle.lastOdometer===undefined?"Not recorded":`${vehicle.lastOdometer.toLocaleString("en-PK")} km`}</p><div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end"><div className="flex-1"><FormInput label="New reading (km)" type="number" min={vehicle.lastOdometer??0} value={odometerInput} onChange={event=>setOdometerInput(event.target.value)}/></div><Button disabled={odometerPending||!odometerInput||!Number.isSafeInteger(Number(odometerInput))||Number(odometerInput)<(vehicle.lastOdometer??0)} onClick={async()=>{setOdometerPending(true);const result=await updateVehicleOdometerAction(vehicle.id,{odometer:Number(odometerInput)});setOdometerPending(false);if(result.ok){setVehicle(current=>current?{...current,lastOdometer:result.data.odometer}:current);setOdometerInput("");setNotice("Odometer updated.")}else setNotice(result.error.message)}}>{odometerPending?"Saving…":"Update odometer"}</Button></div></section>
-          <section className="grid gap-3 md:grid-cols-2">
+          <section className="grid grid-cols-2 gap-3 lg:grid-cols-5" aria-label="Vehicle numbers">
+            <form className="col-span-2 rounded-xl border border-[#E8ECF2] bg-white p-3 lg:col-span-1" onSubmit={async event=>{event.preventDefault();if(odometerPending||!odometerInput||!Number.isSafeInteger(Number(odometerInput))||Number(odometerInput)<(vehicle.lastOdometer??0))return;setOdometerPending(true);const result=await updateVehicleOdometerAction(vehicle.id,{odometer:Number(odometerInput)});setOdometerPending(false);if(result.ok){setVehicle(current=>current?{...current,lastOdometer:result.data.odometer}:current);setOdometerInput("");setNotice("Odometer updated.")}else setNotice(result.error.message)}}>
+              <p className="text-xs font-semibold text-[#475467]">Odometer</p>
+              <p className="mt-0.5 text-lg font-bold tabular-nums">{vehicle.lastOdometer===undefined?"—":`${vehicle.lastOdometer.toLocaleString("en-PK")} km`}</p>
+              <div className="mt-1 flex gap-1"><input aria-label="New odometer reading (km)" type="number" inputMode="numeric" min={vehicle.lastOdometer??0} value={odometerInput} onChange={event=>setOdometerInput(event.target.value)} placeholder="New reading" className="h-8 min-w-0 flex-1 rounded-[6px] border border-[#D0D5DD] px-2 text-[13px] tabular-nums"/><Button type="submit" size="sm" className="h-8" disabled={odometerPending||!odometerInput||Number(odometerInput)<(vehicle.lastOdometer??0)}>{odometerPending?"…":"Save"}</Button></div>
+            </form>
             {[
-              {
-                label: "Total income",
-                month: formatPkr(periods.month.income),
-                today: formatPkr(periods.today.income),
-                lifetime: formatPkr(periods.total.income),
-                icon: CircleDollarSign,
-                iconClass: "bg-[#ECFDF3] text-[#067647]",
-              },
-              {
-                label: "Total expenses",
-                month: formatPkr(periods.month.expenses),
-                today: formatPkr(periods.today.expenses),
-                lifetime: formatPkr(periods.total.expenses),
-                icon: Gauge,
-                iconClass: "bg-[#FFF6ED] text-[#B54708]",
-              },
-            ].map(({ label, month, today, lifetime, icon: Icon, iconClass }) => (
-              <button
-                type="button"
-                key={label}
-                onClick={() => setTab(label === "Total income" ? "income" : "expenses")}
-                className="rounded-xl border border-[#E8ECF2] bg-white p-4 text-left transition hover:border-[#84CAFF] hover:shadow-sm focus:outline-2 focus:outline-[#006FE6] sm:p-5"
-              >
-                <div className="flex items-center gap-3">
-                  <span className={`grid h-10 w-10 place-items-center rounded-[9px] ${iconClass}`}>
-                    <Icon size={19} />
-                  </span>
-                  <p className="text-sm font-semibold text-[#344054]">{label}</p>
-                </div>
-                <p className="mt-5 text-2xl font-bold tabular-nums text-[#19191F]">{month}</p>
-                <p className="mt-1 text-xs font-medium text-[#667085]">This month</p>
-                <div className="mt-4 grid grid-cols-2 divide-x divide-[#EAECF0] border-t border-[#EAECF0] pt-4">
-                  <div className="pr-3">
-                    <p className="text-sm font-bold tabular-nums text-[#344054]">{today}</p>
-                    <p className="mt-1 text-xs text-[#667085]">Today</p>
-                  </div>
-                  <div className="pl-4">
-                    <p className="text-sm font-bold tabular-nums text-[#344054]">{lifetime}</p>
-                    <p className="mt-1 text-xs text-[#667085]">All time</p>
-                  </div>
-                </div>
-                <span className="mt-4 inline-flex text-xs font-semibold text-[#006FE6]">View details →</span>
+              ["Income this month", formatPkr(periods.month.income), "income"],
+              ["Income all time", formatPkr(periods.total.income), "income"],
+              ["Expenses this month", formatPkr(periods.month.expenses), "expenses"],
+              ["Expenses all time", formatPkr(periods.total.expenses), "expenses"],
+            ].map(([label, value, target]) => (
+              <button type="button" key={label} onClick={() => setTab(target as typeof tab)} className="rounded-xl border border-[#E8ECF2] bg-white p-3 text-left hover:border-[#84CAFF]">
+                <p className="text-xs font-semibold text-[#475467]">{label}</p>
+                <p className="mt-0.5 text-lg font-bold tabular-nums">{value}</p>
               </button>
             ))}
           </section>
@@ -591,10 +540,7 @@ export function VehicleWorkspace({ vehicleId, canDeleteHistory }: { vehicleId: s
                 id: event.id,
                 title: `${event.from} → ${event.to}`,
                 detail: `${event.reason}${event.notes ? ` · ${event.notes}` : ""} · ${event.actor}`,
-                time: new Intl.DateTimeFormat("en-PK", {
-                  dateStyle: "medium",
-                  timeStyle: "short",
-                }).format(new Date(event.effectiveAt)),
+                time: formatInZone(event.effectiveAt, { dateStyle: "medium", timeStyle: "short" }),
                 icon: <Repeat2 size={16} />,
               })),
               ...vehicleActivity.map((item, index) => ({
@@ -663,12 +609,12 @@ export function VehicleWorkspace({ vehicleId, canDeleteHistory }: { vehicleId: s
 }
 
 function FinanceFact({label,value}:{label:string;value:string}) {
-  return <span><span className="block text-[10px] font-medium uppercase tracking-wide text-[#98A2B3]">{label}</span><strong className="mt-1 block whitespace-nowrap text-xs tabular-nums text-[#344054]">{value}</strong></span>;
+  return <span><span className="block text-xs font-medium uppercase tracking-wide text-[#667085]">{label}</span><strong className="mt-1 block whitespace-nowrap text-xs tabular-nums text-[#344054]">{value}</strong></span>;
 }
 
 function TransactionRow({item}:{item:VehicleFinanceSummary["recentTransactions"][number]}) {
   const negative = ["refund","reversal","deposit_refunded"].includes(item.kind.toLowerCase());
-  return <Link href={`/bookings/${item.bookingId}`} className="grid gap-2 rounded-[10px] border border-[#EAECF0] p-3 hover:border-[#84CAFF] hover:bg-[#FAFCFF] sm:grid-cols-[1fr_auto] sm:items-center"><span className="min-w-0"><strong className="block truncate text-sm capitalize">{item.kind.replaceAll("_"," ")} · {item.customer}</strong><span className="mt-1 block truncate text-xs text-[#667085]">Booked {formatShortDate(item.bookingStart ?? item.postedAt)} · {item.bookingId} · {item.method} · {item.reference} · received {formatShortDate(item.postedAt)}</span></span><span className="flex items-center gap-2"><StatusBadge status={item.status}/><strong className={`text-sm tabular-nums ${negative?"text-[#B42318]":"text-[#067647]"}`}>{negative?"−":"+"}{formatPkr(item.amount)}</strong></span></Link>;
+  return <Link href={`/bookings/${item.bookingId}`} className="grid gap-2 rounded-[8px] border border-[#EAECF0] px-3 py-2 hover:border-[#84CAFF] hover:bg-[#FAFCFF] sm:grid-cols-[1fr_auto] sm:items-center"><span className="min-w-0"><strong className="block truncate text-sm capitalize">{item.kind.replaceAll("_"," ")} · {item.customer}</strong><span className="mt-0.5 block truncate text-xs text-[#475467]">Received {formatShortDate(item.postedAt)} · {item.method}</span></span><span className="flex items-center gap-2">{item.status!=="posted"&&<StatusBadge status={item.status}/>}<strong className={`text-sm tabular-nums ${negative?"text-[#B42318]":"text-[#067647]"}`}>{negative?"−":"+"}{formatPkr(item.amount)}</strong></span></Link>;
 }
 
 function VehicleBlockDialog({selection,vehicle,onClose,onSaved}:{selection:CalendarSelection;vehicle:Vehicle;onClose:()=>void;onSaved:(block:VehicleFinanceSummary["availabilityBlocks"][number])=>void}) {
@@ -687,7 +633,7 @@ function VehicleBlockDialog({selection,vehicle,onClose,onSaved}:{selection:Calen
   return <Dialog.Root open onOpenChange={open=>!open&&onClose()}><Dialog.Portal><Dialog.Overlay className="fixed inset-0 z-50 bg-[#101828]/45"/><Dialog.Content className="fixed inset-x-0 bottom-0 z-50 rounded-t-2xl bg-white p-5 sm:left-1/2 sm:top-1/2 sm:bottom-auto sm:max-w-lg sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-2xl"><div className="flex justify-between gap-3"><div><Dialog.Title className="font-bold">Block {vehicle.plate}</Dialog.Title><Dialog.Description className="mt-1 text-xs text-[#667085]">Reserve time for maintenance or another operational hold.</Dialog.Description></div><Dialog.Close aria-label="Close dialog" className="grid h-10 w-10 place-items-center rounded-lg"><X/></Dialog.Close></div><form onSubmit={submit} className="mt-5 space-y-4"><div className="grid gap-4 sm:grid-cols-2"><FormInput label="From" type="datetime-local" value={from} onChange={event=>setFrom(event.target.value)} required/><FormInput label="To" type="datetime-local" value={to} onChange={event=>setTo(event.target.value)} required/></div><FormInput label="Reason" value={reason} onChange={event=>setReason(event.target.value)} placeholder="e.g. Scheduled service" required/>{error&&<div role="alert" className="rounded-lg border border-[#FDA29B] bg-[#FEF3F2] p-3 text-sm text-[#B42318]"><ShieldAlert size={16} className="mr-2 inline"/>{error}</div>}<div className="flex justify-end gap-2"><Button type="button" variant="secondary" disabled={pending} onClick={onClose}>Cancel</Button><Button disabled={pending||!reason.trim()||!from||!to}>{pending?"Saving…":"Create block"}</Button></div></form></Dialog.Content></Dialog.Portal></Dialog.Root>;
 }
 
-function formatShortDate(value:string){return new Intl.DateTimeFormat("en-PK",{day:"2-digit",month:"short",year:"numeric",hour:value.includes("T")?"numeric":undefined,minute:value.includes("T")?"2-digit":undefined}).format(new Date(value))}
+function formatShortDate(value:string){return value.includes("T")?formatInZone(value,{day:"2-digit",month:"short",year:"numeric",hour:"numeric",minute:"2-digit"}):new Intl.DateTimeFormat("en-PK",{day:"2-digit",month:"short",year:"numeric",timeZone:"UTC"}).format(new Date(`${value.slice(0,10)}T00:00:00Z`))}
 function toLocalInput(value:Date,hour:number){const date=new Date(value);date.setHours(hour,0,0,0);return new Date(date.getTime()-date.getTimezoneOffset()*60_000).toISOString().slice(0,16)}
 
 type StoredVehicleFile = { id:string; originalName:string; mimeType:string; size:number; classification:"vehicle_photo"|"vehicle_document"; createdAt:string; downloadUrl:string };
@@ -727,4 +673,20 @@ function VehicleAttachments({vehicle}:{vehicle:Vehicle}) {
       <p className="mt-4 text-xs leading-5 text-[#667085]">Attachments are stored outside SQLite, remain private to the signed-in agency, and download through an authorized route.</p>
     </Panel>
   </div>;
+}
+
+function TabButton({ combo, selected, onSelect, children }: { combo: string; selected: boolean; onSelect: () => void; children: React.ReactNode }) {
+  useHotkey(combo, onSelect);
+  return (
+    <button
+      role="tab"
+      aria-selected={selected}
+      aria-keyshortcuts={combo.replace("alt", "Alt")}
+      onClick={onSelect}
+      className={`group inline-flex min-h-11 items-center gap-2 border-b-2 px-4 text-sm font-semibold ${selected ? "border-[#006FE6] text-[#006FE6]" : "border-transparent text-[#475467] hover:text-[#344054]"}`}
+    >
+      {children}
+      <Kbd combo={combo} className="invisible group-hover:visible group-focus-visible:visible" />
+    </button>
+  );
 }

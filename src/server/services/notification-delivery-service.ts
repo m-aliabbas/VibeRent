@@ -1,10 +1,12 @@
 import "server-only";
 
+import { getAgencyTimeZone } from "@/server/context/agency-time-zone";
 import { queryOne } from "@/db/query";
 import type { RequestContext } from "@/server/context/request-context";
 import { createRentalAgreementPdf } from "@/server/documents/rental-agreement";
 import { createTransactionInvoice, type InvoiceLine } from "@/server/documents/transaction-invoice";
 import { renderDailyReport } from "@/server/notifications/daily-report";
+import { buildCustomerStatement, buildOwnerStatement } from "@/server/documents/statements";
 import type { NotificationDeliveryRow } from "@/server/notifications/notification-service";
 import { formatPaymentReceiptNumber } from "@/lib/payment-receipt";
 
@@ -86,7 +88,7 @@ export async function renderBookingDocument(context: RequestContext, bookingId: 
   const row = await bookingNotice(context.agencyId, bookingId);
   if (!row) return null;
   const input = kind === "checkout" ? checkoutNoticeInput(bookingId, row) : kind === "checkin" ? checkinInvoiceInput(bookingId, row) : bookingStatementInput(bookingId, row);
-  const bytes = await createTransactionInvoice({ agency: row.agency, title: input.title, reference: input.reference ?? String(row.publicNumber ?? bookingId), recipient: row.customer, issuedAt: input.issuedAt, lines: input.lines, amountLabel: input.amountLabel, amount: input.amount });
+  const bytes = await createTransactionInvoice({ timeZone: await getAgencyTimeZone(context.agencyId), agency: row.agency, title: input.title, reference: input.reference ?? String(row.publicNumber ?? bookingId), recipient: row.customer, issuedAt: input.issuedAt, lines: input.lines, amountLabel: input.amountLabel, amount: input.amount });
   return { bytes, fileName: input.fileName, caption: input.caption };
 }
 
@@ -98,6 +100,9 @@ export async function renderNotification(context: RequestContext, delivery: Noti
     case "booking.checkout_notice": return renderBookingPdf(context.agencyId, delivery.entityId, row => checkoutNoticeInput(delivery.entityId, row));
     case "booking.checkin_invoice": return renderBookingPdf(context.agencyId, delivery.entityId, row => checkinInvoiceInput(delivery.entityId, row));
     case "booking.payment_receipt": return renderBookingPdf(context.agencyId, delivery.entityId, row => paymentReceiptInput(row, payload as PaymentPayload));
+    case "customer.payment_receipt": return renderCustomerPayment(context.agencyId, delivery.entityId, payload as CustomerPaymentPayload);
+    case "customer.statement": return renderCustomerStatement(context, delivery.entityId, payload as StatementPayload);
+    case "owner.statement": return renderOwnerStatement(context, delivery.entityId, payload as StatementPayload);
     case "owner.payout_receipt": return renderOwnerPayout(context.agencyId, delivery.entityId, payload as PayoutPayload);
     case "owner.expense_notice": return renderOwnerExpenseNotice(context.agencyId, delivery.entityId);
     case "owner.command_reply": return { status: "ready", phone: String(payload.phone ?? ""), recipientName: "Owner", text: String(payload.text ?? "") };
@@ -106,6 +111,68 @@ export async function renderNotification(context: RequestContext, delivery: Noti
 }
 
 type PaymentPayload = { amount: number; method: string; reference?: string; receiptNumber: number | null };
+type CustomerPaymentPayload = { amount: number; discount: number; method: string; reference: string; allocations: Array<{ bookingId?: string; expenseId?: string; amount: number; discount?: number }> };
+type StatementPayload = { from?: string; to?: string; plate?: string; reason?: "manual" | "month_end" };
+
+async function renderCustomerPayment(agencyId: string, customerId: string, payment: CustomerPaymentPayload): Promise<RenderedNotification> {
+  const row = await queryOne<{ agency: string; customer: string; phone: string | null }>("SELECT a.name AS agency,c.name AS customer,c.phone_normalized AS phone FROM customers c JOIN agencies a ON a.id=c.agency_id WHERE c.agency_id=? AND c.id=? LIMIT 1", [agencyId, customerId]);
+  if (!row) throw new Error("The customer for this payment could not be found.");
+  if (!row.phone?.trim()) return { status: "skipped", reason: "The customer has no phone number." };
+  const bookingIds = payment.allocations.map(item => item.bookingId).filter((id): id is string => Boolean(id));
+  const numbers = new Map<string, string>();
+  for (const id of bookingIds) {
+    const booking = await queryOne<{ publicNumber: number | null; plate: string | null }>("SELECT b.public_number AS publicNumber,coalesce(b.external_vehicle_plate,v.plate) AS plate FROM bookings b LEFT JOIN vehicles v ON v.id=b.vehicle_id AND v.agency_id=b.agency_id WHERE b.agency_id=? AND b.id=? LIMIT 1", [agencyId, id]);
+    numbers.set(id, `Booking #${booking?.publicNumber ?? id}${booking?.plate ? ` · ${booking.plate}` : ""}`);
+  }
+  const balance = await customerOutstanding(agencyId, customerId);
+  const bytes = await createTransactionInvoice({
+    timeZone: await getAgencyTimeZone(agencyId), agency: row.agency, title: "Payment receipt", reference: payment.reference || "Customer payment", recipient: row.customer, issuedAt: new Date().toISOString(),
+    lines: [
+      { label: "Method", value: payment.method },
+      ...(payment.reference ? [{ label: "Reference", value: payment.reference }] : []),
+      ...payment.allocations.map(item => ({ label: item.bookingId ? numbers.get(item.bookingId) ?? "Booking" : "Other charge", value: `${money(item.amount)}${item.discount ? ` + ${money(item.discount)} discount` : ""}` })),
+      ...(payment.discount ? [{ label: "Discount given", value: money(payment.discount) }] : []),
+      { label: "Outstanding balance", value: money(Math.max(0, balance)) },
+    ],
+    amountLabel: "Payment received", amount: payment.amount,
+  });
+  return {
+    status: "ready", phone: row.phone, recipientName: row.customer,
+    document: { bytes, fileName: `payment-receipt-${new Date().toISOString().slice(0, 10)}.pdf` },
+    caption: `Payment received · ${money(payment.amount)}${payment.discount ? ` · Discount ${money(payment.discount)}` : ""} · Balance ${money(Math.max(0, balance))}`,
+  };
+}
+
+async function customerOutstanding(agencyId: string, customerId: string) {
+  const row = await queryOne<{ due: number }>(`SELECT coalesce(sum(max(0,bk.total_amount-coalesce((SELECT sum(CASE WHEN lower(ft.kind) IN ('refund','reversal','payment_adjustment_decrease') THEN -ft.amount ELSE ft.amount END) FROM financial_transactions ft WHERE ft.agency_id=bk.agency_id AND ft.booking_id=bk.id AND ft.status='posted' AND lower(ft.kind) IN ('payment','late_return_charge','deposit_applied','payment_adjustment_increase','payment_adjustment_decrease','reversal','refund')),0))),0) AS due
+    FROM bookings bk WHERE bk.agency_id=? AND bk.customer_id=? AND bk.archived_at IS NULL AND bk.status NOT IN ('draft','cancelled','no_show')`, [agencyId, customerId]);
+  return Number(row?.due ?? 0);
+}
+
+async function renderCustomerStatement(context: RequestContext, customerId: string, filters: StatementPayload): Promise<RenderedNotification> {
+  const phone = (await queryOne<{ phone: string | null }>("SELECT phone_normalized AS phone FROM customers WHERE agency_id=? AND id=? LIMIT 1", [context.agencyId, customerId]))?.phone;
+  if (!phone?.trim()) return { status: "skipped", reason: "The customer has no phone number." };
+  const statement = await buildCustomerStatement(context, customerId, filters);
+  const due = statement.closing > 0 ? `Outstanding balance: ${money(statement.closing)}` : statement.closing < 0 ? `Credit balance: ${money(-statement.closing)}` : "Your account is fully paid.";
+  return {
+    status: "ready", phone, recipientName: statement.name,
+    document: { bytes: statement.bytes, fileName: statement.fileName },
+    caption: `${filters.reason === "month_end" ? "Month-end statement" : "Account statement"} · ${statement.periodLabel}\n${due}`,
+  };
+}
+
+async function renderOwnerStatement(context: RequestContext, ownerId: string, filters: StatementPayload): Promise<RenderedNotification> {
+  if (!filters.from || !filters.to) throw new Error("The owner statement period is missing.");
+  const statement = await buildOwnerStatement(context, ownerId, { from: filters.from, to: filters.to });
+  if (!statement.phone.trim()) return { status: "skipped", reason: "The owner has no phone number." };
+  const due = statement.closing > 0 ? `Payable to you: ${money(statement.closing)}` : statement.closing < 0 ? `Owed to the agency: ${money(-statement.closing)}` : "Nothing is payable for this period.";
+  return {
+    status: "ready", phone: statement.phone, recipientName: statement.name,
+    document: { bytes: statement.bytes, fileName: statement.fileName },
+    caption: `${filters.reason === "month_end" ? "Month-end owner statement" : "Owner statement"} · ${statement.periodLabel}\n${due}`,
+  };
+}
+
 type PayoutPayload = { amount: number; method: string; reference: string; periodFrom: string; periodTo: string };
 
 async function renderAgreement(context: RequestContext, bookingId: string): Promise<RenderedNotification> {
@@ -128,7 +195,7 @@ async function renderBookingPdf(agencyId: string, bookingId: string, build: (row
   if (!row) throw new Error("The booking for this notice could not be found.");
   if (!row.phone?.trim()) return { status: "skipped", reason: "No phone number is available for the customer." };
   const input = build(row);
-  const bytes = await createTransactionInvoice({ agency: row.agency, title: input.title, reference: input.reference ?? String(row.publicNumber ?? bookingId), recipient: row.customer, issuedAt: input.issuedAt, lines: input.lines, amountLabel: input.amountLabel, amount: input.amount });
+  const bytes = await createTransactionInvoice({ timeZone: await getAgencyTimeZone(agencyId), agency: row.agency, title: input.title, reference: input.reference ?? String(row.publicNumber ?? bookingId), recipient: row.customer, issuedAt: input.issuedAt, lines: input.lines, amountLabel: input.amountLabel, amount: input.amount });
   return { status: "ready", phone: row.phone, recipientName: row.customer, document: { bytes, fileName: input.fileName }, caption: input.caption };
 }
 
@@ -159,7 +226,7 @@ async function renderOwnerPayout(agencyId: string, ownerId: string, payout: Payo
   const row = await queryOne<{ agency: string; owner: string; phone: string }>(`SELECT a.name AS agency,o.name AS owner,o.phone FROM owners o JOIN agencies a ON a.id=o.agency_id WHERE o.agency_id=? AND o.id=? LIMIT 1`,[agencyId, ownerId]);
   if (!row) throw new Error("The owner for this payout could not be found.");
   if (!row.phone?.trim()) return { status: "skipped", reason: "The owner has no phone number." };
-  const bytes = await createTransactionInvoice({
+  const bytes = await createTransactionInvoice({ timeZone: await getAgencyTimeZone(agencyId),
     agency: row.agency, title: "Owner payout receipt", reference: payout.reference, recipient: row.owner, issuedAt: new Date().toISOString(),
     lines: [
       { label: "Statement period", value: `${payout.periodFrom} to ${payout.periodTo}` },

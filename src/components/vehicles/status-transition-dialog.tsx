@@ -1,11 +1,13 @@
 "use client";
 
+import { isoToZonedInput } from "@/lib/timezone";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useMemo, useState, type FormEvent } from "react";
 import { ArrowRight, LoaderCircle, Repeat2, X } from "lucide-react";
 import { FormInput, FormSelect } from "@/components/forms/form-controls";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
+import { SegmentedControl } from "@/components/forms/segmented-control";
 import type { Vehicle, VehicleStatus } from "@/types/vehicle";
 
 const nextStates: Record<VehicleStatus, VehicleStatus[]> = {
@@ -28,9 +30,7 @@ const reasons: Record<VehicleStatus, string[]> = {
   Archived: ["Restored to fleet"],
 };
 function localDateTimeValue() {
-  const now = new Date();
-  now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
-  return now.toISOString().slice(0, 16);
+  return isoToZonedInput(new Date());
 }
 export type StatusTransitionInput = {
   to: VehicleStatus;
@@ -125,17 +125,17 @@ export function StatusTransitionDialog({
             <div className="space-y-5 px-5 py-6 sm:px-6">
               <div className="flex items-center gap-3 rounded-[10px] border border-[#EAECF0] bg-[#F8FAFC] p-4">
                 <StatusBadge status={vehicle.status} />
-                <ArrowRight size={17} className="text-[#98A2B3]" />
+                <ArrowRight size={17} className="text-[#667085]" />
                 <StatusBadge status={to} />
               </div>
-              <FormSelect
+              <SegmentedControl
                 label="New status"
                 value={to}
-                onChange={(event) => {
-                  setTo(event.target.value as VehicleStatus);
+                onChange={(value) => {
+                  setTo(value as VehicleStatus);
                   setReason("");
                 }}
-                options={options}
+                options={options.map((value) => ({ value, label: value }))}
               />
               <FormSelect
                 label="Reason"

@@ -32,6 +32,18 @@ export const notices = {
       kind: "booking.payment_receipt", entityId: bookingId, payload: payment,
       idempotencyKey: payment.receiptNumber == null ? undefined : `booking.payment_receipt:${payment.receiptNumber}`,
     }),
+  /** One receipt for a customer-level payment, however many bookings it was spread across. */
+  customerPayment: (context: RequestContext, mode: DeliveryMode, customerId: string, payment: { amount: number; discount: number; method: string; reference?: string; allocations: Array<{ bookingId?: string; expenseId?: string; amount: number; discount?: number }>; idempotencyKey: string }) =>
+    queueNotification(context, mode, {
+      kind: "customer.payment_receipt", entityId: customerId,
+      payload: { amount: payment.amount, discount: payment.discount, method: payment.method, reference: payment.reference ?? "", allocations: payment.allocations },
+      idempotencyKey: `customer.payment_receipt:${payment.idempotencyKey}`,
+    }),
+  /** Ledger PDF to a customer. `key` makes scheduled (month-end) sends run once; manual sends always queue. */
+  customerStatement: (context: RequestContext, mode: DeliveryMode, customerId: string, filters: { from?: string; to?: string; plate?: string; reason: "manual" | "month_end" }, key?: string) =>
+    queueNotification(context, mode, { kind: "customer.statement", entityId: customerId, payload: filters, idempotencyKey: key }),
+  ownerStatement: (context: RequestContext, mode: DeliveryMode, ownerId: string, filters: { from: string; to: string; reason: "manual" | "month_end" }, key?: string) =>
+    queueNotification(context, mode, { kind: "owner.statement", entityId: ownerId, payload: filters, idempotencyKey: key }),
   payout: (context: RequestContext, mode: DeliveryMode, ownerId: string, payout: { amount: number; method: string; reference: string; periodFrom: string; periodTo: string; idempotencyKey: string }) =>
     queueNotification(context, mode, {
       kind: "owner.payout_receipt", entityId: ownerId,

@@ -1,8 +1,9 @@
 "use client";
 
+import { formatInZone, toWallInput, zonedNow, zonedWallTimeToIso } from "@/lib/timezone";
 import Link from "next/link";
 import { useEffect, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
-import { ArrowLeft, CalendarClock, CarFront, Check, Loader2, MessageCircle, Pencil, Plus, Search, ShieldAlert, ShieldCheck, X } from "lucide-react";
+import { ArrowLeft, CarFront, Check, Loader2, MessageCircle, Pencil, Plus, Search, ShieldAlert, ShieldCheck, X } from "lucide-react";
 
 import { clearBookingAction, confirmBookingAction, startBookingAction } from "@/app/actions/bookings";
 import { listCustomersAction, createCustomerAction, updateCustomerAction } from "@/app/actions/customers";
@@ -19,6 +20,10 @@ import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { FormCombobox } from "@/components/forms/form-combobox";
 import { FormInput, FormSelect } from "@/components/forms/form-controls";
 import { Button } from "@/components/ui/button";
+import { Kbd } from "@/components/ui/kbd";
+import { SegmentedControl } from "@/components/forms/segmented-control";
+import { useHotkey } from "@/lib/hotkeys";
+import type React from "react";
 import { cnicExtractionKey, mergeCnicExtraction, type CnicExtractedValues, type CnicIntake } from "@/lib/cnic-intake";
 import { formatPkr } from "@/lib/utils";
 import type { Vehicle } from "@/types/vehicle";
@@ -91,13 +96,13 @@ type Draft = {
 };
 
 function defaultDraft(): Draft {
-  const now = new Date();
+  const now = zonedNow();
   const pickup = new Date(now);
   pickup.setSeconds(0, 0);
   pickup.setMinutes(Math.ceil(pickup.getMinutes() / 15) * 15);
   const returned = new Date(pickup);
   returned.setHours(23, 59, 0, 0);
-  const local = (date: Date) => new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+  const local = toWallInput;
   return {
   bookingMode:"reservation",
   checkout:{odometer:0,fuelLevel:"Full",conditionNotes:"Vehicle handed over without visible damage"},
@@ -130,23 +135,23 @@ function getConflicts(
   to: string,
   bookings: BookingListItem[],
 ): ConflictInfo[] {
-  const fromTs = new Date(from).getTime();
-  const toTs = new Date(to).getTime();
+  const fromTs = Date.parse(zonedWallTimeToIso(from));
+  const toTs = Date.parse(zonedWallTimeToIso(to));
   return bookings
     .filter(
       (b) =>
         b.vehicleId === vehicleId &&
         !["Cancelled", "No Show", "Completed"].includes(b.status) &&
         new Date(b.pickupAt).getTime() < toTs &&
-        new Date(b.returnAt).getTime() > fromTs,
+        // An overdue rental keeps the car until it is checked in.
+        Math.max(new Date(b.returnAt).getTime(), b.status === "Checked Out" ? Date.now() : 0) > fromTs,
     )
-    .map((b) => ({ bookingId: b.id, reason: `Booked ${b.pickupAt.slice(0, 10)} – ${b.returnAt.slice(0, 10)}` }));
+    .map((b) => ({ bookingId: b.id, reason: b.status === "Checked Out" && new Date(b.returnAt).getTime() < Date.now() ? `Out now, overdue since ${b.returnAt.slice(0, 10)}` : `Booked ${b.pickupAt.slice(0, 10)} – ${b.returnAt.slice(0, 10)}` }));
 }
 
 // ─── Main wizard ─────────────────────────────────────────────────────────────
 
 export function BookingWizard() {
-  const [step, setStep] = useState(0);
   const [draft, setDraft] = useState<Draft>(defaultDraft);
   const [confirmed, setConfirmed] = useState("");
   const [agreementDelivery,setAgreementDelivery]=useState<{status:"sent"|"queued"|"skipped"|"failed";message:string}>();
@@ -221,7 +226,7 @@ export function BookingWizard() {
   }, []);
 
   // Derived fleet options from live vehicle data
-  const fleetOptions: FleetOption[] = vehicles.filter((v) => v.status === "Available").map((v) => {
+  const fleetOptions: FleetOption[] = vehicles.filter((v) => v.status === "Available" || v.status === "Booked").map((v) => {
     const rule=v.rateRules?.find(item=>item.destinationCity.toLowerCase()===draft.city.toLowerCase());
     return {id:v.id,label:`${v.make} ${v.model} ${v.year}`,plate:v.plate,city:v.city,baseRate:v.dailyRate,rate:draft.rentalMode==="with_driver"?(v.withDriverRate??v.dailyRate):(rule?.dailyRate??v.dailyRate),withDriverRate:v.withDriverRate??v.dailyRate,perKmRate:draft.rentalMode==="with_driver"?0:(rule?.perKmRate??0),minimumDays:rule?.minimumDays??1,lastOdometer:v.lastOdometer};
   });
@@ -230,7 +235,6 @@ export function BookingWizard() {
   const cities = Array.from(new Set([...savedCities,...vehicles.flatMap(vehicle=>vehicle.rateRules?.map(rule=>rule.destinationCity)??[])])).sort();
 
   const vehicle = fleetOptions.find((item) => item.id === draft.vehicleId);
-  const steps=draft.bookingMode==="rent_now"?["Schedule","Vehicle","Customer","Pricing","Review","Handover"]:["Schedule","Vehicle","Customer","Pricing","Review"];
   const days = Math.max(1, Math.ceil((new Date(draft.to).getTime() - new Date(draft.from).getTime()) / 86_400_000));
   const total = draft.dailyRate * days + (vehicle?.perKmRate??0) * draft.estimatedKm + draft.extras - draft.discount;
 
@@ -240,14 +244,31 @@ export function BookingWizard() {
       conflicts: getConflicts(item.id, draft.from, draft.to, bookings),
     }));
 
-  const canContinue = [
+  const sectionValid = [
     Boolean(draft.from && draft.to && new Date(draft.to) > new Date(draft.from) && (draft.rentalMode==="self_drive"||draft.driverId)),
     draft.fulfillmentType==="external"?Boolean(draft.external.supplierName.trim()&&draft.external.supplierPhone.trim()&&draft.external.vehicleMake.trim()&&draft.external.vehicleModel.trim()&&draft.external.vehiclePlate.trim()):Boolean(vehicle && getConflicts(vehicle.id, draft.from, draft.to, bookings).length === 0),
     Boolean((draft.customerId || (draft.rentalMode==="with_driver"&&draft.renterSkipped)) && (!draft.guarantor || isGuarantorComplete(draft.guarantor))),
     draft.dailyRate > 0 && days >= (vehicle?.minimumDays??1) && draft.discount <= draft.dailyRate * days + draft.extras && (draft.fulfillmentType==="external"||draft.dailyRate === (vehicle?.rate??draft.dailyRate) || Boolean(draft.overrideReason.trim())) && (draft.fulfillmentType==="fleet"||(draft.external.pricingMode==="percentage"?draft.external.supplierSharePercent>=0&&draft.external.supplierSharePercent<=100:draft.external.supplierFixedCost>=0&&draft.external.supplierFixedCost<=total)),
     true,
     draft.bookingMode!=="rent_now"||Boolean(Number.isInteger(draft.checkout.odometer)&&draft.checkout.odometer>=0&&draft.checkout.fuelLevel&&draft.checkout.conditionNotes.trim()),
-  ][step];
+  ];
+  const sections = [
+    { id: "schedule", title: "When & how", valid: sectionValid[0], missing: "Pickup and return times" + (draft.rentalMode === "with_driver" ? " and driver" : "") },
+    { id: "vehicle", title: "Vehicle", valid: sectionValid[1], missing: draft.fulfillmentType === "external" ? "Supplier and car details" : "An available vehicle" },
+    { id: "customer", title: "Customer", valid: sectionValid[2], missing: "Customer" },
+    { id: "pricing", title: "Price", valid: sectionValid[3], missing: "Valid price (rate change needs a reason)" },
+    ...(draft.bookingMode === "rent_now" ? [{ id: "handover", title: "Handover", valid: sectionValid[5], missing: "Handover odometer, fuel and condition" }] : []),
+  ];
+  const missing = sections.filter(section => !section.valid);
+  const ready = missing.length === 0 && Boolean(bookingReference) && !submitting;
+  const scrollToSection = (id: string) => { const el = document.getElementById(`booking-${id}`); el?.scrollIntoView({ behavior: "smooth", block: "start" }); el?.querySelector<HTMLElement>("input,select,textarea,button")?.focus({ preventScroll: true }); };
+
+  // A vehicle chosen elsewhere (vehicle page, rebook) arrives without its rate: fill it once.
+  useEffect(() => {
+    if (draft.fulfillmentType === "fleet" && vehicle && draft.dailyRate === 0) {
+      queueMicrotask(() => setDraft(current => current.vehicleId === vehicle.id && current.dailyRate === 0 ? { ...current, dailyRate: vehicle.rate, checkout: { ...current.checkout, odometer: current.checkout.odometer || (vehicle.lastOdometer ?? 0) } } : current));
+    }
+  }, [draft.fulfillmentType, draft.dailyRate, vehicle]);
 
   async function confirm() {
     if ((draft.fulfillmentType==="fleet"&&!vehicle) || (!draft.customerId && !draft.renterSkipped) || !bookingReference || submitting) return;
@@ -264,8 +285,8 @@ export function BookingWizard() {
       renterSkipped:draft.renterSkipped,
       guarantor:draft.guarantor??undefined,
       destinationCity: draft.city,
-      pickupAt: draft.from,
-      returnAt: draft.to,
+      pickupAt: zonedWallTimeToIso(draft.from),
+      returnAt: zonedWallTimeToIso(draft.to),
       extras: draft.extras,
       discount: draft.discount,
       depositRequired: draft.deposit,
@@ -283,7 +304,7 @@ export function BookingWizard() {
       setSubmitError(result.error.message);
       if (result.error.code === "BOOKING_CONFLICT") {
         setConflictMode(true);
-        setStep(1);
+        scrollToSection("vehicle");
       }
       return;
     }
@@ -304,7 +325,7 @@ export function BookingWizard() {
     sessionStorage.removeItem("viberent-booking-draft");
     sessionStorage.setItem("viberent-booking-reference",result.data.id);
     setBookingReference(result.data);
-    setDraft(defaultDraft());setStep(0);setConflictMode(false);
+    setDraft(defaultDraft());setConflictMode(false);window.scrollTo({top:0});
   }
 
   if (confirmed) {
@@ -338,67 +359,86 @@ export function BookingWizard() {
     );
   }
 
+  const selectedCustomer = customers.find(item => item.id === draft.customerId);
+  const submitLabel = draft.bookingMode === "rent_now" ? `Start rental #${bookingReference?.publicNumber ?? ""}` : `Confirm booking #${bookingReference?.publicNumber ?? ""}`;
   return (
-    <form onSubmit={(event)=>event.preventDefault()} className="space-y-6">
+    <form onSubmit={(event)=>{event.preventDefault();if(!ready)return;if(draft.bookingMode==="rent_now")setConfirmationOpen(true);else void confirm();}} className="space-y-5">
       <Link href="/bookings" className="inline-flex items-center gap-2 text-sm font-semibold text-[#475467]"><ArrowLeft size={17} />Bookings</Link>
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between"><div><p className="text-xs font-bold uppercase tracking-wider text-[#006FE6]">New booking</p><h1 className="mt-1 text-2xl font-bold">Create a reservation</h1><p className="mt-1 text-sm text-[#667085]">Your progress is preserved in this browser session.</p></div>{bookingReference&&<div className="flex flex-col gap-2 sm:flex-row sm:items-stretch"><div className="w-fit rounded-xl border border-[#B2DDFF] bg-[#EFF8FF] px-4 py-2 text-sm text-[#175CD3]">Booking ID <strong className="ml-1 text-xl text-[#004EAA]">#{bookingReference.publicNumber}</strong></div><BookingCnicDrawer bookingReference={bookingReference}/><Button type="button" variant="secondary" disabled={clearing} onClick={()=>void clearBooking()}><X size={16}/>{clearing?"Clearing…":"Clear"}</Button></div>}</div>
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between"><div><h1 className="text-2xl font-bold">New booking {bookingReference && <span className="text-[#475467]">#{bookingReference.publicNumber}</span>}</h1><p className="mt-1 text-sm text-[#475467]">Fill the four sections in any order. Your progress is kept if you leave this page.</p></div>{bookingReference&&<div className="flex flex-wrap gap-2"><Button type="button" variant="ghost" disabled={clearing} onClick={()=>void clearBooking()}><X size={16}/>{clearing?"Clearing…":"Start over"}</Button></div>}</div>
       {dataError && <p className="rounded-lg border border-[#FEDF89] bg-[#FFFAEB] px-3 py-2 text-xs text-[#93370D]">{dataError}</p>}
-      <ol className={`grid gap-1 ${draft.bookingMode==="rent_now"?"grid-cols-3 sm:grid-cols-6":"grid-cols-5"}`} aria-label="Booking steps">
-        {steps.map((label, index) => <li key={label} className={`rounded-lg px-2 py-2 text-center text-[11px] font-semibold sm:text-xs ${index === step ? "bg-[#006FE6] text-white" : index < step ? "bg-[#EAF4FF] text-[#0058B8]" : "bg-[#F2F4F7] text-[#667085]"}`}>{index + 1}. {label}</li>)}
-      </ol>
-      <section className="rounded-xl border border-[#E4E7EC] bg-white p-5">
-        {step === 0 && <ScheduleStep draft={draft} setDraft={setDraft} cities={cities} drivers={drivers} onCityCreated={city=>setSavedCities(current=>[...new Set([...current,city])].sort())} />}
-        {step === 1 && <VehicleStep draft={draft} setDraft={setDraft} vehicles={eligibleVehicles} conflictMode={conflictMode} clearConflict={() => setConflictMode(false)} />}
-        {step === 2 && <CustomerStep draft={draft} setDraft={setDraft} customers={customers} bookingReference={bookingReference} onCustomerCreated={(c) => setCustomers((prev) => [c, ...prev.filter(item=>item.id!==c.id)])} />}
-        {step === 3 && <PricingStep draft={draft} setDraft={setDraft} days={days} total={total} />}
-        {step === 4 && <Review draft={draft} days={days} total={total} vehicle={vehicle} customers={customers} />}
-        {step === 5 && draft.bookingMode==="rent_now" && <HandoverStep draft={draft} setDraft={setDraft} lastOdometer={draft.fulfillmentType==="fleet"?vehicle?.lastOdometer:undefined}/>}
-      </section>
-      {submitError && <p role="alert" className="rounded-lg border border-[#FDA29B] bg-[#FEF3F2] p-3 text-sm text-[#B42318]">{submitError}</p>}
-      <div className="flex justify-between">
-        <Button type="button" variant="secondary" disabled={step === 0 || submitting} onClick={() => setStep(step - 1)}>Back</Button>
-        {step < steps.length-1 ? <Button type="button" disabled={!canContinue||!bookingReference} onClick={() => setStep(step + 1)}>Continue</Button> : <Button type="button" disabled={!canContinue||submitting||!bookingReference} onClick={()=>setConfirmationOpen(true)}>{draft.bookingMode==="rent_now"?`Review & start rental #${bookingReference?.publicNumber ?? ""}`:`Review & confirm booking #${bookingReference?.publicNumber ?? ""}`}</Button>}
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start">
+        <div className="space-y-4">
+          {sections.map((section, index) => (
+            <BookingSection key={section.id} id={section.id} number={index + 1} title={section.title} valid={section.valid}>
+              {section.id === "schedule" && <ScheduleStep draft={draft} setDraft={setDraft} cities={cities} drivers={drivers} onCityCreated={city=>setSavedCities(current=>[...new Set([...current,city])].sort())} />}
+              {section.id === "vehicle" && <VehicleStep draft={draft} setDraft={setDraft} vehicles={eligibleVehicles} conflictMode={conflictMode} clearConflict={() => setConflictMode(false)} />}
+              {section.id === "customer" && <CustomerStep draft={draft} setDraft={setDraft} customers={customers} bookingReference={bookingReference} onCustomerCreated={(c) => setCustomers((prev) => [c, ...prev.filter(item=>item.id!==c.id)])} />}
+              {section.id === "pricing" && <PricingStep draft={draft} setDraft={setDraft} days={days} total={total} baseRate={vehicle?.rate} />}
+              {section.id === "handover" && <HandoverStep draft={draft} setDraft={setDraft} lastOdometer={draft.fulfillmentType==="fleet"?vehicle?.lastOdometer:undefined}/>}
+            </BookingSection>
+          ))}
+        </div>
+        <aside className="lg:sticky lg:top-[92px]" aria-label="Booking summary">
+          <section className="rounded-xl border border-[#E4E7EC] bg-white p-4">
+            <h2 className="text-sm font-bold text-[#475467]">Summary</h2>
+            <dl className="mt-3 space-y-2.5 text-sm">
+              <SummaryRow label="Dates" value={draft.from && draft.to ? `${formatShort(draft.from)} → ${formatShort(draft.to)}` : undefined} sub={`${days} day${days === 1 ? "" : "s"} · ${draft.rentalMode === "with_driver" ? "with driver" : "self drive"} · ${draft.city || "—"}`} />
+              <SummaryRow label="Vehicle" value={draft.fulfillmentType === "external" ? (draft.external.vehiclePlate ? `${draft.external.vehicleMake} ${draft.external.vehicleModel} · ${draft.external.vehiclePlate}` : undefined) : vehicle ? `${vehicle.label} · ${vehicle.plate}` : undefined} />
+              <SummaryRow label="Customer" value={selectedCustomer ? selectedCustomer.name : draft.renterSkipped ? "Skipped (with driver)" : undefined} sub={selectedCustomer?.phone} />
+              <SummaryRow label="Rate" value={draft.dailyRate ? `${formatPkr(draft.dailyRate)} × ${days}` : undefined} sub={[draft.extras ? `+ ${formatPkr(draft.extras)} extras` : "", draft.discount ? `− ${formatPkr(draft.discount)} discount` : "", draft.deposit ? `Deposit ${formatPkr(draft.deposit)}` : ""].filter(Boolean).join(" · ") || undefined} />
+            </dl>
+            <div className="mt-4 border-t border-[#EAECF0] pt-3">
+              <p className="text-xs font-semibold text-[#475467]">Total</p>
+              <p className="text-[28px] font-bold leading-tight tabular-nums">{formatPkr(Math.max(0, total))}</p>
+            </div>
+            {missing.length > 0 && (
+              <div className="mt-3 rounded-lg bg-[#F8FAFC] p-3">
+                <p className="text-xs font-semibold text-[#475467]">Still needed</p>
+                <ul className="mt-1 space-y-1">
+                  {missing.map(section => <li key={section.id}><button type="button" onClick={() => scrollToSection(section.id)} className="text-left text-sm font-medium text-[#0058B8] hover:underline">{section.missing}</button></li>)}
+                </ul>
+              </div>
+            )}
+            {submitError && <p role="alert" className="mt-3 rounded-lg border border-[#FDA29B] bg-[#FEF3F2] p-3 text-sm text-[#B42318]">{submitError}</p>}
+            <Button type="submit" shortcut="mod+enter" shortcutInInput className="mt-4 w-full" disabled={!ready}>{submitting ? "Saving…" : submitLabel}</Button>
+            <p className="mt-2 text-xs text-[#475467]">{draft.bookingMode === "rent_now" ? "Creates the booking and checks the car out in one step." : "Blocks the car for these dates. Availability is checked again when you confirm."}</p>
+          </section>
+        </aside>
       </div>
-      <ConfirmDialog open={confirmationOpen} onOpenChange={setConfirmationOpen} title={draft.bookingMode==="rent_now"?"Start this rental now?":"Confirm this booking?"} description={draft.bookingMode==="rent_now"?"This will create the booking and check the vehicle out using the handover details you reviewed. This action only runs after you confirm here.":"This will create the booking and block the selected vehicle for the chosen dates. Review the summary before confirming."} confirmLabel={draft.bookingMode==="rent_now"?"Confirm and start rental":"Confirm booking"} pendingLabel={draft.bookingMode==="rent_now"?"Starting rental…":"Confirming booking…"} confirmVariant="primary" pending={submitting} onConfirm={()=>void confirm()}/>
+      <ConfirmDialog open={confirmationOpen} onOpenChange={setConfirmationOpen} title={`Start rental #${bookingReference?.publicNumber ?? ""} now?`} description={`${vehicle ? `${vehicle.label} · ${vehicle.plate}` : "The vehicle"} will be checked out to ${selectedCustomer?.name ?? "the renter"} with odometer ${draft.checkout.odometer.toLocaleString("en-PK")} km and fuel ${draft.checkout.fuelLevel}. Total ${formatPkr(total)}.`} confirmLabel="Start rental" pendingLabel="Starting rental…" confirmVariant="primary" pending={submitting} onConfirm={()=>void confirm()}/>
     </form>
   );
 }
 
-function BookingCnicDrawer({ bookingReference }: { bookingReference: { id: string; publicNumber: number } }) {
-  const [intake, setIntake] = useState<CnicIntake>();
-  const [loading, setLoading] = useState(false);
-  const [uploading, setUploading] = useState<"front"|"back"|null>(null);
-  const [error, setError] = useState("");
-
-  async function refresh(silent = false) {
-    if (!silent) setLoading(true);
-    const result = await getBookingCnicAction(bookingReference.id);
-    if (!silent) setLoading(false);
-    if (!result.ok) { if (!silent) setError(result.error.message); return; }
-    setIntake(result.data as CnicIntake);
-  }
-
-  useEffect(() => {
-    const initial = window.setTimeout(() => void refresh(), 0);
-    const timer = window.setInterval(() => void refresh(true), 5000);
-    return () => { window.clearTimeout(initial); window.clearInterval(timer); };
-    // The booking reference is stable for this wizard.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bookingReference.id]);
-
-  async function upload(side: "front"|"back", file: File|undefined) {
-    if (!file || uploading) return;
-    setUploading(side); setError("");
-    const data = new FormData();
-    data.set("bookingDraftId", bookingReference.id); data.set("side", side); data.set("image", file);
-    const result = await uploadBookingCnicAction(data);
-    setUploading(null);
-    if (!result.ok) { setError(result.error.message); return; }
-    setIntake(result.data as CnicIntake);
-  }
-
-  return <CnicDocumentDrawer label="Booking CNIC" commandHint={{bookingNumber:bookingReference.publicNumber}} intake={intake} loading={loading} uploading={uploading} error={error} onRefresh={() => void refresh()} onUpload={(side,file) => void upload(side,file)}/>;
+function BookingSection({ id, number, title, valid, children }: { id: string; number: number; title: string; valid: boolean; children: React.ReactNode }) {
+  const ref = useRef<HTMLElement>(null);
+  useHotkey(`alt+${number}`, () => { ref.current?.scrollIntoView({ behavior: "smooth", block: "start" }); ref.current?.querySelector<HTMLElement>("input:not([type=hidden]),select,textarea,button")?.focus({ preventScroll: true }); }, { allowInInput: true });
+  return (
+    <section id={`booking-${id}`} ref={ref} aria-labelledby={`booking-${id}-title`} className="scroll-mt-24 rounded-xl border border-[#E4E7EC] bg-white p-5">
+      <div className="mb-4 flex items-center gap-3">
+        <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-sm font-bold ${valid ? "bg-[#ECFDF3] text-[#067647]" : "bg-[#F2F4F7] text-[#475467]"}`} aria-hidden>{valid ? <Check size={15} /> : number}</span>
+        <h2 id={`booking-${id}-title`} className="flex-1 text-base font-bold">{title}<span className="sr-only">{valid ? " (complete)" : " (needs input)"}</span></h2>
+        <Kbd combo={`alt+${number}`} />
+      </div>
+      {children}
+    </section>
+  );
 }
+
+function SummaryRow({ label, value, sub }: { label: string; value?: string; sub?: string }) {
+  return (
+    <div>
+      <dt className="text-xs font-semibold text-[#475467]">{label}</dt>
+      <dd className={value ? "font-semibold text-[#19191F]" : "text-[#667085]"}>{value ?? "Not chosen yet"}</dd>
+      {sub && <dd className="text-xs text-[#475467]">{sub}</dd>}
+    </div>
+  );
+}
+
+function formatShort(value: string) {
+  return formatInZone(value, { day: "2-digit", month: "short", hour: "numeric", minute: "2-digit" });
+}
+
 
 // ─── Schedule step ───────────────────────────────────────────────────────────
 
@@ -410,16 +450,10 @@ function ScheduleStep({ draft, setDraft, cities, drivers, onCityCreated }: { dra
   function chooseCity(value:string){setCityInput(value);setDraft({...draft,city:value,vehicleId:"",dailyRate:0,overrideReason:""})}
   async function addCity(){if(!cityInput.trim()||pending)return;setPending(true);setError("");const result=await createAgencyCityAction(cityInput);setPending(false);if(!result.ok){setError(result.error.message);return}onCityCreated(result.data.name);chooseCity(result.data.name)}
   return (
-    <div className="grid gap-4 sm:grid-cols-2">
-      <div className="sm:col-span-2">
-        <span className="mb-2 block text-sm font-semibold text-[#344054]">What are you creating?</span>
-        <div className="grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label="Booking timing">
-          <button type="button" role="radio" aria-checked={draft.bookingMode==="reservation"} onClick={()=>setDraft({...draft,bookingMode:"reservation"})} className={`flex items-start gap-3 rounded-xl border p-4 text-left ${draft.bookingMode==="reservation"?"border-[#006FE6] bg-[#EFF8FF]":"border-[#E4E7EC] bg-white"}`}><CalendarClock className="mt-0.5 shrink-0 text-[#006FE6]" size={20}/><span><strong className="block text-sm">Pre-booking</strong><span className="mt-1 block text-xs text-[#667085]">Reserve now and complete the handover later.</span></span></button>
-          <button type="button" role="radio" aria-checked={draft.bookingMode==="rent_now"} onClick={()=>{const now=new Date();const local=new Date(now.getTime()-now.getTimezoneOffset()*60_000).toISOString().slice(0,16);setDraft({...draft,bookingMode:"rent_now",from:local})}} className={`flex items-start gap-3 rounded-xl border p-4 text-left ${draft.bookingMode==="rent_now"?"border-[#006FE6] bg-[#EFF8FF]":"border-[#E4E7EC] bg-white"}`}><CarFront className="mt-0.5 shrink-0 text-[#006FE6]" size={20}/><span><strong className="block text-sm">Rent now</strong><span className="mt-1 block text-xs text-[#667085]">Create the booking and start the rental immediately.</span></span></button>
-        </div>
-      </div>
-      <FormSelect label="Rental type" value={draft.rentalMode} onChange={e=>setDraft({...draft,rentalMode:e.target.value as Draft["rentalMode"],driverId:e.target.value==="self_drive"?"":draft.driverId,renterSkipped:e.target.value==="self_drive"?false:draft.renterSkipped,vehicleId:"",dailyRate:0})} options={[{label:"Self drive",value:"self_drive"},{label:"With driver",value:"with_driver"}]}/>
-      {draft.rentalMode==="with_driver"?<FormCombobox label="Driver" value={draft.driverId} onValueChange={driverId=>setDraft({...draft,driverId})} options={[{label:"Select a driver",value:""},...drivers.map(driver=>({label:`${driver.name} · ${driver.phone}`,value:driver.id}))]} searchPlaceholder="Search driver name or phone…"/>:<div/>}
+    <div className="grid gap-x-4 gap-y-3 sm:grid-cols-2 xl:grid-cols-3">
+      <SegmentedControl label="Booking type" value={draft.bookingMode} onChange={value=>{if(value==="rent_now"){const local=toWallInput(zonedNow());setDraft({...draft,bookingMode:"rent_now",from:local})}else setDraft({...draft,bookingMode:"reservation"})}} options={[{label:"Reserve",value:"reservation"},{label:"Rent now",value:"rent_now"}]}/>
+      <SegmentedControl label="Rental type" value={draft.rentalMode} onChange={value=>setDraft({...draft,rentalMode:value,driverId:value==="self_drive"?"":draft.driverId,renterSkipped:value==="self_drive"?false:draft.renterSkipped,vehicleId:"",dailyRate:0})} options={[{label:"Self drive",value:"self_drive"},{label:"With driver",value:"with_driver"}]}/>
+      {draft.rentalMode==="with_driver"&&<FormCombobox label="Driver" value={draft.driverId} onValueChange={driverId=>setDraft({...draft,driverId})} options={[{label:"Select a driver",value:""},...drivers.map(driver=>({label:`${driver.name} · ${driver.phone}`,value:driver.id}))]} searchPlaceholder="Search driver name or phone…"/>}
       <div>
         <label className="block">
           <span className="mb-1.5 block text-sm font-semibold text-[#344054]">Going to city</span>
@@ -428,16 +462,21 @@ function ScheduleStep({ draft, setDraft, cities, drivers, onCityCreated }: { dra
             value={cityInput}
             onChange={(e) => chooseCity(e.target.value)}
             placeholder="Search or enter a city"
-            className="h-11 w-full rounded-[9px] border border-[#D0D5DD] bg-white px-3 text-sm text-[#19191F] outline-none focus:border-[#006FE6] focus:ring-2 focus:ring-[#006FE6]/10"
+            className="h-10 w-full rounded-[9px] border border-[#D0D5DD] bg-white px-3 text-sm text-[#19191F] outline-none focus:border-[#006FE6] focus:ring-2 focus:ring-[#006FE6]/10"
           />
           <datalist id="booking-city-options">{cities.map(city=><option key={city} value={city}/>)}</datalist>
         </label>
         {!exact&&cityInput.trim().length>=2&&<button type="button" disabled={pending} onClick={()=>void addCity()} className="mt-2 text-xs font-semibold text-[#006FE6] hover:underline">{pending?"Adding…":`Add “${cityInput.trim()}” to city list`}</button>}
         {error&&<p className="mt-1 text-xs text-[#B42318]">{error}</p>}
       </div>
-      <div />
-      <FormInput label="Pickup" type="datetime-local" value={draft.from} onChange={(e) => setDraft({ ...draft, from: e.target.value })} />
-      <FormInput label="Return" type="datetime-local" value={draft.to} onChange={(e) => setDraft({ ...draft, to: e.target.value })} />
+      <div>
+        <FormInput label="Pickup" type="datetime-local" value={draft.from} onChange={(e) => setDraft({ ...draft, from: e.target.value })} />
+        <div className="mt-1.5 flex flex-wrap gap-1" aria-label="Pickup presets">{pickupPresets().map(preset => <PresetChip key={preset.label} active={draft.from === preset.value} onClick={() => setDraft({ ...draft, from: preset.value, to: draft.to && new Date(draft.to) > new Date(preset.value) ? draft.to : addDays(preset.value, 1) })}>{preset.label}</PresetChip>)}</div>
+      </div>
+      <div>
+        <FormInput label="Return" type="datetime-local" value={draft.to} min={draft.from} onChange={(e) => setDraft({ ...draft, to: e.target.value })} error={draft.from && draft.to && new Date(draft.to) <= new Date(draft.from) ? "Return must be after pickup." : undefined} />
+        <div className="mt-1.5 flex flex-wrap gap-1" aria-label="Rental length presets">{[1, 2, 3, 7].map(daysCount => { const value = addDays(draft.from, daysCount); return <PresetChip key={daysCount} active={draft.to === value} onClick={() => setDraft({ ...draft, to: value })}>{daysCount === 7 ? "1 week" : `${daysCount} day${daysCount === 1 ? "" : "s"}`}</PresetChip>; })}<PresetChip active={draft.to === endOfDay(draft.from)} onClick={() => setDraft({ ...draft, to: endOfDay(draft.from) })}>Same day</PresetChip></div>
+      </div>
       {draft.rentalMode==="with_driver"&&<label className="flex items-center gap-2 rounded-lg border bg-[#F8FAFC] p-3 text-sm sm:col-span-2"><input type="checkbox" checked={draft.renterSkipped} onChange={e=>setDraft({...draft,renterSkipped:e.target.checked,customerId:e.target.checked?"":draft.customerId})}/>Skip renter details for this with-driver booking</label>}
     </div>
   );
@@ -457,38 +496,49 @@ function VehicleStep({ draft, setDraft, vehicles, conflictMode, clearConflict }:
   const [vehicleSearch,setVehicleSearch]=useState("");
   const term=vehicleSearch.trim().toLocaleLowerCase("en");
   const filteredVehicles=term?vehicles.filter(item=>`${item.label} ${item.plate} ${item.city}`.toLocaleLowerCase("en").includes(term)):vehicles;
+  const availableVehicles=filteredVehicles.filter(item=>!item.conflicts.length);
+  const bookedVehicles=filteredVehicles.filter(item=>item.conflicts.length>0);
+  const pick = (item: EligibleVehicle) => { setDraft({ ...draft, vehicleId: item.id, dailyRate: item.rate, checkout: { ...draft.checkout, odometer: item.lastOdometer ?? 0 } }); clearConflict(); };
+  if (draft.fulfillmentType === "external") return (
+    <div>
+      <button type="button" onClick={() => setDraft({ ...draft, fulfillmentType: "fleet", dailyRate: 0 })} className="mb-3 text-sm font-semibold text-[#0058B8] hover:underline">← Pick from our fleet instead</button>
+      <ExternalVehicleFields draft={draft} setDraft={setDraft} />
+    </div>
+  );
   return (
     <div>
-      <h2 className="font-bold">Available vehicles</h2>
-      <p className="mt-1 text-xs text-[#667085]">Vehicles at the agency’s operating branches are shown. The rate reflects the selected destination and availability is checked again on confirmation.</p>
-      {conflictMode && (
-        <div role="alert" className="mt-4 rounded-lg border border-[#FDA29B] bg-[#FEF3F2] p-3 text-sm text-[#B42318]">
-          <strong className="flex gap-2"><ShieldAlert size={17} />Availability changed</strong>
-          <p className="mt-1 text-xs">We kept every other field. Choose an alternative vehicle to continue.</p>
+      {conflictMode && <p role="alert" className="mb-3 flex items-center gap-2 rounded-lg border border-[#FDA29B] bg-[#FEF3F2] px-3 py-2 text-sm text-[#B42318]"><ShieldAlert size={16} />That car was just booked by someone else. Pick another — everything else is kept.</p>}
+      {vehicles.length > 8 && <div className="mb-3 flex items-center gap-3"><label className="relative flex-1"><span className="sr-only">Filter vehicles</span><Search size={15} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[#667085]"/><input type="search" value={vehicleSearch} onChange={event=>setVehicleSearch(event.target.value)} placeholder="Filter by model, plate or city" className="h-9 w-full rounded-[8px] border border-[#D0D5DD] bg-white pl-8 pr-3 text-sm"/></label><span className="whitespace-nowrap text-xs text-[#475467]">{availableVehicles.length} free</span></div>}
+      {availableVehicles.length > 0 ? (
+        <div role="radiogroup" aria-label="Available vehicles" className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          {availableVehicles.map((item) => {
+            const selected = draft.vehicleId === item.id;
+            return (
+              <button
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                key={item.id}
+                onClick={() => pick(item)}
+                className={`relative rounded-[10px] border p-3 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[#006FE6] ${selected ? "border-[#006FE6] bg-[#EFF8FF] ring-1 ring-[#006FE6]" : "border-[#D0D5DD] bg-white hover:border-[#84CAFF]"}`}
+              >
+                <span className="flex items-start justify-between gap-2">
+                  <span className="min-w-0 truncate text-sm font-semibold text-[#19191F]">{item.label}</span>
+                  {selected ? <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-[#006FE6] text-white"><Check size={13} /></span> : <span className="h-5 w-5 shrink-0 rounded-full border border-[#D0D5DD]" />}
+                </span>
+                <span className="mt-0.5 block text-xs text-[#475467]"><span className="font-mono">{item.plate}</span> · {item.city}</span>
+                <span className="mt-2 block text-base font-bold tabular-nums">{formatPkr(item.rate)}<span className="text-xs font-normal text-[#475467]"> /day</span></span>
+              </button>
+            );
+          })}
         </div>
+      ) : (
+        <p className="rounded-lg border border-[#D0D5DD] bg-[#F8FAFC] p-3 text-sm text-[#475467]">{vehicles.length === 0 ? "No car in the fleet is free." : filteredVehicles.length === 0 ? `No car matches “${vehicleSearch.trim()}”.` : "Every car is booked for these dates."} Change the dates, or source one externally below.</p>
       )}
-      <div className="mt-4 grid grid-cols-2 gap-2 rounded-lg bg-[#F2F4F7] p-1" role="group" aria-label="Vehicle source"><button type="button" onClick={()=>setDraft({...draft,fulfillmentType:"fleet",dailyRate:0})} className={`rounded-md px-3 py-2 text-sm font-semibold ${draft.fulfillmentType==="fleet"?"bg-white text-[#0058B8] shadow-sm":"text-[#667085]"}`}>VibeRent fleet</button><button type="button" onClick={()=>setDraft({...draft,fulfillmentType:"external",vehicleId:"",dailyRate:draft.dailyRate||0,overrideReason:""})} className={`rounded-md px-3 py-2 text-sm font-semibold ${draft.fulfillmentType==="external"?"bg-white text-[#0058B8] shadow-sm":"text-[#667085]"}`}>Source externally</button></div>
-      {draft.fulfillmentType==="fleet"&&vehicles.length>0&&<label className="relative mt-4 block"><span className="sr-only">Search available vehicles</span><Search size={17} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#667085]"/><input type="search" value={vehicleSearch} onChange={event=>setVehicleSearch(event.target.value)} placeholder="Search available vehicles by make, model, plate or city" className="h-11 w-full rounded-[9px] border border-[#D0D5DD] bg-white pl-10 pr-3 text-sm outline-none focus:border-[#006FE6] focus:ring-2 focus:ring-[#006FE6]/10"/><span className="mt-1.5 block text-xs text-[#667085]">{filteredVehicles.length} of {vehicles.length} vehicles shown</span></label>}
-      {draft.fulfillmentType==="fleet"&&vehicles.length === 0 && <p className="mt-4 rounded-lg border border-[#B2DDFF] bg-[#EFF8FF] p-3 text-sm text-[#175CD3]">No fleet vehicle is available. Choose <strong>Source externally</strong> above to arrange one for this booking.</p>}
-      {draft.fulfillmentType==="fleet"&&vehicles.length>0&&filteredVehicles.length===0&&<p className="mt-4 rounded-lg border border-[#D0D5DD] bg-[#F8FAFC] p-4 text-sm text-[#667085]">No available vehicle matches “{vehicleSearch.trim()}”. Try a make, model, registration plate, or city.</p>}
-      {draft.fulfillmentType==="fleet"&&<div className="mt-4 grid gap-3 sm:grid-cols-2">
-        {filteredVehicles.map((item) => (
-          <button
-            type="button"
-            key={item.id}
-            disabled={item.conflicts.length > 0}
-            onClick={() => { setDraft({ ...draft, vehicleId: item.id, dailyRate: item.rate, checkout: { ...draft.checkout, odometer: item.lastOdometer ?? 0 } }); clearConflict(); }}
-            className={`rounded-xl border p-4 text-left disabled:cursor-not-allowed disabled:opacity-55 ${draft.vehicleId === item.id ? "border-[#006FE6] bg-[#EFF8FF]" : "border-[#E4E7EC]"}`}
-          >
-            <strong className="text-sm">{item.label}</strong>
-            <p className="mt-1 text-xs text-[#667085]">{item.plate} · currently in {item.city}</p><p className="mt-1 text-xs font-semibold text-[#344054]">{formatPkr(item.rate)}/day{item.perKmRate>0?` + ${formatPkr(item.perKmRate)}/km`:""}</p>
-            <p className={`mt-3 text-xs font-semibold ${item.conflicts.length ? "text-[#B42318]" : "text-[#067647]"}`}>
-              {item.conflicts.length ? item.conflicts[0].reason : "Available"}
-            </p>
-          </button>
-        ))}
-      </div>}
-      {draft.fulfillmentType==="external"&&<ExternalVehicleFields draft={draft} setDraft={setDraft}/>}
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[13px]">
+        {bookedVehicles.length > 0 ? <details><summary className="cursor-pointer text-[#475467]">{bookedVehicles.length} booked for these dates</summary><ul className="mt-1 space-y-0.5 pl-4 text-[#475467]">{bookedVehicles.map(item=><li key={item.id}>{item.label} <span className="font-mono text-xs">{item.plate}</span> — {item.conflicts[0].reason}</li>)}</ul></details> : <span />}
+        <button type="button" onClick={() => setDraft({ ...draft, fulfillmentType: "external", vehicleId: "", dailyRate: draft.dailyRate || 0, overrideReason: "" })} className="font-semibold text-[#0058B8] hover:underline">Car not in our fleet? Source externally</button>
+      </div>
     </div>
   );
 }
@@ -507,7 +557,6 @@ function CustomerStep({ draft, setDraft, customers, bookingReference, onCustomer
   onCustomerCreated: (c: CustomerDto) => void;
 }) {
   const [customerSearch, setCustomerSearch] = useState("");
-  const [customerCnic, setCustomerCnic] = useState("");
   const [showNewForm, setShowNewForm] = useState(false);
   const [updatingCustomer, setUpdatingCustomer] = useState<CustomerDto>();
   const [newForm, setNewForm] = useState<CreateCustomerInput>({ name: "", fatherName: "", phone: "", cnic: "", email: "", dateOfBirth:"", address:"", cnicExpiresAt:"", licenseNumber: "", licenseExpiresAt: "" });
@@ -522,8 +571,7 @@ function CustomerStep({ draft, setDraft, customers, bookingReference, onCustomer
   const lastExtractionKey=useRef("");
 
   const selected = customers.find((c) => c.id === draft.customerId);
-  const cnicDigits=customerCnic.replace(/\D/g,"");
-  const matchedCnic=cnicDigits.length===13?customers.find(customer=>customer.cnic.replace(/\D/g,"")===cnicDigits):undefined;
+  const cnicDigits=/^[\d\s-]+$/.test(customerSearch.trim())?customerSearch.replace(/\D/g,""):"";
   const matches=customerSearch.trim()?customers.filter(customer=>`${customer.name} ${customer.phone} ${customer.cnic}`.toLowerCase().includes(customerSearch.trim().toLowerCase())).slice(0,5):[];
   const existingCnic=showNewForm&&newForm.cnic.replace(/\D/g,"").length===13?customers.find(customer=>customer.cnic.replace(/\D/g,"")===newForm.cnic.replace(/\D/g,"")):undefined;
   function editExisting(customer:CustomerDto){setUpdatingCustomer(customer);setShowNewForm(true);setNewForm({name:customer.name,fatherName:customer.fatherName??"",phone:customer.phone,cnic:customer.cnic,email:customer.email??"",dateOfBirth:customer.dateOfBirth??"",address:customer.address??"",cnicExpiresAt:customer.cnicExpiresAt??"",licenseNumber:customer.licenseNumber??"",licenseExpiresAt:customer.licenseExpiresAt??""});}
@@ -607,26 +655,21 @@ function CustomerStep({ draft, setDraft, customers, bookingReference, onCustomer
 
   return (
     <div>
-      <h2 className="font-bold">Customer</h2>
       {draft.rentalMode==="with_driver"&&draft.renterSkipped&&<div className="mt-3 rounded-lg border border-[#B2DDFF] bg-[#EFF8FF] p-3 text-sm text-[#175CD3]">Renter details are skipped for this with-driver booking. Continue to pricing, or untick the option in Schedule to attach a customer.</div>}
-      <p className="mt-1 text-xs text-[#667085]">Search by name, phone, or CNIC, or add a customer without leaving the booking.</p>
 
-      <div className="mt-4 space-y-4">
-        <div className="rounded-xl border border-[#B2DDFF] bg-[#F5FAFF] p-4">
-          <FormInput label="Customer ID card (CNIC)" inputMode="numeric" placeholder="35202-1234567-1" value={customerCnic} onChange={e=>setCustomerCnic(e.target.value)} />
-          {matchedCnic?<div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-sm"><span><strong>{matchedCnic.name}</strong> · {matchedCnic.phone}</span><Button type="button" size="sm" onClick={()=>{setDraft(current=>({...current,customerId:matchedCnic.id}));setCustomerSearch("");setShowNewForm(false)}}>Use this customer</Button></div>:cnicDigits.length===13?<div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-sm"><span>No customer has this CNIC.</span><Button type="button" size="sm" variant="secondary" onClick={()=>{setUpdatingCustomer(undefined);setNewForm(current=>({...current,cnic:cnicDigits}));setShowNewForm(true)}}>Add customer with this CNIC</Button></div>:<p className="mt-2 text-xs text-[#667085]">Enter 13 digits to find an existing customer before creating a new one.</p>}
-        </div>
-        {selected && <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#B2DDFF] bg-[#EFF8FF] p-4 text-sm"><div><p className="text-xs font-semibold uppercase tracking-wide text-[#175CD3]">Selected customer</p><p className="mt-1 font-bold text-[#1D2939]">{selected.name}</p><p className="text-xs text-[#667085]">{selected.phone || "No phone"} · {selected.cnic || "No CNIC"} · {selected.status}{selected.status==="review"&&" · Manager review required"}</p></div><div className="flex flex-wrap gap-2"><Button type="button" size="sm" variant="secondary" onClick={()=>editExisting(selected)}>Update details</Button><Button type="button" size="sm" variant="secondary" onClick={()=>{setDraft(current=>({...current,customerId:""}));setCustomerSearch("")}}>Deselect customer</Button></div></div>}
-        <FormInput
-          label="Search existing customers"
-          placeholder="Search name, phone or CNIC"
+      <div className="space-y-3">
+        {selected && <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#B2DDFF] bg-[#EFF8FF] px-3 py-2 text-sm"><div><p className="font-bold text-[#1D2939]"><Check size={14} className="mr-1 inline text-[#067647]"/>{selected.name}</p><p className="text-xs text-[#667085]">{selected.phone || "No phone"} · {selected.cnic || "No CNIC"} · {selected.status}{selected.status==="review"&&" · Manager review required"}</p></div><div className="flex flex-wrap gap-2"><Button type="button" size="sm" variant="secondary" onClick={()=>editExisting(selected)}>Update details</Button><Button type="button" size="sm" variant="secondary" onClick={()=>{setDraft(current=>({...current,customerId:""}));setCustomerSearch("")}}>Change</Button></div></div>}
+        {!selected&&<FormInput
+          label="Find customer"
+          placeholder="Name, phone or CNIC (35202-1234567-1)"
           value={customerSearch}
           onChange={(e) => setCustomerSearch(e.target.value)}
-        />
-        {customerSearch.trim()&&<div className="max-h-52 overflow-y-auto rounded-xl border border-[#E4E7EC] bg-white p-1" aria-label="Customer suggestions">{matches.map(customer=><button key={customer.id} type="button" role="option" aria-selected={draft.customerId===customer.id} onClick={()=>{setDraft({...draft,customerId:customer.id});setCustomerSearch("")}} className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm ${draft.customerId===customer.id?"bg-[#EFF8FF] text-[#0058B8]":"hover:bg-[#F8FAFC]"}`}><span><strong>{customer.name}</strong><span className="ml-2 text-xs text-[#667085]">{customer.phone} · {customer.cnic}</span></span><span className="text-xs capitalize">{customer.status}</span></button>)}{!matches.length&&<p className="p-3 text-sm text-[#667085]">No existing customer matches your search.</p>}</div>}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); if (matches[0]) { setDraft({ ...draft, customerId: matches[0].id }); setCustomerSearch(""); } else if (cnicDigits.length === 13) { setUpdatingCustomer(undefined); setNewForm(current => ({ ...current, cnic: cnicDigits })); setShowNewForm(true); } } }}
+        />}
+        {!selected&&customerSearch.trim()&&<div className="max-h-52 overflow-y-auto rounded-xl border border-[#E4E7EC] bg-white p-1" aria-label="Customer suggestions">{matches.map(customer=><button key={customer.id} type="button" role="option" aria-selected={draft.customerId===customer.id} onClick={()=>{setDraft({...draft,customerId:customer.id});setCustomerSearch("")}} className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm ${draft.customerId===customer.id?"bg-[#EFF8FF] text-[#0058B8]":"hover:bg-[#F8FAFC]"}`}><span><strong>{customer.name}</strong><span className="ml-2 text-xs text-[#667085]">{customer.phone} · {customer.cnic}</span></span><span className="text-xs capitalize">{customer.status}</span></button>)}{!matches.length&&(cnicDigits.length===13?<button type="button" onClick={()=>{setUpdatingCustomer(undefined);setNewForm(current=>({...current,cnic:cnicDigits}));setShowNewForm(true)}} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-semibold text-[#0058B8] hover:bg-[#F8FAFC]"><Plus size={15}/>No match — add new customer with CNIC {cnicDigits.slice(0,5)}-{cnicDigits.slice(5,12)}-{cnicDigits.slice(12)} <kbd className="ml-auto rounded border px-1 text-xs">↵</kbd></button>:<p className="p-3 text-sm text-[#475467]">No customer matches. Type the full 13-digit CNIC to add one.</p>)}</div>}
 
-        {bookingReference&&<CnicDocumentDrawer
-          label="CNIC documents"
+        {bookingReference&&showNewForm&&!updatingCustomer&&<CnicDocumentDrawer
+          label="Scan CNIC to fill the form"
           commandHint={{bookingNumber:bookingReference.publicNumber}}
           intake={cnicIntake}
           loading={cnicLoading}
@@ -637,7 +680,7 @@ function CustomerStep({ draft, setDraft, customers, bookingReference, onCustomer
         />}
 
         {/* New customer toggle */}
-        {!showNewForm ? (
+        {!showNewForm ? (selected ? null :
           <button
             type="button"
             onClick={() => setShowNewForm(true)}
@@ -759,7 +802,7 @@ function GuarantorSection({draft,setDraft,bookingReference}:{draft:Draft;setDraf
     return <section className="rounded-xl border border-[#E4E7EC] bg-white p-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div className="flex gap-3"><span className="grid size-10 shrink-0 place-items-center rounded-lg bg-[#EFF8FF] text-[#006FE6]"><ShieldCheck size={19}/></span><div><h3 className="text-sm font-bold text-[#1D2939]">Guarantor <span className="font-normal text-[#667085]">(optional)</span></h3><p className="mt-1 text-xs text-[#667085]">Pick someone who stood guarantee before, or add a new guarantor.</p></div></div><Button type="button" size="sm" variant="secondary" className="shrink-0" onClick={()=>startNew()}><Plus size={15}/>New guarantor</Button></div>
       {savedGuarantors.length>0&&<div className="mt-4">
-        <label className="flex h-11 items-center gap-2 rounded-[9px] border border-[#D0D5DD] px-3 focus-within:border-[#006FE6] focus-within:ring-2 focus-within:ring-[#006FE6]/10"><Search size={16} className="shrink-0 text-[#98A2B3]"/><input aria-label="Search saved guarantors" value={guarantorQuery} onChange={event=>setGuarantorQuery(event.target.value)} placeholder="Search name, phone or CNIC…" className="w-full bg-transparent text-sm outline-none placeholder:text-[#98A2B3]"/>{guarantorQuery&&<button type="button" aria-label="Clear search" onClick={()=>setGuarantorQuery("")} className="grid size-7 place-items-center rounded text-[#667085] hover:bg-[#F2F4F7]"><X size={14}/></button>}</label>
+        <label className="flex h-11 items-center gap-2 rounded-[9px] border border-[#D0D5DD] px-3 focus-within:border-[#006FE6] focus-within:ring-2 focus-within:ring-[#006FE6]/10"><Search size={16} className="shrink-0 text-[#667085]"/><input aria-label="Search saved guarantors" value={guarantorQuery} onChange={event=>setGuarantorQuery(event.target.value)} placeholder="Search name, phone or CNIC…" className="w-full bg-transparent text-sm outline-none placeholder:text-[#667085]"/>{guarantorQuery&&<button type="button" aria-label="Clear search" onClick={()=>setGuarantorQuery("")} className="grid size-7 place-items-center rounded text-[#667085] hover:bg-[#F2F4F7]"><X size={14}/></button>}</label>
         {visible.length?<ul className="mt-2 divide-y divide-[#EAECF0] overflow-hidden rounded-xl border border-[#E4E7EC]" aria-label="Saved guarantors">{visible.map(item=><li key={item.id}><button type="button" onClick={()=>pickSaved(item)} className="flex min-h-14 w-full items-center gap-3 px-3 py-2.5 text-left hover:bg-[#F5FAFF] focus-visible:bg-[#F5FAFF] focus-visible:outline-none">
           <span className="grid size-9 shrink-0 place-items-center rounded-full bg-[#F2F4F7] text-xs font-bold text-[#475467]">{initials(item.name)}</span>
           <span className="min-w-0 flex-1"><strong className="block truncate text-sm text-[#19191F]">{item.name}{item.parentage&&<span className="font-normal text-[#667085]"> · s/o {item.parentage}</span>}</strong><span className="mt-0.5 block truncate text-xs text-[#667085]">{[item.cnic,item.phone].filter(Boolean).join(" · ")||"No CNIC or phone saved"}</span></span>
@@ -800,62 +843,24 @@ function initials(name:string){return name.trim().split(/\s+/).slice(0,2).map(pa
 
 // ─── Pricing step ────────────────────────────────────────────────────────────
 
-function PricingStep({ draft, setDraft, days, total }: { draft: Draft; setDraft: (value: Draft) => void; days: number; total: number }) {
+function PricingStep({ draft, setDraft, days, total, baseRate }: { draft: Draft; setDraft: (value: Draft) => void; days: number; total: number; baseRate?: number }) {
+  const rateChanged = baseRate !== undefined && draft.dailyRate !== baseRate;
   const supplierPayable=draft.external.pricingMode==="percentage"?Math.round(total*draft.external.supplierSharePercent/100):draft.external.supplierFixedCost;
   return (
-    <div className="grid gap-4 sm:grid-cols-2">
-      <FormInput label="Daily rate" type="number" min={1000} value={draft.dailyRate} onChange={(e)=>setDraft({...draft,dailyRate:Number(e.target.value)})} />
-      <FormInput label="Estimated trip distance (km)" type="number" min={0} value={draft.estimatedKm} onChange={(e)=>setDraft({...draft,estimatedKm:Number(e.target.value)})}/>
-      <FormInput label="Deposit (optional)" type="number" min={0} value={draft.deposit||""} placeholder="No deposit required" onChange={(e) => setDraft({ ...draft, deposit: Number(e.target.value) })} />
-      <FormInput label="Extras" type="number" value={draft.extras} onChange={(e) => setDraft({ ...draft, extras: Number(e.target.value) })} />
-      <FormInput label="Discount" type="number" value={draft.discount} onChange={(e) => setDraft({ ...draft, discount: Number(e.target.value) })} />
-      <FormInput label="Notes" value={draft.notes} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} />
-      {draft.fulfillmentType==="fleet"&&<FormInput label="Rate change reason (required for an override)" value={draft.overrideReason} onChange={(e)=>setDraft({...draft,overrideReason:e.target.value})} placeholder="e.g. approved corporate rate"/>}
-      <div className="rounded-lg bg-[#F8FAFC] p-4">
-        <p className="text-xs text-[#667085]">{days} rental days · rate verified by server</p>
-        <p className="mt-1 text-xl font-bold">{formatPkr(total)}</p>
-      </div>
+    <div className="grid gap-x-4 gap-y-3 sm:grid-cols-3">
+      <FormInput label="Daily rate (PKR)" type="number" inputMode="numeric" min={1000} value={draft.dailyRate} onChange={(e)=>setDraft({...draft,dailyRate:Number(e.target.value)})} hint={`${days} day${days===1?"":"s"}`} />
+      <FormInput label="Deposit (optional)" type="number" inputMode="numeric" min={0} value={draft.deposit||""} placeholder="None" onChange={(e) => setDraft({ ...draft, deposit: Number(e.target.value) })} />
+      <FormInput label="Discount" type="number" inputMode="numeric" min={0} value={draft.discount||""} placeholder="0" onChange={(e) => setDraft({ ...draft, discount: Number(e.target.value) })} />
+      {draft.fulfillmentType==="fleet"&&rateChanged&&<div className="sm:col-span-3"><FormInput label="Why is the rate different? (required)" value={draft.overrideReason} onChange={(e)=>setDraft({...draft,overrideReason:e.target.value})} placeholder="e.g. approved corporate rate"/></div>}
+      <details className="sm:col-span-3" open={Boolean(draft.extras||draft.estimatedKm||draft.notes)}>
+        <summary className="cursor-pointer text-sm font-semibold text-[#475467]">Extras, trip distance, notes</summary>
+        <div className="mt-3 grid gap-x-4 gap-y-3 sm:grid-cols-3">
+          <FormInput label="Extras (PKR)" type="number" inputMode="numeric" value={draft.extras||""} placeholder="0" onChange={(e) => setDraft({ ...draft, extras: Number(e.target.value) })} />
+          <FormInput label="Trip distance (km)" type="number" inputMode="numeric" min={0} value={draft.estimatedKm||""} placeholder="0" onChange={(e)=>setDraft({...draft,estimatedKm:Number(e.target.value)})}/>
+          <FormInput label="Notes" value={draft.notes} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} />
+        </div>
+      </details>
       {draft.fulfillmentType==="external"&&<div className="space-y-4 rounded-xl border border-[#B2DDFF] bg-[#F5FAFF] p-4 sm:col-span-2"><div><h3 className="text-sm font-bold text-[#175CD3]">Supplier terms</h3><p className="mt-1 text-xs text-[#475467]">83/17 is the default. Change it for this booking when needed.</p></div><div className="grid gap-4 sm:grid-cols-2"><FormSelect label="Arrangement" value={draft.external.pricingMode} onChange={e=>setDraft({...draft,external:{...draft.external,pricingMode:e.target.value as "percentage"|"fixed"}})} options={[{label:"Percentage split",value:"percentage"},{label:"Fixed supplier cost",value:"fixed"}]}/>{draft.external.pricingMode==="percentage"?<FormInput label="Supplier share (%)" type="number" min={0} max={100} value={draft.external.supplierSharePercent} onChange={e=>setDraft({...draft,external:{...draft.external,supplierSharePercent:Number(e.target.value)}})}/>:<FormInput label="Supplier cost (PKR)" type="number" min={0} value={draft.external.supplierFixedCost} onChange={e=>setDraft({...draft,external:{...draft.external,supplierFixedCost:Number(e.target.value)}})}/>}</div><div className="grid grid-cols-3 gap-2 text-sm"><div className="rounded-lg bg-white p-3"><p className="text-xs text-[#667085]">Customer total</p><strong>{formatPkr(total)}</strong></div><div className="rounded-lg bg-white p-3"><p className="text-xs text-[#667085]">Supplier gets</p><strong>{formatPkr(supplierPayable)}</strong></div><div className="rounded-lg bg-white p-3"><p className="text-xs text-[#667085]">Your commission</p><strong className={total-supplierPayable<0?"text-[#B42318]":"text-[#067647]"}>{formatPkr(total-supplierPayable)}</strong></div></div></div>}
-    </div>
-  );
-}
-
-// ─── Review step ─────────────────────────────────────────────────────────────
-
-function Review({ draft, days, total, vehicle, customers }: {
-  draft: Draft;
-  days: number;
-  total: number;
-  vehicle: FleetOption | undefined;
-  customers: CustomerDto[];
-}) {
-  const customer = customers.find((c) => c.id === draft.customerId);
-  const supplierPayable=draft.external.pricingMode==="percentage"?Math.round(total*draft.external.supplierSharePercent/100):draft.external.supplierFixedCost;
-  const details: [string, string | undefined][] = [
-    ["Schedule", `${new Date(draft.from).toLocaleString("en-PK")} – ${new Date(draft.to).toLocaleString("en-PK")}`],
-    ["Flow",draft.bookingMode==="rent_now"?"Immediate booking · rental starts now":"Pre-booking · handover later"],
-    ["Going to", draft.city],
-    ["Fulfilment",draft.fulfillmentType==="external"?"Externally sourced":"VibeRent fleet"],
-    ["Vehicle", draft.fulfillmentType==="external"?`${draft.external.vehicleMake} ${draft.external.vehicleModel} ${draft.external.vehicleYear} · ${draft.external.vehiclePlate}`:vehicle ? `${vehicle.label} · ${vehicle.plate}` : "—"],
-    ...(draft.fulfillmentType==="external"?[["Supplier",`${draft.external.supplierName} · ${draft.external.supplierPhone}`],["Supplier payable",`${formatPkr(supplierPayable)} · Agency keeps ${formatPkr(total-supplierPayable)}`]] as [string,string][]:[]),
-    ["Customer", customer ? `${customer.name} · ${customer.phone}` : "—"],
-    ["Guarantor", draft.guarantor ? `${draft.guarantor.name} · ${draft.guarantor.phone}` : "Not added"],
-    ["Car amount", draft.guarantor ? formatPkr(draft.guarantor.carAmount) : "—"],
-    ["Price", `${formatPkr(total)} · ${days} days`],
-    ["Deposit", draft.deposit?formatPkr(draft.deposit):"Not required"],
-    ["Final availability", draft.fulfillmentType==="external"?"Supplier vehicle confirmed for this booking":"Checked transactionally on confirmation"],
-  ];
-  return (
-    <div>
-      <h2 className="font-bold">Review and confirm</h2>
-      <dl className="mt-4 grid gap-4 text-sm sm:grid-cols-2">
-        {details.map(([label, value]) => (
-          <div key={label} className="rounded-lg bg-[#F8FAFC] p-3">
-            <dt className="text-xs text-[#667085]">{label}</dt>
-            <dd className="mt-1 font-semibold">{value ?? "—"}</dd>
-          </div>
-        ))}
-      </dl>
     </div>
   );
 }
@@ -864,6 +869,19 @@ function HandoverStep({draft,setDraft,lastOdometer}:{draft:Draft;setDraft:(value
   const update=(values:Partial<Draft["checkout"]>)=>setDraft({...draft,checkout:{...draft.checkout,...values}});
   return <div>
     <div className="flex items-start gap-3 rounded-xl border border-[#B2DDFF] bg-[#EFF8FF] p-4"><CarFront className="mt-0.5 shrink-0 text-[#006FE6]" size={20}/><div><h2 className="font-bold text-[#175CD3]">Handover inspection</h2><p className="mt-1 text-xs text-[#475467]">Confirming this step creates the booking and checks the vehicle out atomically.</p></div></div>
-    <div className="mt-5 grid gap-4 sm:grid-cols-2"><FormInput label="Handover odometer (km)" type="number" min={0} value={draft.checkout.odometer||""} placeholder={lastOdometer!==undefined?String(lastOdometer):undefined} hint={lastOdometer!==undefined?`Last recorded reading: ${lastOdometer.toLocaleString("en-PK")} km`:undefined} error={lastOdometer!==undefined&&draft.checkout.odometer>0&&draft.checkout.odometer<lastOdometer?`Lower than the last recorded reading (${lastOdometer.toLocaleString("en-PK")} km).`:undefined} onChange={e=>update({odometer:Number(e.target.value)})}/><FormSelect label="Handover fuel" value={draft.checkout.fuelLevel} onChange={e=>update({fuelLevel:e.target.value})} options={["Full","3/4","1/2","1/4","Empty"]}/><label className="text-sm font-semibold text-[#344054] sm:col-span-2">Vehicle condition at handover<textarea className="mt-1.5 min-h-24 w-full rounded-[9px] border border-[#D0D5DD] p-3 text-sm font-normal outline-none focus:border-[#006FE6] focus:ring-2 focus:ring-[#006FE6]/10" value={draft.checkout.conditionNotes} onChange={e=>update({conditionNotes:e.target.value})}/></label></div>
+    <div className="mt-5 grid gap-4 sm:grid-cols-2"><FormInput label="Handover odometer (km)" type="number" min={0} value={draft.checkout.odometer||""} placeholder={lastOdometer!==undefined?String(lastOdometer):undefined} hint={lastOdometer!==undefined?`Last recorded reading: ${lastOdometer.toLocaleString("en-PK")} km`:undefined} error={lastOdometer!==undefined&&draft.checkout.odometer>0&&draft.checkout.odometer<lastOdometer?`Lower than the last recorded reading (${lastOdometer.toLocaleString("en-PK")} km).`:undefined} onChange={e=>update({odometer:Number(e.target.value)})}/><SegmentedControl label="Handover fuel" value={draft.checkout.fuelLevel} onChange={value=>update({fuelLevel:value})} options={["Full","3/4","1/2","1/4","Empty"].map(level=>({label:level,value:level}))}/><label className="text-sm font-semibold text-[#344054] sm:col-span-2">Vehicle condition at handover<textarea className="mt-1.5 min-h-24 w-full rounded-[9px] border border-[#D0D5DD] p-3 text-sm font-normal outline-none focus:border-[#006FE6] focus:ring-2 focus:ring-[#006FE6]/10" value={draft.checkout.conditionNotes} onChange={e=>update({conditionNotes:e.target.value})}/></label></div>
   </div>;
+}
+
+const toLocalInput = toWallInput;
+function addDays(from: string, days: number) { const date = from ? new Date(from) : zonedNow(); date.setDate(date.getDate() + days); return toLocalInput(date); }
+function endOfDay(from: string) { const date = from ? new Date(from) : zonedNow(); date.setHours(23, 59, 0, 0); return toLocalInput(date); }
+function pickupPresets() {
+  const now = zonedNow(); now.setSeconds(0, 0); now.setMinutes(Math.ceil(now.getMinutes() / 15) * 15);
+  const tomorrow = zonedNow(); tomorrow.setDate(tomorrow.getDate() + 1); tomorrow.setHours(9, 0, 0, 0);
+  const evening = zonedNow(); evening.setHours(18, 0, 0, 0);
+  return [{ label: "Now", value: toLocalInput(now) }, ...(evening > now ? [{ label: "Today 6 pm", value: toLocalInput(evening) }] : []), { label: "Tomorrow 9 am", value: toLocalInput(tomorrow) }];
+}
+function PresetChip({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return <button type="button" aria-pressed={active} onClick={onClick} className={`h-7 rounded-full border px-2.5 text-xs font-semibold focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[#006FE6] ${active ? "border-[#006FE6] bg-[#EFF8FF] text-[#0058B8]" : "border-[#D0D5DD] bg-white text-[#344054] hover:bg-[#F8FAFC]"}`}>{children}</button>;
 }

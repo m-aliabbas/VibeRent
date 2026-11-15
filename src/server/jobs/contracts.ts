@@ -21,6 +21,8 @@ export type JobPayloads = {
   };
   "recurring.post": Record<string, never>;
   "report.daily": Record<string, never>;
+  /** Month-end customer statements to everyone with an outstanding balance (opt-in per agency). */
+  "statements.monthly": Record<string, never>;
   "maintenance.cleanup": Record<string, never>;
 };
 
@@ -46,6 +48,7 @@ export const jobDefinitions: Record<JobName, JobDefinition> = {
   "wa.inbound": { role: "worker", retryLimit: 3, retryDelaySeconds: 10, retryBackoff: true, expireInSeconds: 180, concurrency: 2 },
   "recurring.post": { role: "worker", retryLimit: 2, retryDelaySeconds: 60, retryBackoff: true, expireInSeconds: 600, concurrency: 1 },
   "report.daily": { role: "worker", retryLimit: 3, retryDelaySeconds: 300, retryBackoff: false, expireInSeconds: 600, concurrency: 1 },
+  "statements.monthly": { role: "worker", retryLimit: 3, retryDelaySeconds: 300, retryBackoff: false, expireInSeconds: 900, concurrency: 1 },
   "maintenance.cleanup": { role: "worker", retryLimit: 1, retryDelaySeconds: 300, retryBackoff: false, expireInSeconds: 600, concurrency: 1 },
 };
 
@@ -57,6 +60,8 @@ export const jobTimeZone = "Asia/Karachi";
 export const jobSchedules: Array<{ name: JobName; cron: string }> = [
   { name: "recurring.post", cron: "5 * * * *" },
   { name: "report.daily", cron: "0 12 * * *" },
+  // 10:00 on the 1st, once the previous month has closed.
+  { name: "statements.monthly", cron: "0 10 1 * *" },
   { name: "maintenance.cleanup", cron: "30 * * * *" },
 ];
 

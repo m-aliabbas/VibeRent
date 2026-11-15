@@ -137,7 +137,7 @@ export const paymentReceiptCounters = pgTable("payment_receipt_counters", {
   agencyId:text("agency_id").primaryKey().references(()=>agencies.id,{onDelete:"cascade"}), nextNumber:integer("next_number").notNull().default(1), ...timestamps,
 });
 export const whatsappSettings = pgTable("whatsapp_settings", {
-  agencyId:text("agency_id").primaryKey().references(()=>agencies.id,{onDelete:"cascade"}), sessionId:text("session_id").notNull().unique(), ownerPhoneNormalized:text("owner_phone_normalized"), listeningEnabled:sqliteBoolean("listening_enabled").notNull().default(sql`0`), ...timestamps,
+  agencyId:text("agency_id").primaryKey().references(()=>agencies.id,{onDelete:"cascade"}), sessionId:text("session_id").notNull().unique(), ownerPhoneNormalized:text("owner_phone_normalized"), listeningEnabled:sqliteBoolean("listening_enabled").notNull().default(sql`0`), monthEndStatements:sqliteBoolean("month_end_statements").notNull().default(sql`0`), ...timestamps,
 });
 export const bookingDrafts = pgTable("booking_drafts", {
   id:text("id").primaryKey(), agencyId:text("agency_id").notNull().references(()=>agencies.id,{onDelete:"cascade"}), actorId:text("actor_id").notNull().references(()=>users.id), publicNumber:integer("public_number").notNull(), status:text("status",{enum:["active","consumed","expired"]}).notNull().default("active"), expiresAt:text("expires_at").notNull(), consumedAt:text("consumed_at"), ...timestamps,

@@ -6,6 +6,7 @@ import { CarFront, LoaderCircle, Plus, Trash2, X } from "lucide-react";
 import { saveOwnerAction } from "@/app/actions/owners";
 import { getVehicleFormOptionsAction } from "@/app/actions/vehicles";
 import { Button } from "@/components/ui/button";
+import { SegmentedControl } from "@/components/forms/segmented-control";
 import { FormCombobox } from "@/components/forms/form-combobox";
 import { FormInput, FormSelect } from "@/components/forms/form-controls";
 import type { RepositoryResult } from "@/lib/repositories/repository";
@@ -18,13 +19,14 @@ const blank: Vehicle = {
   engineNumber: "",
   make: "",
   model: "",
-  year: 2024,
+  year: new Date().getFullYear(),
   category: "Sedan",
   city: "Lahore",
   ownership: "Own",
   status: "Available",
-  dailyRate: 8000,
-  withDriverRate: 11000,
+  // No invented prices: staff type the real rate.
+  dailyRate: 0,
+  withDriverRate: 0,
   color: "",
   transmission: "Automatic",
   fuel: "Petrol",
@@ -184,8 +186,6 @@ export function VehicleDialog({
                 error={errors.plate}
                 required
               />
-              <FormInput label="Chassis number" placeholder="e.g. MRHGM6650NP012345" value={form.chassisNumber??""} onChange={(e)=>update("chassisNumber",e.target.value)} error={errors.chassisNumber} required />
-              <FormInput label="Engine number" placeholder="e.g. L15Z1-1234567" value={form.engineNumber??""} onChange={(e)=>update("engineNumber",e.target.value)} error={errors.engineNumber} required />
               {vehicle ? (
                 <div>
                   <p className="mb-1.5 text-sm font-semibold text-[#344054]">
@@ -196,16 +196,11 @@ export function VehicleDialog({
                   </div>
                 </div>
               ) : (
-                <FormSelect
-                  label="Initial status"
+                <SegmentedControl
+                  label="Starts as"
                   value={form.status}
-                  onChange={(e) => update("status", e.target.value)}
-                  options={[
-                    "Available",
-                    "Booked",
-                    "Maintenance",
-                    "Out of Service",
-                  ]}
+                  onChange={(value) => update("status", value)}
+                  options={["Available", "Maintenance", "Out of Service"].map((value) => ({ value, label: value }))}
                 />
               )}
               <FormInput
@@ -239,11 +234,11 @@ export function VehicleDialog({
                 value={form.color}
                 onChange={(e) => update("color", e.target.value)}
               />
-              <FormSelect
+              <SegmentedControl
                 label="Category"
                 value={form.category}
-                onChange={(e) => update("category", e.target.value)}
-                options={["Economy", "Sedan", "SUV"]}
+                onChange={(value) => update("category", value)}
+                options={["Economy", "Sedan", "SUV"].map((value) => ({ value, label: value }))}
               />
               <FormSelect
                 label="Current city"
@@ -251,11 +246,11 @@ export function VehicleDialog({
                 onChange={(e) => update("city", e.target.value)}
                 options={options.branches.map(branch => branch.city)}
               />
-              <FormSelect
+              <SegmentedControl
                 label="Ownership"
                 value={form.ownership}
-                onChange={(e) => update("ownership", e.target.value)}
-                options={["Own", "Managed"]}
+                onChange={(value) => update("ownership", value)}
+                options={[{ value: "Own", label: "Agency owned" }, { value: "Managed", label: "Owner's car (managed)" }]}
               />
               {form.ownership === "Managed" ? (
                 <div>
@@ -419,24 +414,29 @@ export function VehicleDialog({
                 type="number"
                 min={1000}
                 step={500}
-                value={form.dailyRate}
+                value={form.dailyRate || ""}
+                placeholder="e.g. 8000"
                 onChange={(e) => update("dailyRate", Number(e.target.value))}
                 error={errors.dailyRate}
                 required
               />
-              <FormInput label="With-driver rate (PKR)" type="number" min={form.dailyRate} step={500} value={form.withDriverRate??form.dailyRate} onChange={(e)=>update("withDriverRate",Number(e.target.value))} error={errors.withDriverRate} required />
-              <FormSelect
+              <FormInput label="With-driver rate (PKR)" type="number" min={form.dailyRate} step={500} value={form.withDriverRate||""} placeholder="e.g. 11000" onChange={(e)=>update("withDriverRate",Number(e.target.value))} error={errors.withDriverRate} required />
+              <SegmentedControl
                 label="Transmission"
                 value={form.transmission}
-                onChange={(e) => update("transmission", e.target.value)}
-                options={["Automatic", "Manual"]}
+                onChange={(value) => update("transmission", value)}
+                options={["Automatic", "Manual"].map((value) => ({ value, label: value }))}
               />
-              <FormSelect
+              <SegmentedControl
                 label="Fuel type"
                 value={form.fuel}
-                onChange={(e) => update("fuel", e.target.value)}
-                options={["Petrol", "Hybrid", "Diesel"]}
+                onChange={(value) => update("fuel", value)}
+                options={["Petrol", "Hybrid", "Diesel"].map((value) => ({ value, label: value }))}
               />
+              <p className="-mb-2 border-t border-[#EAECF0] pt-4 text-sm font-bold text-[#344054] sm:col-span-2">Registration</p>
+              <FormInput label="Chassis number" placeholder="e.g. MRHGM6650NP012345" value={form.chassisNumber??""} onChange={(e)=>update("chassisNumber",e.target.value)} error={errors.chassisNumber} required />
+              <FormInput label="Engine number" placeholder="e.g. L15Z1-1234567" value={form.engineNumber??""} onChange={(e)=>update("engineNumber",e.target.value)} error={errors.engineNumber} required />
+
               <div className="rounded-xl border border-[#B2DDFF] bg-[#F5FAFF] p-4 sm:col-span-2">
                 <div className="flex items-center justify-between gap-3"><div><h3 className="text-sm font-bold text-[#175CD3]">Destination rates</h3><p className="mt-1 text-xs text-[#475467]">Optional city-specific daily and mileage rates. The standard daily rate is used when no rule matches.</p></div><Button type="button" size="sm" variant="secondary" onClick={()=>setForm(current=>({...current,rateRules:[...(current.rateRules??[]),{destinationCity:"",dailyRate:current.dailyRate,perKmRate:0,minimumDays:1}]}))}><Plus size={15}/>Add rate</Button></div>
                 {(form.rateRules??[]).length>0&&<div className="mt-4 space-y-3">{(form.rateRules??[]).map((rule,index)=><div key={index} className="grid gap-3 rounded-lg bg-white p-3 sm:grid-cols-[1fr_1fr_1fr_1fr_auto] sm:items-end"><FormInput label="Going to city" value={rule.destinationCity} onChange={e=>setForm(current=>({...current,rateRules:current.rateRules?.map((item,i)=>i===index?{...item,destinationCity:e.target.value}:item)}))}/><FormInput label="Daily rate" type="number" min={1000} value={rule.dailyRate} onChange={e=>setForm(current=>({...current,rateRules:current.rateRules?.map((item,i)=>i===index?{...item,dailyRate:Number(e.target.value)}:item)}))}/><FormInput label="Per km" type="number" min={0} value={rule.perKmRate} onChange={e=>setForm(current=>({...current,rateRules:current.rateRules?.map((item,i)=>i===index?{...item,perKmRate:Number(e.target.value)}:item)}))}/><FormInput label="Minimum days" type="number" min={1} value={rule.minimumDays} onChange={e=>setForm(current=>({...current,rateRules:current.rateRules?.map((item,i)=>i===index?{...item,minimumDays:Number(e.target.value)}:item)}))}/><Button type="button" size="sm" variant="ghost" aria-label={`Remove ${rule.destinationCity||"rate"}`} onClick={()=>setForm(current=>({...current,rateRules:current.rateRules?.filter((_,i)=>i!==index)}))}><Trash2 size={16}/></Button></div>)}</div>}

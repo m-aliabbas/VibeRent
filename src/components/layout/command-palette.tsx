@@ -149,7 +149,7 @@ export function CommandPalette({
               }}
               placeholder={selectedScope.placeholder}
               aria-label="Search VibeRent"
-              className="h-16 min-w-0 flex-1 bg-transparent text-base font-medium text-[#101828] outline-none placeholder:font-normal placeholder:text-[#98A2B3]"
+              className="h-16 min-w-0 flex-1 bg-transparent text-base font-medium text-[#101828] outline-none placeholder:font-normal placeholder:text-[#667085]"
             />
             <Dialog.Close className="grid h-9 w-9 place-items-center rounded-lg text-[#667085] hover:bg-[#F2F4F7]">
               <X size={18} />
@@ -204,7 +204,7 @@ export function CommandPalette({
                           </span>
                         </span>
                         {activeIndex === index && (
-                          <kbd className="hidden text-xs text-[#98A2B3] sm:block">
+                          <kbd className="hidden text-xs text-[#667085] sm:block">
                             Enter
                           </kbd>
                         )}

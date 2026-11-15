@@ -44,12 +44,14 @@ export function AvailabilityCalendar({
   const dates = useMemo(() => datesForRange(anchor, range), [anchor, range]);
   const periodStart = dates[0];
   const periodEnd = addDays(dates.at(-1)!, 1);
+  // A checked-out car is occupied until it actually comes back, even past its planned return.
+  const [nowIso] = useState(() => new Date().toISOString());
   const events = useMemo<CalendarEvent[]>(() => [
     ...bookings.flatMap(item => !["Cancelled", "No Show", "Draft"].includes(item.status)&&item.vehicleId
-      ? [{ id: item.id, vehicleId: item.vehicleId, from: item.pickupAt, to: item.returnAt, label: item.id, kind: item.status, href: `/bookings/${item.id}` }]
+      ? [{ id: item.id, vehicleId: item.vehicleId, from: item.pickupAt, to: item.status === "Checked Out" && item.returnAt < nowIso ? nowIso : item.returnAt, label: `${item.customer}${item.publicNumber ? ` #${item.publicNumber}` : ""}${item.status === "Checked Out" && item.returnAt < nowIso ? " · overdue" : ""}`, kind: item.status, href: `/bookings/${item.id}` }]
       : []),
     ...blocks.map(item => ({ id: item.id, vehicleId: item.vehicleId, from: item.from, to: item.to, label: item.reason, kind: item.kind })),
-  ], [bookings, blocks]);
+  ], [bookings, blocks, nowIso]);
   const eventsByVehicle = useMemo(() => {
     const grouped = new Map<string, CalendarEvent[]>();
     for (const event of events) grouped.set(event.vehicleId, [...(grouped.get(event.vehicleId) ?? []), event]);
@@ -102,8 +104,8 @@ export function AvailabilityCalendar({
 
     <div className="grid gap-2 border-b border-[#E4E7EC] bg-[#F8FAFC] p-3 md:grid-cols-[minmax(220px,1fr)_repeat(3,auto)]">
       <label className="flex h-10 items-center gap-2 rounded-[9px] border border-[#D0D5DD] bg-white px-3 focus-within:border-[#006FE6] focus-within:ring-2 focus-within:ring-[#006FE6]/10">
-        <Search size={16} className="text-[#98A2B3]"/><span className="sr-only">Search fleet</span>
-        <input value={query} onChange={event => { setQuery(event.target.value); setPage(1); }} placeholder="Search vehicle or plate…" className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-[#98A2B3]"/>
+        <Search size={16} className="text-[#667085]"/><span className="sr-only">Search fleet</span>
+        <input value={query} onChange={event => { setQuery(event.target.value); setPage(1); }} placeholder="Search vehicle or plate…" className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-[#667085]"/>
       </label>
       <PlannerSelect label="City" value={city} onChange={value => { setCity(value); setPage(1); }} options={["All cities", ...cities]}/>
       <PlannerSelect label="Schedule" value={scheduleFilter} onChange={value => { setScheduleFilter(value as ScheduleFilter); setPage(1); }} options={["All vehicles", "Has schedule", "Fully available"]}/>
@@ -122,17 +124,17 @@ export function AvailabilityCalendar({
           <span className="sticky left-0 z-40 border-r border-[#D0D5DD] bg-[#F8FAFC] px-3 py-2.5 text-xs font-semibold text-[#475467]">Vehicle</span>
           {dates.map(date => {
             const today = dateKey(date) === todayKey;
-            return <span key={date.toISOString()} className={`border-l border-[#EAECF0] px-1 py-2 text-center text-[11px] font-semibold ${today ? "bg-[#EFF8FF] text-[#0058B8]" : "text-[#475467]"}`}><span className="block sm:hidden">{shortDay(date)}</span><span className="hidden sm:block">{dateHeader(date, range)}</span></span>;
+            return <span key={date.toISOString()} className={`border-l border-[#EAECF0] px-1 py-2 text-center text-xs font-semibold ${today ? "bg-[#EFF8FF] text-[#0058B8]" : "text-[#475467]"}`}><span className="block sm:hidden">{shortDay(date)}</span><span className="hidden sm:block">{dateHeader(date, range)}</span></span>;
           })}
         </div>
         {visibleVehicles.map((vehicle, rowIndex) => <div key={vehicle.id} className="grid border-b border-[#EAECF0] last:border-0" style={{ gridTemplateColumns: columns }}>
           <div className={`sticky left-0 z-20 flex min-h-14 items-center border-r border-[#D0D5DD] px-3 py-2 ${rowIndex % 2 ? "bg-[#FCFCFD]" : "bg-white"}`}>
-            <div className="min-w-0"><strong className="block truncate text-xs text-[#19191F]">{vehicle.make} {vehicle.model} {vehicle.year}</strong><p className="mt-0.5 truncate text-[11px] text-[#667085]">{vehicle.plate} · {vehicle.city}</p></div>
+            <div className="min-w-0"><strong className="block truncate text-xs text-[#19191F]">{vehicle.make} {vehicle.model} {vehicle.year}</strong><p className="mt-0.5 truncate text-xs text-[#667085]">{vehicle.plate} · {vehicle.city}</p></div>
           </div>
           {dates.map(date => <PlannerCell key={date.toISOString()} date={date} range={range} vehicle={vehicle} events={eventsByVehicle.get(vehicle.id) ?? []} isToday={dateKey(date) === todayKey} onCreateBlock={onCreateBlock}/>)}
         </div>)}
       </div>
-    </div> : <div className="grid min-h-52 place-items-center px-4 text-center"><div><CalendarDays className="mx-auto text-[#98A2B3]"/><p className="mt-3 text-sm font-semibold text-[#344054]">No vehicles match these filters</p><button onClick={clearFilters} className="mt-2 text-sm font-semibold text-[#006FE6] hover:underline">Show all vehicles</button></div></div>}
+    </div> : <div className="grid min-h-52 place-items-center px-4 text-center"><div><CalendarDays className="mx-auto text-[#667085]"/><p className="mt-3 text-sm font-semibold text-[#344054]">No vehicles match these filters</p><button onClick={clearFilters} className="mt-2 text-sm font-semibold text-[#006FE6] hover:underline">Show all vehicles</button></div></div>}
 
     <div className="flex flex-col gap-3 border-t border-[#E4E7EC] bg-[#F8FAFC] px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
       <p className="text-xs text-[#667085]">Select an empty date to create an operational block. Bookings open their detail page.</p>
@@ -145,11 +147,11 @@ function PlannerCell({ date, range, vehicle, events, isToday, onCreateBlock }: {
   const dayEnd = addDays(date, 1);
   const event = events.find(item => overlaps(item, date, dayEnd));
   const compact = range === "Month";
-  if (!event) return <button className={`group relative min-h-14 border-l border-[#EAECF0] focus:z-10 focus:outline-2 focus:outline-[#006FE6] ${isToday ? "bg-[#F5FAFF]" : "hover:bg-[#F8FAFC]"}`} onClick={() => onCreateBlock({ vehicleId: vehicle.id, date })} aria-label={`${vehicle.make} ${vehicle.model}, ${longDate(date)}: available. Create block.`}><Plus size={compact ? 12 : 15} className="mx-auto text-[#98A2B3] opacity-0 transition-opacity group-hover:opacity-100 group-focus:opacity-100"/></button>;
+  if (!event) return <button className={`group relative min-h-14 border-l border-[#EAECF0] focus:z-10 focus:outline-2 focus:outline-[#006FE6] ${isToday ? "bg-[#F5FAFF]" : "hover:bg-[#F8FAFC]"}`} onClick={() => onCreateBlock({ vehicleId: vehicle.id, date })} aria-label={`${vehicle.make} ${vehicle.model}, ${longDate(date)}: available. Create block.`}><Plus size={compact ? 12 : 15} className="mx-auto text-[#667085] opacity-0 transition-opacity group-hover:opacity-100 group-focus:opacity-100"/></button>;
   const startsHere = new Date(event.from) >= date && new Date(event.from) < dayEnd;
   const endsHere = new Date(event.to) > date && new Date(event.to) <= dayEnd;
   const tone = eventTone(event.kind);
-  const content = <span className={`flex min-h-8 items-center overflow-hidden border-y px-1.5 text-[10px] font-semibold ${tone} ${startsHere ? "ml-1 rounded-l-md border-l" : "-ml-px"} ${endsHere ? "mr-1 rounded-r-md border-r" : "-mr-px"}`} title={`${event.label} · ${event.kind}`}>{(startsHere || !compact) && <span className="truncate">{compact && !startsHere ? "" : event.label}</span>}<span className="sr-only">{event.kind}, {longDate(new Date(event.from))} to {longDate(new Date(event.to))}</span></span>;
+  const content = <span className={`flex min-h-8 items-center overflow-hidden border-y px-1.5 text-xs font-semibold ${tone} ${startsHere ? "ml-1 rounded-l-md border-l" : "-ml-px"} ${endsHere ? "mr-1 rounded-r-md border-r" : "-mr-px"}`} title={`${event.label} · ${event.kind}`}>{(startsHere || !compact) && <span className="truncate">{compact && !startsHere ? "" : event.label}</span>}<span className="sr-only">{event.kind}, {longDate(new Date(event.from))} to {longDate(new Date(event.to))}</span></span>;
   return <div className={`grid min-h-14 items-center border-l border-[#EAECF0] ${isToday ? "bg-[#F5FAFF]" : ""}`}>{event.href ? <Link href={event.href} className="focus:z-10 focus:outline-2 focus:outline-[#006FE6]" aria-label={`Open ${event.label}, ${event.kind}`}>{content}</Link> : content}</div>;
 }
 

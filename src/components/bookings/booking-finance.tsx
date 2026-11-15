@@ -1,9 +1,11 @@
 "use client";
 
+import { formatInZone } from "@/lib/timezone";
 import * as Dialog from "@radix-ui/react-dialog";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { CreditCard, FileText, RotateCcw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { SegmentedControl } from "@/components/forms/segmented-control";
 import { FormInput, FormSelect } from "@/components/forms/form-controls";
 import {
   recordBookingDepositAction,
@@ -27,6 +29,7 @@ interface BookingFinanceProps {
   customer: string;
   balance: number;
   depositHeld?: number;
+  depositRequired?: number;
   transactions?: BookingTransactionDto[];
   onChanged: (updatedBooking: BookingDetailData, message: string) => void;
   purpose?: "default" | "settlement";
@@ -37,24 +40,26 @@ export function BookingFinance({
   customer,
   balance,
   depositHeld = 0,
+  depositRequired = 0,
   transactions = [],
   onChanged,
   purpose = "default",
 }: BookingFinanceProps) {
   const [mode, setMode] = useState<"payment" | "deposit" | "ledger">();
+  useEffect(() => { if (purpose === "default" && new URLSearchParams(window.location.search).get("action") === "payment") queueMicrotask(() => setMode("payment")); }, [purpose]);
 
   return (
     <>
       <div className="flex flex-wrap gap-2">
-        <Button size="sm" variant="secondary" onClick={() => setMode("ledger")}>
+        <Button size="sm" variant="secondary" shortcut="l" onClick={() => setMode("ledger")}>
           <FileText size={15} />
           {purpose === "settlement" ? "Review payments" : "Ledger"}
         </Button>
-        {(purpose === "default" || depositHeld > 0) && <Button size="sm" variant="secondary" onClick={() => setMode("deposit")}>
+        {(purpose === "default" || depositHeld > 0) && <Button size="sm" variant="secondary" shortcut="d" onClick={() => setMode("deposit")}>
           <RotateCcw size={15} />
           {purpose === "settlement" ? `Refund deposit · ${formatPkr(depositHeld)}` : "Manage deposit"}
         </Button>}
-        {purpose === "default" && <Button size="sm" onClick={() => setMode("payment")}>
+        {purpose === "default" && <Button size="sm" variant={balance > 0 ? "primary" : "secondary"} shortcut="p" onClick={() => setMode("payment")}>
           <CreditCard size={15} />
           Record payment
         </Button>}
@@ -78,6 +83,7 @@ export function BookingFinance({
           bookingId={bookingId}
           customer={customer}
           depositHeld={depositHeld}
+          depositRequired={depositRequired}
           onClose={() => setMode(undefined)}
           onSaved={(updated, message) => {
             setMode(undefined);
@@ -149,14 +155,17 @@ function PaymentDialog({
   onSave: (updated: BookingDetailData, message: string) => void;
 }) {
   const [amount, setAmount] = useState(Math.max(0, balance));
+  const [discount, setDiscount] = useState(0);
   const [method, setMethod] = useState<PaymentMethod>("Cash");
   const [reference, setReference] = useState("");
   const [account, setAccount] = useState("Lahore cash drawer");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
 
-  const valid = Number.isInteger(amount) && amount > 0;
-  const creditAmount = valid ? amount - Math.max(balance, 0) : 0;
+  const discountValid = Number.isInteger(discount) && discount >= 0 && discount <= Math.max(0, balance);
+  const valid = Number.isInteger(amount) && amount >= 0 && discountValid && amount + discount > 0;
+  const creditAmount = valid ? amount + discount - Math.max(balance, 0) : 0;
+  const remainingAfter = Math.max(0, balance - amount - discount);
 
   async function save() {
     if (!valid || pending) return;
@@ -164,6 +173,7 @@ function PaymentDialog({
     setError("");
     const result = await recordBookingPaymentAction(bookingId, {
       amount,
+      discount,
       method,
       reference: reference.trim(),
       account,
@@ -173,7 +183,8 @@ function PaymentDialog({
       const receiptId = result.data.paymentReceiptNumber === null
         ? ""
         : formatPaymentReceiptNumber(result.data.paymentReceiptNumber);
-      onSave(result.data, `Payment posted${receiptId ? ` as ${receiptId}` : ""}. ${result.data.notificationDelivery.message}`);
+      const discountNote = result.data.discountApplied ? ` Discount of ${formatPkr(result.data.discountApplied)} applied.` : "";
+      onSave(result.data, amount > 0 ? `Payment posted${receiptId ? ` as ${receiptId}` : ""}.${discountNote} ${result.data.notificationDelivery.message}` : `Discount of ${formatPkr(discount)} applied to the booking.`);
     } else {
       setError(result.error.message || "Failed to record payment.");
     }
@@ -191,6 +202,22 @@ function PaymentDialog({
           type="number"
           value={amount || ""}
           onChange={(e) => setAmount(Number(e.target.value))}
+        />
+        <FormInput
+          label="Discount (PKR)"
+          type="number"
+          min={0}
+          max={Math.max(0, balance)}
+          value={discount || ""}
+          placeholder="0"
+          hint={balance > 0 ? `Balance after this: ${formatPkr(remainingAfter)}` : undefined}
+          error={discountValid ? undefined : `Discount can be at most the outstanding ${formatPkr(Math.max(0, balance))}.`}
+          onChange={(e) => {
+            const next = Math.max(0, Number(e.target.value) || 0);
+            setDiscount(next);
+            // Keep "collect the rest" one keystroke away: shrink the amount to what is left after the discount.
+            if (amount === Math.max(0, balance - discount)) setAmount(Math.max(0, balance - next));
+          }}
         />
         <FormSelect
           label="Method"
@@ -229,7 +256,7 @@ function PaymentDialog({
           Cancel
         </Button>
         <Button disabled={!valid || pending} onClick={() => void save()}>
-          {pending ? "Posting…" : "Post payment"}
+          {pending ? "Posting…" : amount > 0 ? "Post payment" : "Apply discount"}
         </Button>
       </div>
     </Shell>
@@ -240,17 +267,21 @@ function DepositDialog({
   bookingId,
   customer,
   depositHeld,
+  depositRequired = 0,
   onClose,
   onSaved,
 }: {
   bookingId: string;
   customer: string;
   depositHeld: number;
+  depositRequired?: number;
   onClose: () => void;
   onSaved: (updated: BookingDetailData, message: string) => void;
 }) {
   const [action, setAction] = useState<DepositAction>(depositHeld > 0 ? "Deposit refunded" : "Deposit received");
-  const [amount, setAmount] = useState(depositHeld || 10000);
+  // Default to what is actually owed or held — never an invented figure.
+  const defaultFor = (next: DepositAction) => next === "Deposit received" ? Math.max(0, depositRequired - depositHeld) : depositHeld;
+  const [amount, setAmount] = useState(() => defaultFor(depositHeld > 0 ? "Deposit refunded" : "Deposit received"));
   const [reason, setReason] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
@@ -282,16 +313,18 @@ function DepositDialog({
       onClose={onClose}
     >
       <div className="mt-5 space-y-4">
-        <FormSelect
+        <SegmentedControl
           label="Action"
           value={action}
-          onChange={(e) => setAction(e.target.value as DepositAction)}
-          options={["Deposit received", "Deposit applied", "Deposit refunded", "Deposit forfeited"]}
+          onChange={(next) => { setAction(next); setAmount(defaultFor(next)); }}
+          options={(["Deposit received", "Deposit applied", "Deposit refunded", "Deposit forfeited"] as DepositAction[]).map((value) => ({ value, label: value.replace("Deposit ", "").replace(/^./, (c) => c.toUpperCase()) }))}
         />
         <FormInput
           label="Amount (PKR)"
           type="number"
+          inputMode="numeric"
           value={amount || ""}
+          placeholder={action === "Deposit received" ? (depositRequired ? `Required deposit ${formatPkr(depositRequired)}` : "Enter amount") : `Held ${formatPkr(depositHeld)}`}
           onChange={(e) => setAmount(Number(e.target.value))}
         />
         <FormInput
@@ -386,7 +419,7 @@ function LedgerDialog({
                     <div className="flex items-center gap-2">
                       <strong className="text-sm capitalize">{item.kind.replaceAll("_", " ")}</strong>
                       <span
-                        className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${
+                        className={`inline-block rounded px-1.5 py-0.5 text-xs font-semibold uppercase ${
                           ["reversed", "refunded"].includes(item.status)
                             ? "bg-amber-100 text-amber-800"
                             : "bg-emerald-100 text-emerald-800"
@@ -400,15 +433,12 @@ function LedgerDialog({
                     </p>
                     {item.reference && <p className="mt-1 text-xs text-[#475467]">{isNegative ? "Reason" : "Reference"}: {item.reference}</p>}
                     {original && (
-                      <p className="mt-1 text-[11px] font-medium text-[#667085]">
+                      <p className="mt-1 text-xs font-medium text-[#667085]">
                         Linked to {original.receiptNumber ? formatPaymentReceiptNumber(original.receiptNumber) : original.id} · {original.kind.replaceAll("_", " ")} · {formatPkr(original.amount)}
                       </p>
                     )}
-                    <p className="text-[11px] text-[#98A2B3]">
-                      {new Intl.DateTimeFormat("en-PK", {
-                        dateStyle: "medium",
-                        timeStyle: "short",
-                      }).format(new Date(item.postedAt))}
+                    <p className="text-xs text-[#667085]">
+                      {formatInZone(item.postedAt, { dateStyle: "medium", timeStyle: "short" })}
                     </p>
                   </div>
                   <strong className={`text-sm ${isNegative ? "text-[#B42318]" : "text-[#067647]"}`}>

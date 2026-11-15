@@ -7,6 +7,7 @@ import { DomainError } from "@/server/domain/errors";
 import { auth } from "@/server/auth/auth";
 import { execute, inTransaction, queryAll, queryOne } from "@/db/query";
 import { assertDesktopLicense } from "@/server/desktop/license-service";
+import { getAgencyTimeZone } from "@/server/context/agency-time-zone";
 
 type BetterSession = NonNullable<Awaited<ReturnType<typeof auth.api.getSession>>>;
 
@@ -19,6 +20,8 @@ export type SessionViewer = {
   emailVerified: boolean;
   activeAgencyId?: string;
   activeAgencyName?: string;
+  /** IANA zone the agency works in; booking times are entered and shown in it. */
+  timeZone?: string;
   membershipId?: string;
   role?: StaffRole;
   active: boolean;
@@ -108,9 +111,12 @@ async function resolveViewer(session: BetterSession): Promise<SessionViewer> {
     [activeMembership.id],
   )).map(row => row.branchId);
 
+  const timeZone = await getAgencyTimeZone(activeMembership.organizationId);
+
   return {
     authUserId: session.user.id,
     staffUserId: staff.id,
+    timeZone,
     name: session.user.name,
     email: session.user.email,
     image: session.user.image,

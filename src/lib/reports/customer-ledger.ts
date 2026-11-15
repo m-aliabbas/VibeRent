@@ -1,11 +1,15 @@
-export type CustomerLedgerBooking = { id: string; vehicle: string; plate: string; status: string; pickupAt: string; returnAt: string; totalAmount: number; paid: number };
+export type CustomerLedgerBooking = { id: string; publicNumber?: number | null; vehicle: string; plate: string; status: string; pickupAt: string; returnAt: string; totalAmount: number; paid: number; discount?: number };
 
 export type CustomerLedgerRow = CustomerLedgerBooking & {
   /** Expenses charged to the customer sit in the ledger as charges; money they returned counts as paid. */
   kind: "booking" | "expense";
   description: string;
-  /** Amount charged; cancelled, no-show, and draft bookings charge nothing. */
+  /** Amount charged after discount; cancelled, no-show, and draft bookings charge nothing. */
   amount: number;
+  /** Rent before discount (amount + discount). */
+  rent: number;
+  /** Discount given to the customer on this booking. */
+  discount: number;
   /** Running balance after this booking, like a bank statement. Negative means the customer is in credit. */
   balance: number;
 };
@@ -29,6 +33,7 @@ export function customerLedger(bookings: CustomerLedgerBooking[], filters: { fro
   const rows: CustomerLedgerRow[] = [];
   for (const booking of ordered) {
     const amount = voided(booking.status) ? 0 : booking.totalAmount;
+    const discount = voided(booking.status) ? 0 : Math.max(0, booking.discount ?? 0);
     if (filters.from && booking.returnAt.slice(0, 10) < filters.from) {
       opening += amount - booking.paid;
       continue;
@@ -36,9 +41,11 @@ export function customerLedger(bookings: CustomerLedgerBooking[], filters: { fro
     if (filters.to && booking.pickupAt.slice(0, 10) > filters.to) continue;
     if (!rows.length) balance = opening;
     balance += amount - booking.paid;
-    rows.push({ ...booking, amount, balance });
+    rows.push({ ...booking, amount, rent: amount + discount, discount, balance });
   }
   const amount = rows.reduce((sum, row) => sum + row.amount, 0);
+  const rent = rows.reduce((sum, row) => sum + row.rent, 0);
+  const discount = rows.reduce((sum, row) => sum + row.discount, 0);
   const paid = rows.reduce((sum, row) => sum + row.paid, 0);
-  return { opening, rows, amount, paid, closing: opening + amount - paid };
+  return { opening, rows, rent, discount, amount, paid, closing: opening + amount - paid };
 }

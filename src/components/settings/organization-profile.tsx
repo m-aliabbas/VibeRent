@@ -6,6 +6,7 @@ import { Building2, ImagePlus, LoaderCircle, Mail, MapPin, Phone, ShieldCheck } 
 import { updateOrganizationProfileAction } from "@/app/actions/organization";
 import { FormInput, FormSelect } from "@/components/forms/form-controls";
 import { Button } from "@/components/ui/button";
+import { TIME_ZONE_OPTIONS } from "@/lib/timezone";
 import type { OrganizationSettingsDto } from "@/server/services/organization-settings-service";
 
 type Profile = OrganizationSettingsDto["profile"];
@@ -70,7 +71,7 @@ export function OrganizationProfile({ initial, onSaved }: { initial: Profile; on
             <FormInput label="Business phone" placeholder="+92 42 3578 1100" value={profile.phone} error={fieldErrors.phone} onChange={event => update("phone", event.target.value)}/>
             <FormInput label="Public email" type="email" placeholder="operations@example.pk" value={profile.publicEmail} error={fieldErrors.publicEmail} onChange={event => update("publicEmail", event.target.value)}/>
             <div className="sm:col-span-2"><FormInput required label="Registered address" value={profile.address} error={fieldErrors.address} onChange={event => update("address", event.target.value)}/></div>
-            <FormSelect label="Time zone" disabled value={profile.timezone} options={["Asia/Karachi"]}/>
+            <div><FormSelect label="Time zone" value={profile.timezone} onChange={event => update("timezone", event.target.value)} options={TIME_ZONE_OPTIONS.some(option => option.value === profile.timezone) ? TIME_ZONE_OPTIONS : [{ value: profile.timezone, label: profile.timezone }, ...TIME_ZONE_OPTIONS]}/><p className="mt-1.5 text-xs text-[#667085]">Booking, pickup and return times are entered and shown in this zone. Default is Pakistan (GMT+5).</p></div>
           </div>
         </div>
         {error && <p role="alert" className="rounded-lg border border-[#FECDCA] bg-[#FEF3F2] p-3 text-sm text-[#B42318]">{error}</p>}
@@ -83,7 +84,7 @@ export function OrganizationProfile({ initial, onSaved }: { initial: Profile; on
         <h2 className="font-bold">Organization logo</h2>
         <p className="mt-1 text-xs text-[#667085]">PNG or JPG, up to 500 KB. A wide transparent logo works best.</p>
         <div className="mt-4 grid min-h-36 place-items-center overflow-hidden rounded-xl border border-dashed bg-[#F8FAFC] p-4">
-          {profile.logoDataUrl ? <Image unoptimized src={profile.logoDataUrl} alt="Organization logo preview" width={240} height={96} className="max-h-24 max-w-full object-contain"/> : <div className="text-center text-[#98A2B3]"><ImagePlus className="mx-auto"/><p className="mt-2 text-xs">No logo uploaded</p></div>}
+          {profile.logoDataUrl ? <Image unoptimized src={profile.logoDataUrl} alt="Organization logo preview" width={240} height={96} className="max-h-24 max-w-full object-contain"/> : <div className="text-center text-[#667085]"><ImagePlus className="mx-auto"/><p className="mt-2 text-xs">No logo uploaded</p></div>}
         </div>
         <label className="mt-3 block"><span className="sr-only">Choose organization logo</span><input className="block w-full text-xs file:mr-3 file:rounded-lg file:border-0 file:bg-[#EFF8FF] file:px-3 file:py-2 file:font-semibold file:text-[#175CD3]" type="file" accept="image/png,image/jpeg" onChange={event => chooseLogo(event.target.files?.[0])}/></label>
         {fieldErrors.logoDataUrl && <p className="mt-2 text-xs text-[#B42318]">{fieldErrors.logoDataUrl}</p>}

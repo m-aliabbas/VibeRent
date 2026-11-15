@@ -3,9 +3,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Archive, CarFront, CirclePlus, Droplets, Plus, Trash2, Wrench } from "lucide-react";
+import { Archive, CarFront, Droplets, Plus, Trash2 } from "lucide-react";
 import { PageHeader } from "@/components/shared/page-header";
-import { FilterBar, FilterSelect } from "@/components/shared/filter-bar";
+import { FilterBar, FilterSelect, useFilterFacet } from "@/components/shared/filter-bar";
 import { DataTable, type DataColumn } from "@/components/shared/data-table";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { ActionMenu } from "@/components/shared/action-menu";
@@ -82,6 +82,7 @@ export default function VehiclesPage() {
     queueMicrotask(() => {
       if (!active) return;
       setSearch(params.get("q") ?? "");
+      if (params.get("new") === "1") { setEditing(undefined); setFormOpen(true); }
       setStatus(
         initialFleetView === "active" &&
           [
@@ -288,25 +289,18 @@ export default function VehiclesPage() {
       key: "plate",
       header: "Plate",
       sortable: true,
-      cell: (v) => <span className="font-bold text-[#344054]">{v.plate}</span>,
+      cell: (v) => <span className="font-mono text-[13px] font-semibold text-[#344054]">{v.plate}</span>,
     },
     {
       key: "vehicle",
       header: "Vehicle",
       sortable: true,
       cell: (v) => (
-        <div className="flex items-center gap-3">
-          <span className="grid h-10 w-10 place-items-center rounded-[9px] bg-[#EFF8FF] text-[#006FE6]">
-            <CarFront size={19} />
-          </span>
-          <div>
-            <Link href={`/vehicles/${v.id}`} className="font-semibold hover:text-[#006FE6] hover:underline">
-              {v.make} {v.model}
-            </Link>
-            <p className="mt-0.5 text-xs text-[#667085]">
-              {v.year} · {v.category}
-            </p>
-          </div>
+        <div>
+          <Link href={`/vehicles/${v.id}`} className="font-semibold hover:text-[#006FE6] hover:underline">
+            {v.make} {v.model}
+          </Link>
+          <span className="ml-2 text-xs text-[#667085]">{v.year} · {v.category}</span>
         </div>
       ),
     },
@@ -336,6 +330,7 @@ export default function VehiclesPage() {
       key: "rate",
       header: "Daily rate",
       sortable: true,
+      className: "text-right",
       cell: (v) => (
         <span className="font-semibold tabular-nums">
           {formatPkr(v.dailyRate)}
@@ -348,7 +343,7 @@ export default function VehiclesPage() {
       className: "w-12",
       cell: (v) => (
         <div className="flex items-center justify-end gap-1">
-          {v.status!=="Archived"?<Button size="sm" variant="danger" onClick={event=>{event.stopPropagation();setRemoving(v)}}><Trash2 size={15}/>Delete</Button>:<Button asChild size="sm" variant="danger"><Link href={`/archive?q=${encodeURIComponent(v.plate)}`} onClick={event=>event.stopPropagation()}><Trash2 size={15}/>Delete permanently</Link></Button>}
+          {v.status==="Archived"&&<Button asChild size="sm" variant="dangerOutline"><Link href={`/archive?q=${encodeURIComponent(v.plate)}`} onClick={event=>event.stopPropagation()}><Trash2 size={15}/>Delete permanently</Link></Button>}
           <ActionMenu
             onView={() => router.push(`/vehicles/${v.id}`)}
             onEdit={() => {
@@ -372,6 +367,7 @@ export default function VehiclesPage() {
         description="Track availability, rates, ownership, and the current location of every vehicle."
         actions={
           <Button
+            shortcut="n"
             disabled={loading || Boolean(loadError)}
             title={
               loading || loadError ? "Wait for fleet data to load" : undefined
@@ -386,35 +382,7 @@ export default function VehiclesPage() {
           </Button>
         }
       />
-      <details className="rounded-xl border border-dashed border-[#B2DDFF] bg-[#F5FAFF] px-4 py-3 text-sm">
-        <summary className="cursor-pointer font-semibold text-[#175CD3]">
-          Prototype state previews
-        </summary>
-        <div className="mt-3 flex flex-wrap gap-2">
-          {[
-            ["Default", ""],
-            ["Loading", "loading"],
-            ["Error", "error"],
-            ["Empty", "empty"],
-            ["Filtered empty", "filtered"],
-          ].map(([label, value]) => (
-            <Button key={label} asChild size="sm" variant="secondary">
-              <Link
-                href={
-                  value === "filtered"
-                    ? "/vehicles?q=no-matching-fleet-record"
-                    : value
-                      ? `/vehicles?demo=${value}`
-                      : "/vehicles"
-                }
-              >
-                {label}
-              </Link>
-            </Button>
-          ))}
-        </div>
-      </details>
-      <div className="flex gap-1 overflow-x-auto rounded-xl border border-[#E4E7EC] bg-white p-1.5" aria-label="Fleet views">
+      <div className="flex gap-1 border-b border-[#E4E7EC]" role="tablist" aria-label="Fleet views">
         {([
           ["active", "Active fleet", activeItems.length, CarFront],
           ["archived", "Deleted / archived", archivedItems.length, Archive],
@@ -422,13 +390,14 @@ export default function VehiclesPage() {
           <button
             key={value}
             type="button"
-            aria-pressed={fleetView === value}
+            role="tab"
+            aria-selected={fleetView === value}
             onClick={() => {
               setFleetView(value);
               setStatus("All");
               setPage(1);
             }}
-            className={`flex min-h-10 shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold transition ${fleetView === value ? "bg-[#EAF4FF] text-[#005BBE]" : "text-[#667085] hover:bg-[#F8FAFC] hover:text-[#344054]"}`}
+            className={`-mb-px flex h-10 shrink-0 items-center gap-2 border-b-2 px-3 text-sm font-semibold ${fleetView === value ? "border-[#006FE6] text-[#0058B8]" : "border-transparent text-[#475467] hover:text-[#19191F]"}`}
           >
             <Icon size={16} />
             {label}
@@ -436,58 +405,6 @@ export default function VehiclesPage() {
           </button>
         ))}
       </div>
-      {fleetView === "active" && <section
-        className="grid grid-cols-2 gap-3 lg:grid-cols-4"
-        aria-label="Fleet summary"
-        aria-busy={loading}
-      >
-        {[
-          {
-            label: "Total fleet",
-            value: activeItems.length,
-            icon: CarFront,
-            tone: "text-[#006FE6] bg-[#EFF8FF]",
-          },
-          {
-            label: "Available",
-            value: activeItems.filter((v) => v.status === "Available").length,
-            icon: CirclePlus,
-            tone: "text-[#067647] bg-[#ECFDF3]",
-          },
-          {
-            label: "On booking",
-            value: activeItems.filter((v) => v.status === "Booked").length,
-            icon: CarFront,
-            tone: "text-[#5925DC] bg-[#F4F3FF]",
-          },
-          {
-            label: "Needs attention",
-            value: activeItems.filter((v) =>
-              ["Maintenance", "Out of Service"].includes(v.status),
-            ).length,
-            icon: Wrench,
-            tone: "text-[#B54708] bg-[#FFFAEB]",
-          },
-        ].map(({ label, value, icon: Icon, tone }) => (
-          <button
-            type="button"
-            key={label}
-            aria-pressed={label === "Total fleet" ? status === "All" : label === "On booking" ? status === "Booked" : label === "Needs attention" ? status === "Needs attention" : status === label}
-            onClick={() => { setStatus(label === "Total fleet" ? "All" : label === "On booking" ? "Booked" : label); setPage(1); }}
-            className={`flex items-center gap-3 rounded-xl border bg-white p-4 text-left transition hover:border-[#84CAFF] ${(label === "Total fleet" ? status === "All" : label === "On booking" ? status === "Booked" : label === "Needs attention" ? status === "Needs attention" : status === label) ? "border-[#006FE6] ring-2 ring-[#006FE6]/10" : "border-[#E8ECF2]"}`}
-          >
-            <span
-              className={`grid h-9 w-9 shrink-0 place-items-center rounded-[9px] ${tone}`}
-            >
-              <Icon size={18} />
-            </span>
-            <div>
-              <p className="text-xl font-bold">{loading ? "—" : value}</p>
-              <p className="text-xs text-[#667085]">{label}</p>
-            </div>
-          </button>
-        ))}
-      </section>}
       {fleetView === "active" && !loading && oilChangeDue.length > 0 && status !== "Oil change due" && (
         <div role="status" className="flex flex-col gap-3 rounded-xl border border-[#FEDF89] bg-[#FFFAEB] p-4 sm:flex-row sm:items-center">
           <span className="grid h-9 w-9 shrink-0 place-items-center rounded-[9px] bg-white text-[#B54708]"><Droplets size={18} /></span>
@@ -499,6 +416,8 @@ export default function VehiclesPage() {
         </div>
       )}
       <FilterBar
+        placeholder="Search plate, make or model…"
+        summary={`${filtered.length} vehicle${filtered.length === 1 ? "" : "s"}`}
         search={search}
         onSearch={(value) => {
           setSearch(value);
@@ -549,12 +468,8 @@ export default function VehiclesPage() {
           }}
           options={["Own", "Managed"]}
         />
+        <RateRange min={minRate} max={maxRate} onChange={(nextMin, nextMax) => { setMinRate(nextMin); setMaxRate(nextMax); setPage(1); }} />
       </FilterBar>
-      <div className="grid gap-3 rounded-xl border border-[#E4E7EC] bg-white p-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
-        <label className="text-xs font-semibold text-[#475467]">Minimum daily price<input aria-label="Minimum daily price" type="number" min={0} value={minRate} onChange={event=>{setMinRate(event.target.value);setPage(1)}} placeholder="No minimum" className="field mt-1.5"/></label>
-        <label className="text-xs font-semibold text-[#475467]">Maximum daily price<input aria-label="Maximum daily price" type="number" min={0} value={maxRate} onChange={event=>{setMaxRate(event.target.value);setPage(1)}} placeholder="No maximum" className="field mt-1.5"/></label>
-        <p className="pb-2 text-xs text-[#667085]">{filtered.length} vehicle{filtered.length===1?"":"s"} match</p>
-      </div>
       {loading ? (
         <LoadingState />
       ) : loadError ? (
@@ -571,7 +486,7 @@ export default function VehiclesPage() {
           total={filtered.length}
           onRowClick={(vehicle)=>router.push(`/vehicles/${vehicle.id}`)}
           onPageChange={setPage}
-          empty={<EmptyState filtered={hasFilters} />}
+          empty={<EmptyState filtered={hasFilters} title={hasFilters ? "No vehicles match" : "No vehicles yet"} description={hasFilters ? "Clear a filter or change the search." : "Press N or use Add vehicle to add the first car."} />}
           mobileCard={(v) => (
             <div>
               <div className="flex items-start gap-3">
@@ -595,7 +510,6 @@ export default function VehiclesPage() {
                   onDelete={() => setRemoving(v)}
                   archived={v.status === "Archived"}
                 />
-                {v.status!=="Archived"?<Button size="sm" variant="danger" onClick={()=>setRemoving(v)}><Trash2 size={15}/>Delete</Button>:<Button asChild size="sm" variant="danger"><Link href={`/archive?q=${encodeURIComponent(v.plate)}`}><Trash2 size={15}/>Delete permanently</Link></Button>}
               </div>
               <div className="mt-4 flex items-center justify-between border-t border-[#EAECF0] pt-3">
                 <div className="flex flex-wrap gap-2">
@@ -656,5 +570,19 @@ export default function VehiclesPage() {
       />
       )}
     </div>
+  );
+}
+
+function RateRange({ min, max, onChange }: { min: string; max: string; onChange: (min: string, max: string) => void }) {
+  useFilterFacet("rate", min || max ? `Rate: ${min || "0"} – ${max || "any"}` : null, () => onChange("", ""));
+  return (
+    <fieldset className="min-w-0">
+      <legend className="mb-1 text-xs font-bold uppercase tracking-[.04em] text-[#475467]">Daily rate (PKR)</legend>
+      <div className="flex items-center gap-1">
+        <input aria-label="Minimum daily rate" type="number" inputMode="numeric" min={0} step={500} value={min} onChange={event => onChange(event.target.value, max)} placeholder="Min" className="h-8 min-w-0 flex-1 rounded-[6px] border border-[#D0D5DD] px-2 text-[13px] tabular-nums" />
+        <span className="text-[#667085]">–</span>
+        <input aria-label="Maximum daily rate" type="number" inputMode="numeric" min={0} step={500} value={max} onChange={event => onChange(min, event.target.value)} placeholder="Max" className="h-8 min-w-0 flex-1 rounded-[6px] border border-[#D0D5DD] px-2 text-[13px] tabular-nums" />
+      </div>
+    </fieldset>
   );
 }

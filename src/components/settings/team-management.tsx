@@ -455,7 +455,7 @@ function MemberCard({
           <div className="flex flex-wrap items-center gap-2">
             <strong className="text-sm">{member.name}</strong>
             {member.isCurrentUser && (
-              <span className="rounded bg-[#EFF8FF] px-2 py-0.5 text-[10px] font-bold text-[#175CD3]">
+              <span className="rounded bg-[#EFF8FF] px-2 py-0.5 text-xs font-bold text-[#175CD3]">
                 YOU
               </span>
             )}

@@ -21,6 +21,7 @@ const tones: Record<string, string> = {
   settled: "bg-[#ECFDF3] text-[#067647] ring-[#ABEFC6]",
   paid: "bg-[#ECFDF3] text-[#067647] ring-[#ABEFC6]",
   outstanding: "bg-[#FFFAEB] text-[#B54708] ring-[#FEDF89]",
+  "owes agency": "bg-[#FEF3F2] text-[#B42318] ring-[#FECDCA]",
   "no rentals": "bg-[#F2F4F7] text-[#475467] ring-[#D0D5DD]",
   unpaid: "bg-[#F2F4F7] text-[#475467] ring-[#D0D5DD]",
   "partially paid": "bg-[#FFFAEB] text-[#B54708] ring-[#FEDF89]",
@@ -38,7 +39,7 @@ export function StatusBadge({ status }: { status: string }) {
   return (
     <span
       className={cn(
-        "inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset",
+        "inline-flex items-center whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold ring-1 ring-inset",
         tones[status.toLowerCase()] ?? tones.own,
       )}
     >

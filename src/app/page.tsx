@@ -1,48 +1,78 @@
 import Link from "next/link";
-import { ArrowRight, BarChart3, CalendarDays, CarFront, CircleDollarSign, Clock3, FileText, Hand, Landmark, MapPin, Plus, ReceiptText, TrendingUp, Users, Zap } from "lucide-react";
-import { TimeGreeting } from "@/components/dashboard/time-greeting";
+import { ArrowRight, Plus, ReceiptText } from "lucide-react";
 import { formatPkr } from "@/lib/utils";
-import { getSessionViewer, getWebRequestContext } from "@/server/auth/session";
+import { getWebRequestContext } from "@/server/auth/session";
 import { getDashboard } from "@/server/services/dashboard-service";
+import { getAgencyAccountSnapshot } from "@/server/services/report-service";
+import type { AgencyAccountSummary } from "@/lib/reports/agency-account";
 import { listVehicles } from "@/server/services/vehicle-service";
-import { OdometerQuickUpdate } from "@/components/dashboard/odometer-quick-update";
+import { OdometerButton } from "@/components/dashboard/odometer-quick-update";
+import { TodayQueue, type QueueRow } from "@/components/dashboard/today-queue";
+import { Button } from "@/components/ui/button";
+import { QuickActions } from "@/components/dashboard/quick-actions";
+import { listBookings } from "@/server/services/booking-service";
 
-const actions = [
-  { title: "Add external income", description: "Post an amount and details to the system ledger", icon: CircleDollarSign, href: "/legacy-entry?entry=income" },
-  { title: "Legacy data entry", description: "Quickly import historical records and ledger entries", icon: FileText, href: "/legacy-entry" },
-  { title: "Create New Booking", description: "Reserve a vehicle for a customer", icon: CalendarDays, href: "/bookings/new" },
-  { title: "Add New Vehicle", description: "Add a vehicle to your fleet", icon: CarFront, href: "/vehicles" },
-  { title: "Record Expense", description: "Log an expense or payment", icon: ReceiptText, href: "/expenses" },
-  { title: "Generate Report", description: "View reports and insights", icon: BarChart3, href: "/reports" },
-];
 
 export default async function Dashboard() {
-  const [viewer, context] = await Promise.all([getSessionViewer(), getWebRequestContext()]);
-  const [data,vehicles]=await Promise.all([getDashboard(context),listVehicles(context)]);
+  const context = await getWebRequestContext();
   const today=new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Karachi",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
+  const canSeeAgencyAccount=context.roles.some(role=>["agency_owner","fleet_manager","accountant"].includes(role));
+  const [data,vehicles,bookings,agency]=await Promise.all([getDashboard(context),listVehicles(context),listBookings(context),canSeeAgencyAccount?getAgencyAccountSnapshot(context):Promise.resolve(null)]);
+  const queue=buildTodayQueue(bookings,today);
+  const paymentsDueTotal=queue.filter(row=>row.kind==="payment").reduce((sum,row)=>sum+row.balance,0);
   const ledgerHref=(entry:string)=>`/reports?tab=Ledger&from=${today}&to=${today}&entry=${entry}`;
-  const activityIcon = { booking: CalendarDays, vehicle: CarFront, customer: Users, finance: CircleDollarSign, other: FileText };
 
   return <div className="space-y-5">
-    <section className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between"><div><div className="flex items-center gap-2"><h1 className="text-[30px] font-extrabold tracking-[-.035em] text-[#0D1730] sm:text-[34px]"><TimeGreeting name={viewer?.name.split(" ")[0] ?? "there"}/></h1><Hand size={29} className="rotate-[-12deg] fill-[#FFC83D] text-[#E6A900]" aria-hidden="true"/></div><p className="mt-1 text-[15px] text-[#4E596C]">Here’s what’s happening with your rental business today.</p></div><Link href="/bookings/new" className="inline-flex h-10 w-fit items-center gap-2 rounded-[9px] bg-[#0878F9] px-4 text-sm font-semibold text-white shadow-sm hover:bg-[#0066D6]"><Plus size={17}/>New booking</Link></section>
+    <section className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between"><div><h1 className="text-[28px] font-bold tracking-[-.03em] text-[#19191F]">Today</h1><p className="mt-0.5 text-sm text-[#475467]">{new Intl.DateTimeFormat("en-PK",{weekday:"long",day:"numeric",month:"long",timeZone:"Asia/Karachi"}).format(new Date())}</p></div><div className="flex flex-wrap gap-2"><OdometerButton vehicles={vehicles.filter(item=>item.status!=="Archived").map(item=>({id:item.id,label:`${item.plate} · ${item.make} ${item.model}`,lastOdometer:item.lastOdometer}))}/><Button asChild variant="secondary" shortcut="shift+e"><Link href="/expenses?new=1"><ReceiptText size={17}/>Record expense</Link></Button><Button asChild shortcut="n"><Link href="/bookings/new"><Plus size={17}/>New booking</Link></Button></div></section>
 
-    <section className="overflow-hidden rounded-xl border border-[#E3E7ED] bg-white shadow-[0_2px_7px_rgba(16,24,40,.055)]"><div className="flex flex-col gap-2 border-b border-[#E9ECF1] px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between sm:px-5"><div className="flex items-center gap-2.5"><TrendingUp size={21}/><div><h2 className="text-[17px] font-bold">Financial snapshot</h2><p className="text-xs text-[#667085]">Posted ledger cash: income minus approved expenses and payments to owners or external sources.</p></div></div><Link href="/reports?tab=Ledger" className="text-sm font-semibold text-[#006FE6]">Open ledger</Link></div><div className="grid divide-y sm:grid-cols-2 sm:divide-x sm:divide-y-0 lg:grid-cols-4">{[
-      {label:"Income",icon:CircleDollarSign,tone:"text-[#067647] bg-[#ECFDF3]",key:"income" as const},
-      {label:"Expenses",icon:ReceiptText,tone:"text-[#B54708] bg-[#FFFAEB]",key:"expenses" as const},
-      {label:"Owner & source payments",icon:Landmark,tone:"text-[#5925DC] bg-[#F4F3FF]",key:"ownerPayments" as const},
-      {label:"Net profit",icon:TrendingUp,tone:"text-[#006FE6] bg-[#EFF8FF]",key:"netProfit" as const},
-    ].map(({label,icon:Icon,tone,key})=><Link href={key==="expenses"?ledgerHref("expense"):key==="ownerPayments"?ledgerHref("owner-payment"):key==="income"?ledgerHref("income"):ledgerHref("all")} key={label} aria-label={`Open ${label.toLowerCase()} ledger for today`} className="group p-4 transition hover:bg-[#FAFCFF] focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-[#006FE6]"><div className="flex items-center gap-2"><span className={`grid h-8 w-8 place-items-center rounded-lg ${tone}`}><Icon size={16}/></span><h3 className="text-sm font-bold">{label}</h3><ArrowRight size={14} className="ml-auto text-[#98A2B3] transition-transform group-hover:translate-x-0.5 group-hover:text-[#006FE6]"/></div><p className="mt-4 text-xl font-extrabold tabular-nums">{formatPkr(data.finance.today[key])}</p><p className="mt-1 text-xs text-[#667085]">Today</p><div className="mt-3 grid grid-cols-2 gap-3 border-t pt-3 text-xs"><div><p className="font-bold tabular-nums">{formatPkr(data.finance.month[key])}</p><p className="mt-0.5 text-[#667085]">This month</p></div><div><p className="font-bold tabular-nums">{formatPkr(data.finance.allTime[key])}</p><p className="mt-0.5 text-[#667085]">All time</p></div></div><p className="mt-3 text-xs font-semibold text-[#006FE6]">View ledger</p></Link>)}</div></section>
+    <section aria-label="Money today" className="grid grid-cols-2 gap-3 lg:grid-cols-4">{[
+      {label:"Income",key:"income" as const,entry:"income"},
+      {label:"Expenses",key:"expenses" as const,entry:"expense"},
+      {label:"Owner & source payments",key:"ownerPayments" as const,entry:"owner-payment"},
+      {label:"Net profit",key:"netProfit" as const,entry:"all"},
+    ].map(({label,key,entry})=><Link href={ledgerHref(entry)} key={label} aria-label={`Open ${label.toLowerCase()} ledger for today`} className="group rounded-xl border border-[#E8ECF2] bg-white p-4 transition hover:border-[#84CAFF]"><div className="flex items-center justify-between"><p className="text-xs font-semibold text-[#475467]">{label} · today</p><ArrowRight size={14} className="text-[#667085] group-hover:text-[#006FE6]"/></div><p className={`mt-1 text-xl font-bold tabular-nums ${key==="netProfit"&&data.finance.today[key]<0?"text-[#B42318]":""}`}>{formatPkr(data.finance.today[key])}</p><p className="mt-1 text-xs text-[#475467] tabular-nums">Month <strong className="text-[#344054]">{formatPkr(data.finance.month[key])}</strong> · Last month <strong className="text-[#344054]">{formatPkr(data.finance.previousMonth[key])}</strong></p></Link>)}</section>
 
-    <div className="grid gap-4 xl:grid-cols-[1.42fr_1fr]">
+    {agency&&<section aria-labelledby="agency-account-heading" className="rounded-xl border border-[#E8ECF2] bg-white p-4">
+      <div className="flex items-center justify-between gap-3"><div><h2 id="agency-account-heading" className="text-sm font-bold text-[#19191F]">Agency account</h2><p className="text-xs text-[#475467]">Agency-owned income after owner shares, supplier costs and agency expenses</p></div><Link href={`/reports?tab=Agency%20account&from=${agency.dates.monthStart}&to=${agency.dates.today}`} className="shrink-0 text-xs font-semibold text-[#0058B8] hover:underline">Open account</Link></div>
+      <div className="mt-3 grid gap-3 sm:grid-cols-3">{([
+        ["Today",agency.today,agency.dates.today,agency.dates.today],
+        ["This month",agency.month,agency.dates.monthStart,agency.dates.today],
+        ["Last month",agency.previousMonth,agency.dates.previousMonthStart,agency.dates.previousMonthEnd],
+      ] as const).map(([label,summary,from,to])=><AgencyCard key={label} label={label} summary={summary} href={`/reports?tab=Agency%20account&from=${from}&to=${to}`}/>)}</div>
+    </section>}
+
+
+
+
+    <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_260px] xl:items-start">
+      <TodayQueue rows={queue} paymentsDueTotal={paymentsDueTotal}/>
       <div className="space-y-4">
-        <OdometerQuickUpdate vehicles={vehicles.filter(item=>item.status!=="Archived").map(item=>({id:item.id,label:`${item.make} ${item.model} · ${item.plate}`,lastOdometer:item.lastOdometer}))}/>
-        <section className="overflow-hidden rounded-xl border border-[#E3E7ED] bg-white shadow-[0_2px_7px_rgba(16,24,40,.055)]"><div className="flex items-center justify-between border-b border-[#E9ECF1] px-4 py-3.5 sm:px-5"><div className="flex items-center gap-2.5"><CalendarDays size={21}/><h2 className="text-[17px] font-bold">Today’s Pickups & Returns</h2></div><Link href="/bookings" className="hidden items-center gap-1 text-sm font-medium text-[#006FE6] hover:underline sm:flex">View all <ArrowRight size={16}/></Link></div>{data.schedule.length?<div className="divide-y divide-[#E9ECF1]">{data.schedule.map(item=><Link href={`/bookings/${item.id.split("-").slice(0,-1).join("-")}`} key={item.id} className="grid min-h-[82px] grid-cols-[82px_1fr_auto] items-center gap-3 px-4 py-3 hover:bg-[#FAFCFF] sm:grid-cols-[88px_1.2fr_1fr_90px_18px] sm:px-5"><span className={`w-fit rounded-md px-2 py-1 text-[11px] font-bold uppercase ${item.type==="Pickup"?"bg-[#E9F8EE] text-[#137A36]":"bg-[#E8F2FF] text-[#0969DA]"}`}>{item.type}</span><div className="min-w-0"><p className="truncate text-sm font-semibold">{item.vehicle}</p><span className="mt-1 inline-block rounded border px-1.5 py-0.5 text-[11px]">{item.plate}</span></div><div className="col-start-2 row-start-2 min-w-0 sm:col-start-auto sm:row-start-auto"><p className="truncate text-sm font-semibold">{item.customer}</p><p className="mt-1 flex items-center gap-1 truncate text-xs text-[#667085]"><MapPin size={11}/>{item.location}</p></div><span className="col-start-3 row-start-2 whitespace-nowrap text-xs font-semibold sm:col-start-auto sm:row-start-auto sm:text-sm">{new Intl.DateTimeFormat("en-PK",{hour:"numeric",minute:"2-digit",timeZone:"Asia/Karachi"}).format(new Date(item.time))}</span><ArrowRight size={16} className="hidden sm:block"/></Link>)}</div>:<p className="px-5 py-10 text-center text-sm text-[#667085]">No pickups or returns scheduled today.</p>}</section>
-        <section className="overflow-hidden rounded-xl border border-[#E3E7ED] bg-white"><div className="flex items-center justify-between border-b px-5 py-3.5"><h2 className="text-[17px] font-bold">Active rentals</h2><Link href="/bookings?status=Checked+Out" className="text-sm font-semibold text-[#006FE6]">View all</Link></div>{data.activeRentalRows.length?<div className="divide-y">{data.activeRentalRows.map(item=><Link href={`/bookings/${item.id}`} key={item.id} className="flex items-center gap-3 p-4 hover:bg-[#FAFCFF]"><span className="grid h-9 w-9 place-items-center rounded-lg bg-[#F4F3FF] text-[#5925DC]"><CarFront size={18}/></span><div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold">{item.vehicle} · {item.plate}</p><p className="mt-1 truncate text-xs text-[#667085]">{item.customer} · {item.destinationCity}</p></div><span className="text-right text-xs text-[#667085]">Return<br/><strong className="text-[#344054]">{new Intl.DateTimeFormat("en-PK",{day:"2-digit",month:"short",hour:"numeric",minute:"2-digit",timeZone:"Asia/Karachi"}).format(new Date(item.returnAt))}</strong></span></Link>)}</div>:<p className="p-6 text-center text-sm text-[#667085]">No vehicles are currently checked out.</p>}</section>
-      </div>
-      <div className="space-y-4">
-        <section className="rounded-xl border border-[#E3E7ED] bg-white p-3.5"><div className="mb-1 flex items-center gap-2 px-1"><Zap size={19}/><h2 className="text-[17px] font-bold">Quick Actions</h2></div><div className="divide-y">{actions.map(({title,description,icon:Icon,href})=><Link key={title} href={href} className="flex items-center gap-3 px-1 py-2.5 hover:bg-[#FAFCFF]"><span className="grid h-9 w-9 place-items-center rounded-[9px] bg-[#EAF3FF] text-[#0878F9]"><Icon size={19}/></span><span className="min-w-0 flex-1"><span className="block text-sm font-semibold">{title}</span><span className="mt-0.5 block truncate text-xs text-[#667085]">{description}</span></span><ArrowRight size={15}/></Link>)}</div></section>
-        <section className="rounded-xl border border-[#E3E7ED] bg-white p-3.5"><div className="mb-1 flex items-center gap-2 px-1"><Clock3 size={19}/><h2 className="text-[17px] font-bold">Recent Activity</h2></div>{data.activity.length?<div className="divide-y">{data.activity.map(item=>{const Icon=activityIcon[item.kind];return <div key={item.id} className="flex items-center gap-3 px-1 py-2.5"><span className="grid h-8 w-8 place-items-center rounded-full bg-[#EAF3FF] text-[#0878F9]"><Icon size={15}/></span><div className="min-w-0 flex-1"><p className="truncate text-xs font-bold">{item.title}</p><p className="mt-0.5 truncate text-[11px] text-[#667085]">{item.detail}</p></div><span className="whitespace-nowrap text-[10px] text-[#667085]">{new Intl.DateTimeFormat("en-PK",{day:"2-digit",month:"short",hour:"numeric",minute:"2-digit"}).format(new Date(item.occurredAt))}</span></div>})}</div>:<p className="px-2 py-6 text-center text-xs text-[#667085]">No activity recorded yet.</p>}</section>
+        <QuickActions/>
+
       </div>
     </div>
   </div>;
+}
+
+function AgencyCard({label,summary,href}:{label:string;summary:AgencyAccountSummary;href:string}){
+  const income=summary.ownCars+summary.managedShare+summary.externalCommission+summary.otherIncome;
+  return <Link href={href} aria-label={`Open agency account for ${label.toLowerCase()}`} className="group rounded-lg border border-[#E8ECF2] bg-[#F8FAFC] p-3 transition hover:border-[#84CAFF]">
+    <div className="flex items-center justify-between"><p className="text-xs font-semibold text-[#475467]">{label}</p><ArrowRight size={14} className="text-[#667085] group-hover:text-[#006FE6]"/></div>
+    <p className={`mt-1 text-xl font-bold tabular-nums ${summary.net<0?"text-[#B42318]":"text-[#19191F]"}`}>{formatPkr(summary.net)}</p>
+    <p className="mt-1 text-xs text-[#475467] tabular-nums">Income <strong className="text-[#067647]">{formatPkr(income)}</strong> · Expenses <strong className="text-[#B42318]">{formatPkr(summary.expenses)}</strong></p>
+  </Link>;
+}
+
+function buildTodayQueue(bookings:Awaited<ReturnType<typeof listBookings>>,today:string):QueueRow[]{
+  const now=new Date().getTime();
+  const dayKey=(value:string|Date)=>new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Karachi",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date(value));
+  const reference=(item:{id:string;publicNumber:number|null})=>item.publicNumber?`#${item.publicNumber}`:item.id.startsWith("BKG-")?item.id:"";
+  return bookings.flatMap(item=>{
+    const base={bookingId:item.id,reference:reference(item),customer:item.customer,vehicle:item.vehicle,plate:item.plate,balance:Math.max(0,item.totalAmount-item.paid)};
+    const rows:QueueRow[]=[];
+    if(item.status==="Checked Out"){const due=new Date(item.returnAt).getTime();if(due<now)rows.push({...base,key:`${item.id}-overdue`,kind:"overdue",time:item.returnAt});else if(dayKey(item.returnAt)===today)rows.push({...base,key:`${item.id}-return`,kind:"return",time:item.returnAt});}
+    if(item.status==="Confirmed"){const start=new Date(item.pickupAt).getTime();if(start<now&&now-start>86_400_000)rows.push({...base,key:`${item.id}-missed`,kind:"missed-pickup",time:item.pickupAt});else if(start<now)rows.push({...base,key:`${item.id}-late`,kind:"late-pickup",time:item.pickupAt});else if(dayKey(item.pickupAt)===today)rows.push({...base,key:`${item.id}-pickup`,kind:"pickup",time:item.pickupAt});}
+    if(["Checked Out","Completed"].includes(item.status)&&base.balance>0)rows.push({...base,key:`${item.id}-payment`,kind:"payment",time:item.returnAt});
+    return rows;
+  }).sort((a,b)=>{const rank={overdue:0,"late-pickup":1,pickup:2,return:2,"missed-pickup":3,payment:4};return rank[a.kind]-rank[b.kind]||(a.kind==="payment"?b.balance-a.balance:a.time.localeCompare(b.time))});
 }

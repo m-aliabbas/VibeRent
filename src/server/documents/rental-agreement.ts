@@ -1,5 +1,7 @@
 import "server-only";
 
+import { getAgencyTimeZone } from "@/server/context/agency-time-zone";
+import { DEFAULT_TIME_ZONE, formatInZone } from "@/lib/timezone";
 import fs from "node:fs";
 import path from "node:path";
 import PDFDocument from "pdfkit";
@@ -70,7 +72,9 @@ const pageContentBottom = 758;
 const minimumTermsImageHeight = 110;
 
 export async function createRentalAgreementPdf(context: RequestContext, bookingId: string): Promise<{ bytes: Buffer; fileName: string; customerPhone: string }> {
+  const timeZone = await getAgencyTimeZone(context.agencyId);
   const {row,config,termsImage}=await loadAgreementSource(context,bookingId);
+  documentTimeZone = timeZone;
   const doc = new PDFDocument({ size: "A4", margin: 44, bufferPages: true, info: { Title: `${config.titleEn} #${row.publicNumber ?? bookingId}`, Author: row.agency } });
   const fonts = registerFonts(doc);
   const chunks: Buffer[] = [];
@@ -91,7 +95,9 @@ export async function createRentalAgreementPdf(context: RequestContext, bookingI
 }
 
 export async function getRentalAgreementPrintData(context:RequestContext,bookingId:string):Promise<RentalAgreementPrintData>{
+  const timeZone=await getAgencyTimeZone(context.agencyId);
   const {row,config,termsImageId}=await loadAgreementSource(context,bookingId);
+  documentTimeZone=timeZone;
   const sections=config.sections.filter(section=>section.enabled).map(section=>({
     id:section.id,
     titleEn:section.titleEn,
@@ -358,5 +364,7 @@ function hasGuarantor(row:AgreementRow) { return Boolean(row.guarantorName); }
 function field(en: string, ur: string, value: string) { return { en, ur, value }; }
 function formatCnic(value: string) { const digits=value.replace(/\D/g,"");return digits.length===13?`${digits.slice(0,5)}-${digits.slice(5,12)}-${digits.slice(12)}`:value||"Not recorded"; }
 function money(value: number) { return `PKR ${value.toLocaleString("en-PK")}`; }
-function date(value: string) { return new Intl.DateTimeFormat("en-PK", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Karachi" }).format(new Date(value)); }
+// Set synchronously right before rendering; rendering itself never awaits.
+let documentTimeZone = DEFAULT_TIME_ZONE;
+function date(value: string) { return formatInZone(value, { dateStyle: "medium", timeStyle: "short" }, documentTimeZone); }
 function hasUrdu(value: string) { return /[\u0600-\u06ff]/.test(value); }

@@ -46,7 +46,7 @@ export function Timeline({ items }: { items: TimelineItem[] }) {
           <div className="min-w-0 flex-1">
             <p className="text-sm font-semibold">{item.title}</p>
             <p className="mt-1 text-xs text-[#667085]">{item.detail}</p>
-            <p className="mt-1 text-xs font-medium text-[#98A2B3]">
+            <p className="mt-1 text-xs font-medium text-[#667085]">
               {item.time}
             </p>
             {item.href && (

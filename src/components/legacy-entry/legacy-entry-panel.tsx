@@ -1,5 +1,6 @@
 "use client";
 
+import { zonedDayKey, zonedWallTimeToIso } from "@/lib/timezone";
 import Link from "next/link";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useState } from "react";
@@ -29,7 +30,7 @@ export function LegacyEntryPanel({initialVehicles,initialCustomers,initialOwners
   const [customers,setCustomers]=useState(initialCustomers);
   const [owners,setOwners]=useState(initialOwners);
   const [booking,setBooking]=useState(emptyBooking);
-  const [ledger,setLedger]=useState({kind:initialKind,amount:"",description:"",occurredOn:new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Karachi",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date()),method:"Cash",category:"",vehicleId:""});
+  const [ledger,setLedger]=useState({kind:initialKind,amount:"",description:"",occurredOn:zonedDayKey(),method:"Cash",category:"",vehicleId:""});
   const [showExpense,setShowExpense]=useState(false);
   const [bookingStage,setBookingStage]=useState(0);
   const [vehicle,setVehicle]=useState({plate:"",chassisNumber:"",engineNumber:"",make:"",model:"",year:String(new Date().getFullYear()),category:"Sedan" as Vehicle["category"],city:cities[0]??"",ownership:"Own" as Vehicle["ownership"],ownerId:"",dailyRate:"",withDriverRate:"",color:"",transmission:"Automatic" as Vehicle["transmission"],fuel:"Petrol" as Vehicle["fuel"]});
@@ -51,7 +52,7 @@ export function LegacyEntryPanel({initialVehicles,initialCustomers,initialOwners
         setLedger(current=>({...current,amount:"",description:""}));setNotice(`${ledger.kind==="income"?"Income":"Expense"} posted to the system ledger.`);router.refresh();return;
       }
       if(tab==="booking") {
-        const result=await recordLegacyBookingAction({vehicleId:booking.vehicleId,customerId:booking.customerId,pickupAt:booking.pickupAt?new Date(booking.pickupAt).toISOString():"",returnAt:booking.returnAt?new Date(booking.returnAt).toISOString():"",totalAmount:booking.totalAmount.trim()?Number(booking.totalAmount):-1,receivedAmount:Number(booking.receivedAmount||0),paymentMethod:booking.paymentMethod,expense:booking.expenseAmount||booking.expenseCategory||booking.expenseDescription?{amount:Number(booking.expenseAmount),category:booking.expenseCategory,description:booking.expenseDescription,occurredOn:booking.expenseDate||undefined}:undefined});
+        const result=await recordLegacyBookingAction({vehicleId:booking.vehicleId,customerId:booking.customerId,pickupAt:zonedWallTimeToIso(booking.pickupAt),returnAt:zonedWallTimeToIso(booking.returnAt),totalAmount:booking.totalAmount.trim()?Number(booking.totalAmount):-1,receivedAmount:Number(booking.receivedAmount||0),paymentMethod:booking.paymentMethod,expense:booking.expenseAmount||booking.expenseCategory||booking.expenseDescription?{amount:Number(booking.expenseAmount),category:booking.expenseCategory,description:booking.expenseDescription,occurredOn:booking.expenseDate||undefined}:undefined});
         if(!result.ok){setError(result.error.message);return}
         setBooking(emptyBooking());setShowExpense(false);setBookingStage(0);setNotice(`Booking #${result.data.publicNumber} imported. Payment and expense are in the ledger.`);router.refresh();return;
       }

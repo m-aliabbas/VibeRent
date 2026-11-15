@@ -5,7 +5,7 @@ import { asDomainError } from "@/server/domain/errors";
 import {
   amendBooking,
   archiveBooking,
-  cancelBooking,
+  cancelBooking, markBookingNoShow,
   checkInRental,
   checkOutRental,
   confirmBooking,
@@ -109,6 +109,18 @@ export async function recordSourcePayoutAction(bookingId:string,input:{amount:nu
   }catch(error){const issue=asDomainError(error);return {ok:false as const,error:{code:issue.code,message:issue.message,fieldErrors:issue.fieldErrors??{}}};}
 }
 
+export async function markBookingNoShowAction(bookingId:string) {
+  try {
+    const data=await markBookingNoShow(await getWebRequestContext(),bookingId);
+    revalidatePath("/bookings");
+    revalidatePath("/");
+    return {ok:true as const,data};
+  } catch(error) {
+    const issue=asDomainError(error);
+    return {ok:false as const,error:{code:issue.code,message:issue.message}};
+  }
+}
+
 export async function cancelBookingAction(bookingId:string,input:{reason:string;version:number}) {
   try {
     const data=await cancelBooking(await getWebRequestContext(),bookingId,input);
@@ -175,7 +187,10 @@ export async function recordBookingPaymentAction(bookingId: string, input: Recor
   try {
     const context=await getWebRequestContext();
     const data = await withNotices(() => recordBookingPayment(context, bookingId, input), async payment => ({
-      notificationDelivery: await notices.payment(context, "server", bookingId, { amount: input.amount, method: input.method, reference: input.reference, receiptNumber: payment.paymentReceiptNumber }),
+      // A discount-only settlement has no receipt to send.
+      notificationDelivery: payment.paymentReceiptNumber == null
+        ? { status: "skipped" as const, message: "Discount applied. No payment receipt was needed." } satisfies QueuedDeliveryResult
+        : await notices.payment(context, "server", bookingId, { amount: input.amount, method: input.method, reference: input.reference, receiptNumber: payment.paymentReceiptNumber }),
     }));
     revalidatePath("/bookings");
     revalidatePath(`/bookings/${bookingId}`);

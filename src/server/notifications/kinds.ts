@@ -3,6 +3,9 @@ export type NotificationKind =
   | "booking.checkout_notice"
   | "booking.checkin_invoice"
   | "booking.payment_receipt"
+  | "customer.payment_receipt"
+  | "customer.statement"
+  | "owner.statement"
   | "owner.payout_receipt"
   | "owner.expense_notice"
   | "owner.command_reply"
@@ -23,6 +26,9 @@ export const notificationKinds: Record<NotificationKind, KindDefinition> = {
   "booking.checkout_notice": { label: "Checkout receipt", entityType: "booking", sentAction: "booking.checkout_notice_sent", failedAction: "booking.checkout_notice_failed" },
   "booking.checkin_invoice": { label: "Final invoice", entityType: "booking", sentAction: "booking.checkin_invoice_sent", failedAction: "booking.checkin_invoice_failed" },
   "booking.payment_receipt": { label: "Payment receipt", entityType: "booking", sentAction: "booking.payment_invoice_sent", failedAction: "booking.payment_invoice_failed" },
+  "customer.payment_receipt": { label: "Payment receipt", entityType: "customer", sentAction: "customer.payment_receipt_sent", failedAction: "customer.payment_receipt_failed" },
+  "customer.statement": { label: "Customer statement", entityType: "customer", sentAction: "customer.statement_sent", failedAction: "customer.statement_failed" },
+  "owner.statement": { label: "Owner statement", entityType: "owner", sentAction: "owner.statement_sent", failedAction: "owner.statement_failed" },
   "owner.payout_receipt": { label: "Owner payout receipt", entityType: "owner", sentAction: "owner_payout_sent", failedAction: "owner_payout_failed" },
   "owner.expense_notice": { label: "Owner expense notice", entityType: "expense", sentAction: "expense.owner_notice_sent", failedAction: "expense.owner_notice_failed" },
   "owner.command_reply": { label: "Command reply", entityType: "whatsapp_message" },

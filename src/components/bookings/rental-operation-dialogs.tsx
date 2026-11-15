@@ -1,5 +1,6 @@
 "use client";
 
+import { isoToZonedInput, zonedWallTimeToIso } from "@/lib/timezone";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useEffect, useState } from "react";
 import { CalendarCheck2, CalendarClock, ClockAlert, CreditCard, X } from "lucide-react";
@@ -19,14 +20,14 @@ function Shell({title,description,onClose,children}:{title:string;description:st
 export function ExtensionDialog({booking,onClose,onSave}:{booking:BookingListItem;onClose:()=>void;onSave:(next:BookingListItem,charge:number)=>void}) {
   const [to,setTo]=useState(toLocal(booking.returnAt));
   const conflicts=booking.fulfillmentType==="fleet"?getVehicleConflicts(booking.vehicleId,booking.returnAt,to,booking.id):[];
-  const addedDays=Math.max(0,Math.ceil((new Date(to).getTime()-new Date(booking.returnAt).getTime())/86400000));
+  const addedDays=Math.max(0,Math.ceil((Date.parse(zonedWallTimeToIso(to))-new Date(booking.returnAt).getTime())/86400000));
   const charge=addedDays*booking.dailyRate;
   const [pending,setPending]=useState(false);const [error,setError]=useState("");
   async function save(){if(!addedDays||conflicts.length||pending)return;setPending(true);setError("");const result=await extendRentalAction(booking.id,{returnAt:to,version:booking.version});setPending(false);if(result.ok)onSave(result.data,result.data.extensionCharge);else setError(result.error.message)}
-  return <Shell title="Extend active rental" description="The extension is saved to the rental ledger after the server rechecks availability." onClose={onClose}><div className="mt-5 space-y-4"><FormInput label="Proposed return" type="datetime-local" value={to} onChange={e=>setTo(e.target.value)}/><div className="rounded-lg bg-[#F8FAFC] p-3 text-sm"><strong>{addedDays} additional day(s) · {formatPkr(charge)}</strong><p className="mt-1 text-xs text-[#667085]">The booking total and outstanding balance update immediately after confirmation.</p></div>{conflicts.length>0&&<div className="rounded-lg bg-[#FEF3F2] p-3 text-sm text-[#B42318]">Blocked by {conflicts[0].reason}.</div>}{error&&<div role="alert" className="rounded-lg bg-[#FEF3F2] p-3 text-sm text-[#B42318]">{error}</div>}<div className="flex justify-end gap-2"><Button variant="secondary" disabled={pending} onClick={onClose}>Cancel</Button><Button disabled={!addedDays||conflicts.length>0||pending} onClick={()=>void save()}>{pending?"Extending…":"Confirm extension"}</Button></div></div></Shell>;
+  return <Shell title="Extend active rental" description="The extension is saved to the rental ledger after the server rechecks availability." onClose={onClose}><div className="mt-5 space-y-4"><div><FormInput label="New return" type="datetime-local" value={to} min={toLocal(booking.returnAt)} onChange={e=>setTo(e.target.value)}/><div className="mt-1.5 flex flex-wrap gap-1" aria-label="Extend by">{[1,2,3,7].map(daysToAdd=>{const value=toLocal(new Date(new Date(booking.returnAt).getTime()+daysToAdd*86_400_000).toISOString());return <button key={daysToAdd} type="button" aria-pressed={to===value} onClick={()=>setTo(value)} className={`h-8 rounded-full border px-3 text-[13px] font-semibold ${to===value?"border-[#006FE6] bg-[#EFF8FF] text-[#0058B8]":"border-[#D0D5DD] bg-white text-[#344054] hover:bg-[#F8FAFC]"}`}>+{daysToAdd===7?"1 week":`${daysToAdd} day${daysToAdd===1?"":"s"}`}</button>})}</div></div><div className="rounded-lg bg-[#F8FAFC] p-3 text-sm"><strong>{addedDays} additional day(s) · {formatPkr(charge)}</strong><p className="mt-1 text-xs text-[#667085]">The booking total and outstanding balance update immediately after confirmation.</p></div>{conflicts.length>0&&<div className="rounded-lg bg-[#FEF3F2] p-3 text-sm text-[#B42318]">Blocked by {conflicts[0].reason}.</div>}{error&&<div role="alert" className="rounded-lg bg-[#FEF3F2] p-3 text-sm text-[#B42318]">{error}</div>}<div className="flex justify-end gap-2"><Button variant="secondary" disabled={pending} onClick={onClose}>Cancel</Button><Button shortcut="mod+enter" shortcutInInput disabled={!addedDays||conflicts.length>0||pending} onClick={()=>void save()}>{pending?"Extending…":addedDays?`Extend ${addedDays} day${addedDays===1?"":"s"} · ${formatPkr(charge)}`:"Pick a new return"}</Button></div></div></Shell>;
 }
 
-function toLocal(value:string){const date=new Date(value);return new Date(date.getTime()-date.getTimezoneOffset()*60_000).toISOString().slice(0,16)}
+function toLocal(value:string){return isoToZonedInput(value)}
 
 export function ReturnDialog({booking,onClose,onComplete}:{booking:BookingListItem;onClose:()=>void;onComplete:(updated:BookingListItem)=>void}) {
   const total=booking.dailyRate*booking.days+booking.mileageRate*booking.estimatedKm+booking.extras-booking.discount;
@@ -47,7 +48,7 @@ export function ReturnDialog({booking,onClose,onComplete}:{booking:BookingListIt
   const [pending,setPending]=useState(false);
   const [error,setError]=useState("");
   useEffect(()=>{const timer=window.setInterval(()=>setCurrentTime(Date.now()),60_000);return()=>window.clearInterval(timer)},[]);
-  const returnedAt=useCurrentTime?new Date(currentTime):new Date(manualReturn);
+  const returnedAt=useCurrentTime?new Date(currentTime):new Date(zonedWallTimeToIso(manualReturn)||Number.NaN);
   const returnTimeError=useCurrentTime?undefined
     : !Number.isFinite(returnedAt.getTime())
       ? "Enter a valid return time."

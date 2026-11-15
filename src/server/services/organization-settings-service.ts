@@ -1,5 +1,7 @@
 import "server-only";
 
+import { DEFAULT_TIME_ZONE, isValidTimeZone } from "@/lib/timezone";
+import { forgetAgencyTimeZone } from "@/server/context/agency-time-zone";
 import { randomUUID } from "node:crypto";
 import { execute, inTransaction, queryOne } from "@/db/query";
 import { composeTermsSnapshot, normalizeAgreementConfig, type AgreementDesignConfig } from "@/lib/agreement-config";
@@ -16,7 +18,7 @@ export type OrganizationSettingsDto = {
     registrationNumber: string;
     taxNumber: string;
     currency: "PKR";
-    timezone: "Asia/Karachi";
+    timezone: string;
     logoDataUrl?: string;
   };
   agreement: AgreementDesignConfig;
@@ -56,7 +58,7 @@ export async function getOrganizationSettings(context: RequestContext): Promise<
       registrationNumber: row.registrationNumber ?? "",
       taxNumber: row.taxNumber ?? "",
       currency: "PKR",
-      timezone: "Asia/Karachi",
+      timezone: isValidTimeZone(row.timezone) ? row.timezone : DEFAULT_TIME_ZONE,
       logoDataUrl: row.logoDataUrl ?? undefined,
     },
     agreement: normalizeAgreementConfig(parseJson(row.agreementConfig), row.rentalTerms),
@@ -74,7 +76,7 @@ export async function updateOrganizationProfile(context: RequestContext, rawInpu
     registrationNumber: text(input.registrationNumber, 80),
     taxNumber: text(input.taxNumber, 80),
     currency: "PKR" as const,
-    timezone: "Asia/Karachi" as const,
+    timezone: isValidTimeZone(input.timezone) ? input.timezone : DEFAULT_TIME_ZONE,
     logoDataUrl: input.logoDataUrl,
   };
   const fieldErrors: Record<string, string> = {};
@@ -86,10 +88,11 @@ export async function updateOrganizationProfile(context: RequestContext, rawInpu
   if (Object.keys(fieldErrors).length) throw new DomainError("VALIDATION_FAILED", "Check the highlighted organization details.", 400, fieldErrors);
   const now = new Date().toISOString();
   await inTransaction(async () => {
-    await execute(`UPDATE agencies SET name=?,phone=?,public_email=?,address=?,registration_number=?,tax_number=?,version=version+1,updated_at=? WHERE id=?`,[value.name, value.phone || null, value.publicEmail || null, value.address, value.registrationNumber || null, value.taxNumber || null, now, context.agencyId]);
+    await execute(`UPDATE agencies SET name=?,phone=?,public_email=?,address=?,registration_number=?,tax_number=?,timezone=?,version=version+1,updated_at=? WHERE id=?`,[value.name, value.phone || null, value.publicEmail || null, value.address, value.registrationNumber || null, value.taxNumber || null, value.timezone, now, context.agencyId]);
     await execute("UPDATE organization SET name=?,logo=coalesce(?,logo) WHERE id=?",[value.name, value.logoDataUrl || null, context.agencyId]);
-    await audit(context, "agency.profile_updated", { logoUpdated: Boolean(value.logoDataUrl) });
+    await audit(context, "agency.profile_updated", { logoUpdated: Boolean(value.logoDataUrl), timezone: value.timezone });
   });
+  forgetAgencyTimeZone(context.agencyId);
   return value;
 }
 

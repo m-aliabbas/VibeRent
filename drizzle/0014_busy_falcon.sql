@@ -1,1 +1,0 @@
-ALTER TABLE `customers` ADD `father_name` text;

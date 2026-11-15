@@ -1,19 +1,21 @@
 "use client";
 import Link from "next/link";
 import * as Dialog from "@radix-ui/react-dialog";
-import { useState, useTransition } from "react";
-import { Banknote, History, X } from "lucide-react";
-import { recordOwnerPayoutAction } from "@/app/actions/owners";
+import { useEffect, useState, useTransition } from "react";
+import { Banknote, History, Send, X } from "lucide-react";
+import { recordOwnerPayoutAction, sendOwnerStatementAction } from "@/app/actions/owners";
 import { Button } from "@/components/ui/button";
+import { SegmentedControl } from "@/components/forms/segmented-control";
 import { FormInput, FormSelect } from "@/components/forms/form-controls";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { EmptyState } from "@/components/shared/empty-state";
 import { formatPkr } from "@/lib/utils";
 import type { OwnerDetailDto, OwnerStatementDto, OwnerStatementLine } from "@/server/services/owner-service";
-export function OwnerStatements({ owner, canPay, onChange }: { owner: OwnerDetailDto; canPay: boolean; onChange: (owner: OwnerDetailDto) => void }) {
+export function OwnerStatements({ owner, canPay, onChange, payRequest = 0 }: { owner: OwnerDetailDto; canPay: boolean; onChange: (owner: OwnerDetailDto) => void; payRequest?: number }) {
   const defaultStatement = owner.statements.find((item) => item.closing > 0) ?? owner.statements[0];
   const [selectedId, setSelected] = useState(defaultStatement?.id);
   const [paying, setPaying] = useState(false);
+  useEffect(() => { if (payRequest > 0) queueMicrotask(() => setPaying(true)); }, [payRequest]);
   const selected = owner.statements.find((x) => x.id === selectedId) ?? owner.statements.find((item) => item.closing > 0) ?? owner.statements[0];
   if (!selected)
     return <EmptyState title="No statement activity" description="Completed managed rentals, approved owner expenses, and payouts will appear here." />;
@@ -23,10 +25,6 @@ export function OwnerStatements({ owner, canPay, onChange }: { owner: OwnerDetai
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           <div className="flex-1">
             <h2 className="font-bold">Owner ledger</h2>
-            <p className="mt-1 text-xs text-[#667085]">
-              Owner share of each completed rental (dated by booking start), the owner’s part of vehicle expenses and fixed charges, and posted payouts. The
-              balance carries forward month to month like a bank statement.
-            </p>
           </div>
           <select value={selected.id} onChange={(e) => setSelected(e.target.value)} className="h-10 rounded-lg border px-3 text-sm">
             {owner.statements.map((s) => (
@@ -35,6 +33,7 @@ export function OwnerStatements({ owner, canPay, onChange }: { owner: OwnerDetai
               </option>
             ))}
           </select>
+          <SendStatementButton ownerId={owner.id} from={selected.periodFrom} to={selected.periodTo} />
           <Link className="text-sm font-semibold text-[#006FE6]" href={`/reports?tab=Ledger&scope=owner&ownerId=${encodeURIComponent(owner.id)}`}>
             View full owner ledger
           </Link>
@@ -75,7 +74,7 @@ export function OwnerStatements({ owner, canPay, onChange }: { owner: OwnerDetai
               <table className="w-full min-w-[860px] text-left text-sm">
                 <thead className="bg-[#F8FAFC] text-xs text-[#667085]">
                   <tr>
-                    {["Booking date", "Car number", "Details", "Expense head", "Income", "Expense", "Paid", "Balance"].map((label) => (
+                    {["Booking date", "Car number", "Details", "Expense head", "Owner share", "Owner expense", "Paid to owner", "Payable to owner"].map((label) => (
                       <th key={label} className="p-3">
                         {label}
                       </th>
@@ -235,9 +234,19 @@ function PayoutDialog({
   onClose: () => void;
   onSave: (owner: OwnerDetailDto) => void;
 }) {
-  const [vehicleId, setVehicleId] = useState(owner.vehicles[0]?.id ?? "");
-  const [amount, setAmount] = useState(0);
-  const [method, setMethod] = useState("bank_transfer");
+  // Per-car payable for this statement; open on the car with the most to pay, amount pre-filled.
+  const payableFor = (id: string) => {
+    const lines = statement.lines.filter((line) => line.vehicleId === id);
+    const earned = lines.filter((line) => line.kind === "Rental revenue").reduce((sum, line) => sum + line.amount, 0);
+    const spent = -lines.filter((line) => line.kind === "Owner expense" || line.kind === "Fixed charge").reduce((sum, line) => sum + line.amount, 0);
+    const out = -lines.filter((line) => line.kind === "Payout").reduce((sum, line) => sum + line.amount, 0);
+    return earned - spent - out;
+  };
+  const best = [...owner.vehicles].sort((a, b) => payableFor(b.id) - payableFor(a.id))[0];
+  const suggested = (id: string) => Math.max(0, Math.min(payableFor(id), statement.closing));
+  const [vehicleId, setVehicleId] = useState(best?.id ?? "");
+  const [amount, setAmount] = useState(() => (best ? suggested(best.id) : 0));
+  const [method, setMethod] = useState("cash");
   const [reference, setReference] = useState("");
   const [idempotencyKey] = useState(() => crypto.randomUUID());
   const [error, setError] = useState("");
@@ -245,11 +254,11 @@ function PayoutDialog({
   const vehicle = owner.vehicles.find((item) => item.id === vehicleId);
   const vehicleLines = statement.lines.filter((line) => line.vehicleId === vehicleId);
   const earned = vehicleLines.filter((line) => line.kind === "Rental revenue").reduce((sum, line) => sum + line.amount, 0);
-  const expenses = -vehicleLines.filter((line) => line.kind === "Owner expense" || line.kind === "Fixed charge").reduce((sum, line) => sum + line.amount, 0);
-  const paid = -vehicleLines.filter((line) => line.kind === "Payout").reduce((sum, line) => sum + line.amount, 0);
+  const expenses = -vehicleLines.filter((line) => line.kind === "Owner expense" || line.kind === "Fixed charge").reduce((sum, line) => sum + line.amount, 0) || 0;
+  const paid = -vehicleLines.filter((line) => line.kind === "Payout").reduce((sum, line) => sum + line.amount, 0) || 0;
   const vehiclePayable = earned - expenses - paid;
   const valid =
-    Boolean(vehicleId) && Number.isInteger(amount) && amount > 0 && amount <= statement.closing && amount <= vehiclePayable && Boolean(reference.trim());
+    Boolean(vehicleId) && Number.isInteger(amount) && amount > 0 && amount <= statement.closing && amount <= vehiclePayable && (method === "cash" || Boolean(reference.trim()));
   function submit() {
     if (!valid || pending) return;
     setError("");
@@ -260,7 +269,8 @@ function PayoutDialog({
         periodTo: statement.periodTo,
         amount,
         method,
-        reference,
+        // Cash has no slip number; generate a traceable one instead of asking staff to invent it.
+        reference: reference.trim() || `CASH-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${idempotencyKey.slice(0, 4).toUpperCase()}`,
         idempotencyKey,
       });
       if (result.ok) onSave(result.data);
@@ -289,9 +299,9 @@ function PayoutDialog({
               value={vehicleId}
               onChange={(e) => {
                 setVehicleId(e.target.value);
-                setAmount(0);
+                setAmount(suggested(e.target.value));
               }}
-              options={owner.vehicles.map((vehicle) => ({ label: `${vehicle.name} · ${vehicle.plate}`, value: vehicle.id }))}
+              options={owner.vehicles.map((vehicle) => ({ label: `${vehicle.plate} · ${vehicle.name} · ${formatPkr(Math.max(0, payableFor(vehicle.id)))} due`, value: vehicle.id }))}
             />
             <FormInput
               label="Amount"
@@ -309,17 +319,17 @@ function PayoutDialog({
               </p>
               <p className="mt-1 font-bold">Available for this vehicle: {formatPkr(vehiclePayable)}</p>
             </div>
-            <FormSelect
+            <SegmentedControl
               label="Method"
               value={method}
-              onChange={(e) => setMethod(e.target.value)}
+              onChange={setMethod}
               options={[
+                { label: "Cash", value: "cash" },
                 { label: "Bank transfer", value: "bank_transfer" },
                 { label: "Cheque", value: "cheque" },
-                { label: "Cash", value: "cash" },
               ]}
             />
-            <FormInput label="Reference" value={reference} onChange={(e) => setReference(e.target.value)} required />
+            <FormInput label={method === "cash" ? "Reference (optional)" : method === "cheque" ? "Cheque number" : "Transfer reference"} value={reference} onChange={(e) => setReference(e.target.value)} required={method !== "cash"} placeholder={method === "cash" ? "Generated automatically" : undefined} />
           </div>
           {error && (
             <p role="alert" className="mt-3 rounded-lg bg-[#FEF3F2] p-3 text-sm text-[#B42318]">
@@ -337,5 +347,20 @@ function PayoutDialog({
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
+  );
+}
+
+/** One click: the selected period's owner statement PDF to the owner's WhatsApp. */
+function SendStatementButton({ ownerId, from, to }: { ownerId: string; from: string; to: string }) {
+  const [pending, startTransition] = useTransition();
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  return (
+    <div className="flex flex-col">
+      <Button size="sm" variant="secondary" disabled={pending} onClick={() => startTransition(async () => {
+        const result = await sendOwnerStatementAction(ownerId, { from, to });
+        setMessage(result.ok ? { ok: true, text: result.data.message } : { ok: false, text: result.error.message });
+      })}><Send size={15} />{pending ? "Sending…" : "Send on WhatsApp"}</Button>
+      {message && <span role={message.ok ? "status" : "alert"} className={`mt-1 max-w-64 text-xs ${message.ok ? "text-[#067647]" : "text-[#B42318]"}`}>{message.text}</span>}
+    </div>
   );
 }

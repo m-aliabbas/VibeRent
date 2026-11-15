@@ -40,7 +40,7 @@ export function ArchiveWorkspace({initial,canRestore,canPurge}:{initial:ArchiveI
     {rows.length?<section className="divide-y divide-[#EAECF0] overflow-hidden rounded-xl border border-[#E4E7EC] bg-white">{rows.map(item=>{const Icon=kindMeta[item.kind].icon;return <article key={`${item.kind}-${item.id}`} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center">
       <span className="hidden size-10 shrink-0 place-items-center rounded-lg bg-[#F2F4F7] text-[#475467] sm:grid"><Icon size={18}/></span>
       <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-2"><p className="font-semibold">{item.label}</p><span className="rounded-full bg-[#F2F4F7] px-2 py-0.5 text-[11px] font-semibold text-[#475467]">{kindMeta[item.kind].label}</span>{item.historyKept&&<span className="rounded-full bg-[#FFFAEB] px-2 py-0.5 text-[11px] font-semibold text-[#B54708]">Deleted · history kept</span>}</div>
+        <div className="flex flex-wrap items-center gap-2"><p className="font-semibold">{item.label}</p><span className="rounded-full bg-[#F2F4F7] px-2 py-0.5 text-xs font-semibold text-[#475467]">{kindMeta[item.kind].label}</span>{item.historyKept&&<span className="rounded-full bg-[#FFFAEB] px-2 py-0.5 text-xs font-semibold text-[#B54708]">Deleted · history kept</span>}</div>
         <p className="mt-0.5 text-xs text-[#667085]">{item.detail?`${item.detail} · `:""}{item.historyKept?"Deleted":"Archived"} {new Date(item.archivedAt).toLocaleDateString("en-PK")}</p>
         {item.blockedBy.length>0&&<p className="mt-1 text-xs text-[#B54708]">Permanent deletion unavailable: linked {item.blockedBy.join(", ")}</p>}
         {item.restoreBlockedBy&&<p className="mt-1 text-xs text-[#B54708]">{item.restoreBlockedBy}</p>}

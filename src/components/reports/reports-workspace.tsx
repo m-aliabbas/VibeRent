@@ -1,10 +1,9 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { CarFront, Download, ExternalLink, FileText, Globe2, UserRound } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
+import { CarFront, Download, ExternalLink, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { SegmentedControl } from "@/components/forms/segmented-control";
 import { FormCombobox } from "@/components/forms/form-combobox";
 import { FormMultiSelect } from "@/components/forms/form-multi-select";
 import { PageHeader } from "@/components/shared/page-header";
@@ -22,10 +21,14 @@ import {
 } from "@/lib/reports/ledger";
 import type { LedgerEntry, LedgerEntryType, LedgerScope } from "@/lib/reports/ledger";
 import { OwnerCarSheet } from "@/components/reports/owner-car-sheet";
+import { agencyOpeningBalance, filterAgencyEntries, summarizeAgencyAccount } from "@/lib/reports/agency-account";
+import type { AgencyAccountEntry } from "@/lib/reports/agency-account";
 import type { ReportsData, ReportSource, VehicleReportRow } from "@/server/services/report-service";
 
-type Tab = "Ledger" | "Vehicle P&L" | "Revenue & collections" | "Utilization" | "Expenses" | "Owners";
-const tabs: Tab[] = ["Ledger", "Vehicle P&L", "Revenue & collections", "Utilization", "Expenses", "Owners"];
+type Tab = "Ledger" | "Agency account" | "Vehicle P&L" | "Revenue & collections" | "Utilization" | "Expenses" | "Owners";
+// Expenses and Owners live in Money summary (Show: Expenses) and on the Owners page; no duplicate tabs.
+const tabs: Tab[] = ["Ledger", "Agency account", "Vehicle P&L", "Revenue & collections", "Utilization"];
+const tabLabels: Record<Tab, string> = { "Ledger": "Money summary", "Agency account": "Agency account", "Vehicle P&L": "Per car", "Revenue & collections": "Collections", "Utilization": "Car usage", "Expenses": "Expenses", "Owners": "Owners" };
 const ledgerEntryTypes: { value: LedgerEntryType; label: string }[] = [
   { value: "all", label: "All entries" },
   { value: "income", label: "Income" },
@@ -56,6 +59,8 @@ export function ReportsWorkspace({ data }: { data: ReportsData }) {
     const requestedEntry = params.get("entry");
     queueMicrotask(() => {
       if (tabs.includes(value as Tab)) setTab(value as Tab);
+      if (value === "Expenses") setEntryType("expense");
+      if (value === "Owners") window.location.replace("/owners");
       if (/^\d{4}-\d{2}-\d{2}$/.test(params.get("from") ?? "")) setFrom(params.get("from")!);
       if (/^\d{4}-\d{2}-\d{2}$/.test(params.get("to") ?? "")) setTo(params.get("to")!);
       if (ledgerEntryTypes.some((item) => item.value === requestedEntry)) setEntryType(requestedEntry as LedgerEntryType);
@@ -132,10 +137,21 @@ export function ReportsWorkspace({ data }: { data: ReportsData }) {
       : `${entryTypeLabel} · ${baseLedgerTitle}`;
   const rangeLabel = rangeValid ? `${formatDate(from)} – ${formatDate(to)}` : "Choose a valid date range";
   const balances = useMemo(() => runningResultBalances(ledgerEntries, openingResult), [ledgerEntries, openingResult]);
+  const agencyEntries = useMemo(() => (rangeValid ? filterAgencyEntries(data.agencyEntries, from, to, city) : []), [data.agencyEntries, from, to, city, rangeValid]);
+  const agencyOpening = useMemo(() => (rangeValid ? agencyOpeningBalance(data.agencyEntries, from, city) : 0), [data.agencyEntries, from, city, rangeValid]);
   async function exportCsv() {
     if (!period) return;
     const content =
-      tab === "Ledger" && scopeType === "owner"
+      tab === "Agency account"
+        ? (() => {
+            let balance = agencyOpening;
+            return [
+              "date,source,vehicle,customer,reference,description,gross,agency_amount,balance",
+              ["", "Opening balance", "", "", "", "", "", "", agencyOpening].map(csv).join(","),
+              ...agencyEntries.map((row) => [row.date, row.source, row.vehicle, row.customer ?? "", row.reference, row.description, row.gross, row.amount, (balance += row.amount)].map(csv).join(",")),
+            ].join("\n");
+          })()
+        : tab === "Ledger" && scopeType === "owner"
         ? [
             "car_number,date,customer,description,entry,expense_head,days,rent,owner_share,cash_out,meter,remaining,reference",
             ...ownerLedgerByCar(ledgerEntries).flatMap((car) =>
@@ -173,7 +189,7 @@ export function ReportsWorkspace({ data }: { data: ReportsData }) {
               "vehicle,city,ownership,revenue,expenses,owner_share,utilization",
               ...filtered.map((row) => [row.vehicle, row.city, row.ownership, row.revenue, row.expenses, row.ownerShare, row.utilization].map(csv).join(",")),
             ].join("\n");
-    const name = tab === "Ledger" ? `viberent-ledger-${from}-to-${to}.csv` : `viberent-${period.key}-${tab.toLowerCase().replaceAll(" ", "-")}.csv`;
+    const name = tab === "Agency account" ? `viberent-agency-account-${from}-to-${to}.csv` : tab === "Ledger" ? `viberent-ledger-${from}-to-${to}.csv` : `viberent-${period.key}-${tab.toLowerCase().replaceAll(" ", "-")}.csv`;
     try {
       const result = await saveBlob(new Blob([content], { type: "text/csv" }), name);
       setNotice(result.path ? `Report saved to ${result.path}` : "The filtered report was exported.");
@@ -197,6 +213,7 @@ export function ReportsWorkspace({ data }: { data: ReportsData }) {
       setPdfBusy(false);
     }
   }
+  const [moreFilters, setMoreFilters] = useState(false);
   function setPreset(value: "day" | "month" | "year" | "all") {
     const end = data.dateBounds.max;
     setTo(end);
@@ -219,6 +236,22 @@ export function ReportsWorkspace({ data }: { data: ReportsData }) {
   function changeVisibleVehicles(nextVehicleIds: string[]) {
     setVehicleIds((current) => [...current.filter((id) => !availableVehicles.some((item) => item.id === id)), ...nextVehicleIds]);
   }
+  const periodPicker = (
+            <div>
+              <span className="mb-1.5 block text-sm font-semibold text-[#344054]">Period</span>
+              <div className="flex flex-wrap items-center gap-1">
+                {([["day", "Today"], ["month", "This month"], ["year", "This year"], ["all", "All time"]] as const).map(([key, label]) => {
+                  const end = data.dateBounds.max;
+                  const presetFrom = key === "day" ? end : key === "month" ? `${end.slice(0, 7)}-01` : key === "year" ? `${end.slice(0, 4)}-01-01` : data.dateBounds.min;
+                  const active = from === presetFrom && to === end;
+                  return <button key={key} type="button" aria-pressed={active} onClick={() => setPreset(key)} className={`h-9 rounded-[8px] border px-2.5 text-sm font-medium ${active ? "border-[#006FE6] bg-[#EFF8FF] text-[#0058B8]" : "border-[#D0D5DD] bg-white text-[#344054] hover:bg-[#F8FAFC]"}`}>{label}</button>;
+                })}
+                <input aria-label="From date" type="date" value={from} onChange={(event) => setFrom(event.target.value)} className="h-9 rounded-[8px] border border-[#D0D5DD] bg-white px-2.5 text-sm text-[#344054] tabular-nums" />
+                <span className="text-[#667085]">–</span>
+                <input aria-label="To date" type="date" value={to} onChange={(event) => setTo(event.target.value)} className="h-9 rounded-[8px] border border-[#D0D5DD] bg-white px-2.5 text-sm text-[#344054] tabular-nums" />
+              </div>
+            </div>
+  );
   if (!period) return <EmptyState title="No report data" description="Operational activity will populate reports automatically." />;
   return (
     <div className="space-y-6">
@@ -230,7 +263,7 @@ export function ReportsWorkspace({ data }: { data: ReportsData }) {
           description="Whole-system, owner, and multi-vehicle ledgers for any date range."
           actions={
             <>
-              <Button variant="secondary" onClick={exportCsv} disabled={tab === "Ledger" && !rangeValid}>
+              <Button variant="secondary" onClick={exportCsv} disabled={(tab === "Ledger" || tab === "Agency account") && !rangeValid}>
                 <Download size={16} />
                 Export CSV
               </Button>
@@ -247,127 +280,34 @@ export function ReportsWorkspace({ data }: { data: ReportsData }) {
           }
         />
       </div>
-      <div className="print-hidden flex gap-1 overflow-x-auto rounded-xl border bg-white p-2">
+      <div className="print-hidden flex gap-1 overflow-x-auto border-b border-[#E4E7EC]" role="tablist" aria-label="Report">
         {tabs.map((item) => (
-          <Button
-            key={item}
-            size="sm"
-            variant={tab === item ? "primary" : "ghost"}
-            className="shrink-0"
-            onClick={() => {
-              setTab(item);
-              setDrill(undefined);
-            }}
-          >
-            {item}
-          </Button>
+          <button key={item} type="button" role="tab" aria-selected={tab === item} onClick={() => { setTab(item); setDrill(undefined); }} className={`-mb-px h-10 shrink-0 border-b-2 px-3 text-sm font-semibold ${tab === item ? "border-[#006FE6] text-[#0058B8]" : "border-transparent text-[#475467] hover:text-[#19191F]"}`}>{tabLabels[item]}</button>
         ))}
       </div>
       {tab === "Ledger" ? (
-        <>
-          <section className="print-hidden rounded-xl border bg-white p-4">
-            <div className="flex flex-wrap gap-2">
-              <Button size="sm" variant="secondary" onClick={() => setPreset("day")}>
-                Day
-              </Button>
-              <Button size="sm" variant="secondary" onClick={() => setPreset("month")}>
-                Month
-              </Button>
-              <Button size="sm" variant="secondary" onClick={() => setPreset("year")}>
-                Year
-              </Button>
-              <Button size="sm" variant="secondary" onClick={() => setPreset("all")}>
-                All time
-              </Button>
-            </div>
-            <div className="mt-4">
-              <p className="text-xs font-semibold text-[#344054]">Ledger entries</p>
-              <div className="mt-2 flex gap-2 overflow-x-auto pb-1" role="group" aria-label="Ledger entry type">
-                {ledgerEntryTypes.map((item) => (
-                  <Button
-                    key={item.value}
-                    size="sm"
-                    variant={entryType === item.value ? "primary" : "secondary"}
-                    className="shrink-0"
-                    aria-pressed={entryType === item.value}
-                    onClick={() => setEntryType(item.value)}
-                  >
-                    {item.label}
-                  </Button>
-                ))}
-              </div>
-              {entryType === "expense" && (
-                <div className="mt-3 max-w-sm">
-                  <Label title="Expense head">
-                    <select value={expenseHead} onChange={(event) => setExpenseHead(event.target.value)} className="field">
-                      <option value="">All expense heads</option>
-                      {data.ledgerAccounts.expenseHeads.map((item) => (
-                        <option key={item}>{item}</option>
-                      ))}
-                    </select>
-                  </Label>
-                </div>
-              )}
-            </div>
-            <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <Label title="From date">
-                <input type="date" value={from} onChange={(event) => setFrom(event.target.value)} className="field" />
-              </Label>
-              <Label title="To date">
-                <input type="date" value={to} onChange={(event) => setTo(event.target.value)} className="field" />
-              </Label>
-              <Label title="City">
-                <select value={city} onChange={(event) => setCity(event.target.value)} className="field">
-                  <option>All cities</option>
-                  {data.cities.map((item) => (
-                    <option key={item}>{item}</option>
-                  ))}
-                </select>
-              </Label>
-              <Label title="Ownership">
-                <select value={ownership} onChange={(event) => changeOwnership(event.target.value)} className="field">
-                  <option>All ownership</option>
-                  <option>Owned</option>
-                  <option>Managed</option>
-                </select>
-              </Label>
-            </div>
-            {!rangeValid && (
-              <p role="alert" className="mt-3 rounded-lg bg-[#FEF3F2] p-3 text-sm text-[#B42318]">
-                The from date must be on or before the to date.
-              </p>
-            )}
-          </section>
-          <section className="print-hidden rounded-xl border bg-white p-4 sm:p-5">
-            <div>
-              <p className="text-xs font-bold uppercase tracking-[.12em] text-[#667085]">Report for</p>
-              <p className="mt-1 text-sm text-[#667085]">Choose the account view, then narrow it down without leaving the report.</p>
-            </div>
-            <div className="mt-4 grid gap-2 sm:grid-cols-3">
-              <ScopeButton
-                active={scopeType === "overall"}
-                title="Whole system"
-                description="All income and expenses"
-                icon={Globe2}
-                onClick={() => setScopeType("overall")}
-              />
-              <ScopeButton
-                active={scopeType === "owner"}
-                title="Specific owner"
-                description="Balance and linked vehicles"
-                icon={UserRound}
-                onClick={() => setScopeType("owner")}
-              />
-              <ScopeButton
-                active={scopeType === "vehicles"}
-                title="Vehicles"
-                description="One or multiple vehicles"
-                icon={CarFront}
-                onClick={() => setScopeType("vehicles")}
-              />
-            </div>
+        <section className="print-hidden space-y-3">
+          <div className="flex flex-wrap items-center gap-2" role="radiogroup" aria-label="Show">
+            <span className="mr-1 text-sm font-semibold text-[#344054]">Show</span>
+            {ledgerEntryTypes.map((item) => <button key={item.value} type="button" role="radio" aria-checked={entryType === item.value} onClick={() => setEntryType(item.value)} className={`h-9 rounded-full border px-4 text-sm font-semibold ${entryType === item.value ? "border-[#006FE6] bg-[#006FE6] text-white" : "border-[#D0D5DD] bg-white text-[#344054] hover:bg-[#F8FAFC]"}`}>{item.label === "All entries" ? "Everything" : item.label}</button>)}
+            {entryType === "expense" && <select aria-label="Expense type" value={expenseHead} onChange={(event) => setExpenseHead(event.target.value)} className="h-9 rounded-[8px] border border-[#D0D5DD] bg-white px-2.5 text-sm text-[#344054]"><option value="">All expense types</option>{data.ledgerAccounts.expenseHeads.map((item) => <option key={item}>{item}</option>)}</select>}
+          </div>
+          <div className="flex flex-wrap items-end gap-x-4 gap-y-3">
+            {periodPicker}
+            <div className="w-[320px]"><SegmentedControl label="Report for" value={scopeType} onChange={setScopeType} options={[{ label: "Business", value: "overall" }, { label: "Owner", value: "owner" }, { label: "Vehicles", value: "vehicles" }]} /></div>
+            <button type="button" aria-expanded={moreFilters} onClick={() => setMoreFilters(value => !value)} className={`h-9 rounded-[8px] border px-3 text-sm font-semibold ${moreFilters || city !== "All cities" || ownership !== "All ownership" ? "border-[#006FE6] bg-[#EFF8FF] text-[#0058B8]" : "border-[#D0D5DD] bg-white text-[#344054]"}`}>More filters</button>
+          </div>
+          {moreFilters && <div className="flex flex-wrap items-end gap-x-4 gap-y-3 rounded-[10px] bg-[#F8FAFC] p-3">
+            <label><span className="mb-1.5 block text-sm font-semibold text-[#344054]">City</span>
+              <select value={city} onChange={(event) => setCity(event.target.value)} className="h-9 rounded-[8px] border border-[#D0D5DD] bg-white px-2.5 text-sm text-[#344054]"><option>All cities</option>{data.cities.map((item) => <option key={item}>{item}</option>)}</select>
+            </label>
+            <label><span className="mb-1.5 block text-sm font-semibold text-[#344054]">Ownership</span>
+              <select value={ownership} onChange={(event) => changeOwnership(event.target.value)} className="h-9 rounded-[8px] border border-[#D0D5DD] bg-white px-2.5 text-sm text-[#344054]"><option>All ownership</option><option>Owned</option><option>Managed</option></select>
+            </label>
+          </div>}
+          {!rangeValid && <p role="alert" className="rounded-lg bg-[#FEF3F2] px-3 py-2 text-sm text-[#B42318]">The from date must be on or before the to date.</p>}
             {scopeType === "owner" && (
-              <div className="mt-5 max-w-lg rounded-xl bg-[#F8FAFC] p-4">
+              <div className="max-w-lg">
                 <FormCombobox
                   label="Owner"
                   value={ownerId}
@@ -384,13 +324,10 @@ export function ReportsWorkspace({ data }: { data: ReportsData }) {
                       .join(" "),
                   }))}
                 />
-                <p className="mt-2 text-xs leading-5 text-[#667085]">
-                  The ledger automatically includes this owner’s opening balance, linked vehicles, expenses, and settlements.
-                </p>
               </div>
             )}
             {scopeType === "vehicles" && (
-              <div className="mt-5 rounded-xl border border-[#EAECF0] bg-[#F8FAFC] p-4">
+              <div>
                 <div className="grid gap-4 lg:grid-cols-2">
                   <FormMultiSelect
                     label="Filter by owner (optional)"
@@ -439,36 +376,22 @@ export function ReportsWorkspace({ data }: { data: ReportsData }) {
                 </div>
               </div>
             )}
-          </section>
-        </>
-      ) : (
-        <div className="print-hidden rounded-xl border bg-white p-3">
-          <div className="grid gap-3 sm:grid-cols-3">
-            <Label title="Period">
-              <select value={periodKey} onChange={(event) => setPeriod(event.target.value)} className="field">
-                {data.periods.map((item) => (
-                  <option key={item.key} value={item.key}>
-                    {item.label}
-                  </option>
-                ))}
-              </select>
-            </Label>
-            <Label title="City">
-              <select value={city} onChange={(event) => setCity(event.target.value)} className="field">
-                <option>All cities</option>
-                {data.cities.map((item) => (
-                  <option key={item}>{item}</option>
-                ))}
-              </select>
-            </Label>
-            <Label title="Ownership">
-              <select value={ownership} onChange={(event) => changeOwnership(event.target.value)} className="field">
-                <option>All ownership</option>
-                <option>Owned</option>
-                <option>Managed</option>
-              </select>
-            </Label>
+        </section>
+      ) : tab === "Agency account" ? (
+        <section className="print-hidden space-y-3">
+          <div className="flex flex-wrap items-end gap-x-4 gap-y-3">
+            {periodPicker}
+            <label><span className="mb-1.5 block text-sm font-semibold text-[#344054]">City</span>
+              <select value={city} onChange={(event) => setCity(event.target.value)} className="h-9 rounded-[8px] border border-[#D0D5DD] bg-white px-2.5 text-sm text-[#344054]"><option>All cities</option>{data.cities.map((item) => <option key={item}>{item}</option>)}</select>
+            </label>
           </div>
+          {!rangeValid && <p role="alert" className="rounded-lg bg-[#FEF3F2] px-3 py-2 text-sm text-[#B42318]">The from date must be on or before the to date.</p>}
+        </section>
+      ) : (
+        <div className="print-hidden flex flex-wrap items-end gap-x-4 gap-y-3">
+          <div><span className="mb-1.5 block text-sm font-semibold text-[#344054]">Month</span><div className="flex flex-wrap items-center gap-1">{data.periods.slice(0, 4).map((item) => <button key={item.key} type="button" aria-pressed={periodKey === item.key} onClick={() => setPeriod(item.key)} className={`h-9 rounded-[8px] border px-2.5 text-sm font-medium ${periodKey === item.key ? "border-[#006FE6] bg-[#EFF8FF] text-[#0058B8]" : "border-[#D0D5DD] bg-white text-[#344054] hover:bg-[#F8FAFC]"}`}>{item.label}</button>)}{data.periods.length > 4 && <select aria-label="Older months" value={data.periods.slice(0, 4).some((item) => item.key === periodKey) ? "" : periodKey} onChange={(event) => event.target.value && setPeriod(event.target.value)} className="h-9 rounded-[8px] border border-[#D0D5DD] bg-white px-2.5 text-sm text-[#344054]"><option value="">Older…</option>{data.periods.slice(4).map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</select>}</div></div>
+          <label><span className="mb-1.5 block text-sm font-semibold text-[#344054]">City</span><select value={city} onChange={(event) => setCity(event.target.value)} className="h-9 rounded-[8px] border border-[#D0D5DD] bg-white px-2.5 text-sm text-[#344054]"><option>All cities</option>{data.cities.map((item) => <option key={item}>{item}</option>)}</select></label>
+          <label><span className="mb-1.5 block text-sm font-semibold text-[#344054]">Ownership</span><select value={ownership} onChange={(event) => changeOwnership(event.target.value)} className="h-9 rounded-[8px] border border-[#D0D5DD] bg-white px-2.5 text-sm text-[#344054]"><option>All ownership</option><option>Owned</option><option>Managed</option></select></label>
         </div>
       )}
       <section className="print-surface space-y-6">
@@ -476,7 +399,7 @@ export function ReportsWorkspace({ data }: { data: ReportsData }) {
           <p className="text-xs font-bold uppercase tracking-[.16em] text-[#006FE6]">VibeRent report</p>
           <h1 className="mt-1 text-2xl font-bold">{tab === "Ledger" ? ledgerTitle : tab}</h1>
           <p className="mt-1 text-sm text-[#667085]">
-            {tab === "Ledger" ? rangeLabel : period.label} · {city} · {ownership}
+            {tab === "Ledger" || tab === "Agency account" ? rangeLabel : period.label} · {city}{tab === "Agency account" ? "" : ` · ${ownership}`}
           </p>
         </header>
         {tab === "Ledger" && <LedgerReport
@@ -486,17 +409,90 @@ export function ReportsWorkspace({ data }: { data: ReportsData }) {
             ownerView={scopeType === "owner"}
             openingResult={openingResult}
             balances={balances}
+            entryType={entryType}
           />}{" "}
+        {tab === "Agency account" && <AgencyAccount entries={agencyEntries} opening={agencyOpening} period={rangeLabel} />}{" "}
         {tab === "Vehicle P&L" && <VehiclePnl rows={filtered} onDrill={setDrill} />}{" "}
         {tab === "Revenue & collections" && <Collections data={period.collections} />} {tab === "Utilization" && <Utilization rows={filtered} />}{" "}
-        {tab === "Expenses" && <ExpenseAnalysis data={period.expenses} />} {tab === "Owners" && <OwnerReport data={period.owners} />}{" "}
+        
         {drill && <DrillDown data={drill} onClose={() => setDrill(undefined)} />}
-        <div className="print-hidden rounded-xl border border-[#B2DDFF] bg-[#EFF8FF] p-4 text-xs text-[#175CD3]">
-          Balances run cumulatively like a bank statement, starting from activity before the selected from date. Booking income and owner shares are dated
-          by the booking start date; settlements appear on their posted date. Car reports exclude owner-level payouts that are not allocated to a vehicle.
-        </div>
+        {tab === "Ledger" && <p className="print-hidden text-xs text-[#475467]">Balances carry forward from before the start date. Rental income is dated by booking start; payments by their posted date.</p>}
       </section>
     </div>
+  );
+}
+
+const agencySourceTone: Record<AgencyAccountEntry["source"], string> = {
+  "Own car": "bg-[#EFF8FF] text-[#175CD3]",
+  "Managed car": "bg-[#F4F3FF] text-[#5925DC]",
+  "External car": "bg-[#ECFDF3] text-[#067647]",
+  "Other income": "bg-[#FEF6EE] text-[#B93815]",
+  "Agency expense": "bg-[#FEF3F2] text-[#B42318]",
+  "Expense recovery": "bg-[#F2F4F7] text-[#344054]",
+};
+function withRunningBalance(entries: AgencyAccountEntry[], opening: number) {
+  let balance = opening;
+  return entries.map((row) => ({ row, balance: (balance += row.amount) }));
+}
+function AgencyAccount({ entries, opening, period }: { entries: AgencyAccountEntry[]; opening: number; period: string }) {
+  const totals = summarizeAgencyAccount(entries);
+  const closing = opening + totals.net;
+  const rows = withRunningBalance(entries, opening);
+  const signed = (value: number) => <span className={`font-semibold tabular-nums ${value < 0 ? "text-[#B42318]" : "text-[#067647]"}`}>{value > 0 ? "+" : ""}{formatPkr(value)}</span>;
+  return (
+    <>
+      <div>
+        <h2 className="text-lg font-bold">Agency account <span className="text-sm font-normal text-[#475467]">· {period}</span></h2>
+        <p className="mt-1 text-sm text-[#475467]">Money the agency owns: own cars in full, the agency&apos;s cut of managed cars, commission on external cars and other income, less the agency&apos;s share of expenses.</p>
+      </div>
+      <section className="grid grid-cols-2 gap-3 lg:grid-cols-4 xl:grid-cols-7">
+        <Metric label="Opening balance" value={formatPkr(opening)} note="Agency-owned before this range" />
+        <Metric label="Own cars" value={formatPkr(totals.ownCars)} note="Full rental, completed trips" />
+        <Metric label="Managed cars" value={formatPkr(totals.managedShare)} note="Agency share per agreement" />
+        <Metric label="External cars" value={formatPkr(totals.externalCommission)} note="Commission after supplier" />
+        <Metric label="Other income" value={formatPkr(totals.otherIncome)} note="External income entries" />
+        <Metric label="Agency expenses" value={formatPkr(totals.expenses)} note="Owner-allocated costs excluded" />
+        <Metric label="Closing balance" value={formatPkr(closing)} note={`Net this range ${formatPkr(totals.net)}`} />
+      </section>
+      {entries.length ? (
+        <>
+          <div className="hidden overflow-x-auto rounded-xl border bg-white md:block">
+            <table className="w-full text-left text-[13px]">
+              <thead className="bg-[#F2F4F7] text-[#344054]">
+                <tr>{["Date", "Source", "Vehicle / details", "Gross", "Agency", "Balance"].map((h, i) => <th key={h} className={`px-3 py-2 font-semibold ${i >= 3 ? "text-right" : ""}`}>{h}</th>)}</tr>
+              </thead>
+              <tbody>
+                <tr className="border-t bg-[#F8FAFC]"><td className="px-3 py-2 text-[#475467]" colSpan={5}>Opening balance</td><td className="px-3 py-2 text-right font-semibold tabular-nums">{formatPkr(opening)}</td></tr>
+                {rows.map(({ row, balance }) => (
+                  <tr key={row.id} className="border-t align-top even:bg-[#FAFBFC] hover:bg-[#EEF4FF]">
+                    <td className="whitespace-nowrap px-3 py-2 tabular-nums">{formatDate(row.date)}</td>
+                    <td className="px-3 py-2"><span className={`inline-flex whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-semibold ${agencySourceTone[row.source]}`}>{row.source}</span></td>
+                    <td className="px-3 py-2"><span className="font-semibold">{row.vehicle}</span>{row.customer && <span className="ml-2 text-xs text-[#475467]">{row.customer}</span>}<p className="text-xs text-[#475467]">{row.description}</p></td>
+                    <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-[#475467]">{formatPkr(row.gross)}</td>
+                    <td className="whitespace-nowrap px-3 py-2 text-right">{signed(row.amount)}</td>
+                    <td className="whitespace-nowrap px-3 py-2 text-right font-semibold tabular-nums">{formatPkr(balance)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <ul className="space-y-2 md:hidden">
+            {rows.map(({ row, balance }) => (
+              <li key={row.id} className="rounded-xl border bg-white p-3 text-sm">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0"><span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${agencySourceTone[row.source]}`}>{row.source}</span><p className="mt-1 font-semibold">{row.vehicle}</p><p className="text-xs text-[#475467]">{formatDate(row.date)}{row.customer ? ` · ${row.customer}` : ""}</p></div>
+                  <div className="text-right">{signed(row.amount)}<p className="text-xs text-[#475467]">Bal {formatPkr(balance)}</p></div>
+                </div>
+                <p className="mt-2 text-xs text-[#475467]">{row.description}</p>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : (
+        <EmptyState title="No agency activity in this range" description="Completed rentals, external income and agency expenses will appear here." />
+      )}
+      <p className="print-hidden text-xs text-[#475467]">Rentals count once completed and are dated by booking start. Cash held for owners and suppliers is not agency money and stays out of this account.</p>
+    </>
   );
 }
 
@@ -504,53 +500,13 @@ function csv(value: string | number) {
   const text = String(value);
   return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }
-function Label({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <label className="text-xs font-semibold">
-      {title}
-      {children}
-    </label>
-  );
-}
-function ScopeButton({
-  active,
-  title,
-  description,
-  icon: Icon,
-  onClick,
-}: {
-  active: boolean;
-  title: string;
-  description: string;
-  icon: LucideIcon;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      aria-pressed={active}
-      onClick={onClick}
-      className={`group flex min-h-20 items-center gap-3 rounded-xl border p-3 text-left outline-none transition-all focus:ring-2 focus:ring-[#006FE6]/20 ${active ? "border-[#006FE6] bg-[#EFF8FF] shadow-[0_0_0_1px_#006FE6]" : "bg-white hover:border-[#98A2B3] hover:bg-[#F8FAFC]"}`}
-    >
-      <span
-        className={`flex size-9 shrink-0 items-center justify-center rounded-lg ${active ? "bg-[#006FE6] text-white" : "bg-[#F2F4F7] text-[#475467] group-hover:bg-white"}`}
-      >
-        <Icon size={18} />
-      </span>
-      <span className="min-w-0">
-        <strong className="block text-sm">{title}</strong>
-        <span className="mt-0.5 block text-xs text-[#667085]">{description}</span>
-      </span>
-    </button>
-  );
-}
 function LedgerReport({
   entries,
   title,
   period,
   ownerView,
   openingResult,
-  balances,
+  balances, entryType = "all",
 }: {
   entries: LedgerEntry[];
   title: string;
@@ -558,27 +514,13 @@ function LedgerReport({
   ownerView: boolean;
   openingResult: number;
   balances: Map<string, number>;
+  entryType?: LedgerEntryType;
 }) {
   const totals = summarizeLedger(entries);
   const closing = entries.length ? (balances.get(entries.at(-1)!.id) ?? openingResult) : openingResult;
   return (
     <>
-      <section className="rounded-xl border border-[#B2DDFF] bg-[#EFF8FF] p-4">
-        <p className="text-xs font-bold uppercase tracking-[.14em] text-[#175CD3]">TL;DR · {period}</p>
-        <h2 className="mt-2 text-lg font-bold text-[#19191F]">{title}</h2>
-        {ownerView ? (
-          <p className="mt-2 text-sm leading-6 text-[#344054]">
-            Opening balance <strong>{formatPkr(totals.openingOwnerBalance)}</strong>. The owner earned <strong>{formatPkr(totals.ownerShare)}</strong> as their
-            share of rentals, carried <strong>{formatPkr(totals.ownerExpenses)}</strong> of expenses and fixed charges, and was paid{" "}
-            <strong>{formatPkr(totals.ownerSettlements)}</strong>. Closing balance <strong>{formatPkr(totals.closingOwnerBalance)}</strong>.
-          </p>
-        ) : (
-          <p className="mt-2 text-sm leading-6 text-[#344054]">
-            Posted income is <strong>{formatPkr(totals.income)}</strong>. Approved expenses are <strong>{formatPkr(totals.expenses)}</strong>, owner and source
-            payments are <strong>{formatPkr(totals.ownerSettlements)}</strong>, and net cash profit is <strong>{formatPkr(totals.operatingResult)}</strong>.
-          </p>
-        )}
-      </section>
+      <h2 className="text-lg font-bold">{title} <span className="text-sm font-normal text-[#475467]">· {period}</span></h2>
       {ownerView ? (
         <section className="grid grid-cols-2 gap-3 lg:grid-cols-5">
           <Metric label="Opening balance" value={formatPkr(totals.openingOwnerBalance)} note="Brought forward" />
@@ -590,6 +532,20 @@ function LedgerReport({
           />
           <Metric label="Paid to owner" value={formatPkr(totals.ownerSettlements)} note="Posted payouts" />
           <Metric label="Closing balance" value={formatPkr(totals.closingOwnerBalance)} note="Payable to owner" />
+        </section>
+      ) : entryType === "expense" ? (
+        <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <Metric label="Total expenses" value={formatPkr(totals.expenses)} note={`${entries.length} entries`} />
+          {totals.recovered ? <Metric label="Recovered" value={formatPkr(totals.recovered)} note="Paid back by others" /> : null}
+          {totals.ownerExpenses ? <Metric label="Charged to owners" value={formatPkr(totals.ownerExpenses)} note="Owner share of costs" /> : null}
+        </section>
+      ) : entryType === "income" ? (
+        <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <Metric label="Total income" value={formatPkr(totals.income)} note={`${entries.length} payments`} />
+        </section>
+      ) : entryType === "owner-payment" ? (
+        <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <Metric label="Paid to owners & sources" value={formatPkr(totals.ownerSettlements)} note={`${entries.length} entries`} />
         </section>
       ) : (
         <section className="grid grid-cols-2 gap-3 lg:grid-cols-5">
@@ -605,11 +561,11 @@ function LedgerReport({
       ) : entries.length ? (
         <>
           <div className="hidden overflow-x-auto rounded-xl border bg-white md:block">
-            <table className="w-full min-w-[1020px] text-left text-sm">
-              <thead className="bg-[#F8FAFC] text-xs text-[#667085]">
+            <table className="w-full text-left text-[13px]">
+              <thead className="bg-[#F2F4F7] text-[13px] text-[#344054]">
                 <tr>
-                  {["Date", "Vehicle / owner", "Entry", "Reference", "Income", "Expense", "Owner / source", "Net result", "Balance"].map((item) => (
-                    <th key={item} className="p-3 font-semibold">
+                  {["Date", "Vehicle / owner", "Entry", "Income", "Expense", "Owner", "Balance"].map((item) => (
+                    <th key={item} className={`px-3 py-2 font-semibold ${["Income","Expense","Owner","Balance"].includes(item) ? "text-right" : ""}`}>
                       {item}
                     </th>
                   ))}
@@ -618,30 +574,18 @@ function LedgerReport({
               <tbody>
                 {openingResult !== 0 && (
                   <tr className="border-t bg-[#F8FAFC]">
-                    <td className="p-3" colSpan={8}>
-                      <strong>Opening balance</strong>
-                      <p className="mt-1 text-xs text-[#667085]">Net result carried forward from before this date range</p>
-                    </td>
+                    <td className="px-3 py-1.5 font-semibold" colSpan={6}>Opening balance (carried forward)</td>
                     <MoneyCell value={openingResult} signed />
                   </tr>
                 )}
                 {entries.map((row) => (
-                  <tr key={row.id} className="border-t align-top">
-                    <td className="whitespace-nowrap p-3">{formatDate(row.date)}</td>
-                    <td className="p-3">
-                      <strong>{row.vehicle}</strong>
-                      {row.owner && <p className="mt-1 text-xs text-[#667085]">{row.owner}</p>}
-                    </td>
-                    <td className="p-3">
-                      <strong>{row.kind}</strong>
-                      {row.category && <HeadBadge head={row.category} />}
-                      <p className="mt-1 max-w-[230px] text-xs text-[#667085]">{row.description}</p>
-                    </td>
-                    <td className="p-3 text-xs font-semibold text-[#475467]">{row.reference}</td>
+                  <tr key={row.id} className="h-9 border-t even:bg-[#FAFBFC] hover:bg-[#EEF4FF]">
+                    <td className="whitespace-nowrap px-3 py-1 tabular-nums">{formatDate(row.date)}</td>
+                    <td className="whitespace-nowrap px-3 py-1"><span className="font-semibold">{row.vehicle}</span>{row.owner && <span className="ml-1.5 text-xs text-[#475467]">{row.owner}</span>}</td>
+                    <td className="max-w-[220px] px-3 py-1"><span className="block truncate" title={`${row.description}${row.reference ? ` · ${row.reference}` : ""}`}><span className="font-semibold">{row.kind}</span>{row.category && <span className="ml-1.5 text-xs text-[#475467]">{row.category}</span>}</span></td>
                     <MoneyCell value={row.income} />
                     <MoneyCell value={row.expense} negative />
                     <MoneyCell value={row.ownerMovement} signed />
-                    <MoneyCell value={row.operatingResult} signed />
                     <MoneyCell value={balances.get(row.id) ?? 0} signed />
                   </tr>
                 ))}
@@ -665,7 +609,7 @@ function LedgerReport({
                     <h3 className="mt-1 font-bold">{row.vehicle}</h3>
                     {row.owner && <p className="text-xs text-[#667085]">{row.owner}</p>}
                   </div>
-                  <span className="rounded-full bg-[#F2F4F7] px-2 py-1 text-[11px] font-semibold">{row.category ? `${row.kind} · ${row.category}` : row.kind}</span>
+                  <span className="rounded-full bg-[#F2F4F7] px-2 py-1 text-xs font-semibold">{row.category ? `${row.kind} · ${row.category}` : row.kind}</span>
                 </div>
                 <p className="mt-3 text-sm text-[#475467]">{row.description}</p>
                 <dl className="mt-4 grid grid-cols-2 gap-3 text-xs">
@@ -684,15 +628,11 @@ function LedgerReport({
     </>
   );
 }
-function HeadBadge({ head }: { head: string }) {
-  return <span className="ml-2 inline-block rounded-full bg-[#F2F4F7] px-2 py-0.5 text-[11px] font-semibold text-[#344054]">{head}</span>;
-}
 function MoneyCell({ value, negative = false, signed = false }: { value: number; negative?: boolean; signed?: boolean }) {
   const display = negative && value ? -value : value;
   return (
-    <td className={`whitespace-nowrap p-3 font-semibold ${display < 0 ? "text-[#B42318]" : display > 0 ? "text-[#067647]" : "text-[#667085]"}`}>
-      {signed && display > 0 ? "+" : ""}
-      {formatPkr(display)}
+    <td className={`whitespace-nowrap px-3 py-1 text-right tabular-nums ${display < 0 ? "font-semibold text-[#B42318]" : display > 0 ? "font-semibold text-[#067647]" : "text-[#98A2B3]"}`}>
+      {display === 0 ? "—" : <>{signed && display > 0 ? "+" : ""}{formatPkr(display)}</>}
     </td>
   );
 }
@@ -728,45 +668,42 @@ function formatDate(value: string) {
   );
 }
 function VehiclePnl({ rows, onDrill }: { rows: VehicleReportRow[]; onDrill: (value: { title: string; sources: ReportSource[] }) => void }) {
-  const totals = rows.reduce((sum, row) => ({ revenue: sum.revenue + row.revenue, expenses: sum.expenses + row.expenses, share: sum.share + row.ownerShare }), {
-    revenue: 0,
-    expenses: 0,
-    share: 0,
-  });
+  const [showIdle, setShowIdle] = useState(false);
+  const totals = rows.reduce((sum, row) => ({ revenue: sum.revenue + row.revenue, expenses: sum.expenses + row.expenses, share: sum.share + row.ownerShare }), { revenue: 0, expenses: 0, share: 0 });
+  const sorted = [...rows].sort((a, b) => (b.revenue - b.expenses - b.ownerShare) - (a.revenue - a.expenses - a.ownerShare) || b.revenue - a.revenue);
+  const active = sorted.filter((row) => row.revenue || row.expenses || row.ownerShare);
+  const visible = showIdle ? sorted : active;
+  const idleCount = sorted.length - active.length;
+  const money = (value: number, title: string, sources: ReportSource[]) => value === 0
+    ? <span className="text-[#98A2B3]">—</span>
+    : <button type="button" className={`font-semibold tabular-nums hover:underline ${value < 0 ? "text-[#B42318]" : "text-[#19191F]"}`} onClick={() => onDrill({ title, sources })}>{formatPkr(value)}</button>;
   return (
     <>
       <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Metric label="Rental revenue" value={formatPkr(totals.revenue)} note="Completed rentals" />
-        <Metric label="Direct expenses" value={formatPkr(totals.expenses)} note="Approved vehicle costs" />
-        <Metric label="Owner share" value={formatPkr(totals.share)} note="Effective linked agreements" />
-        <Metric label="Contribution" value={formatPkr(totals.revenue - totals.expenses - totals.share)} note="Revenue − costs − owner share" />
+        <Metric label="Earned" value={formatPkr(totals.revenue)} note="Completed rentals this period" />
+        <Metric label="Car expenses" value={formatPkr(totals.expenses)} note="Approved costs linked to cars" />
+        <Metric label="Owner share" value={formatPkr(totals.share)} note="Owed to car owners" />
+        <Metric label="Agency profit" value={formatPkr(totals.revenue - totals.expenses - totals.share)} note="Earned − car expenses − owner share" />
       </section>
       {rows.length ? (
-        <Table headers={["Vehicle", "Revenue", "Expenses", "Owner share", "Contribution", "Utilization"]}>
-          {rows.map((row) => (
-            <tr key={row.id} className="border-t">
-              <td className="p-3 font-semibold">
-                {row.vehicle}
-                <p className="text-xs font-normal text-[#667085]">
-                  {row.city} · {row.ownership}
-                </p>
-              </td>
-              {[
-                [row.revenue, "Revenue"],
-                [row.expenses, "Expenses"],
-                [row.ownerShare, "Owner share"],
-                [row.revenue - row.expenses - row.ownerShare, "Contribution"],
-              ].map(([value, label]) => (
-                <td key={label} className="p-3">
-                  <button className="font-semibold text-[#006FE6]" onClick={() => onDrill({ title: `${row.vehicle} · ${label}`, sources: row.sources })}>
-                    {formatPkr(value as number)}
-                  </button>
-                </td>
+        <div className="overflow-x-auto rounded-[8px] border border-[#D0D5DD] bg-white">
+          <table className="w-full text-left text-[13px]">
+            <thead className="bg-[#F2F4F7] text-[#344054]"><tr>{["Car", "Earned", "Expenses", "Owner share", "Profit"].map((h, i) => <th key={h} className={`px-3 py-2 font-semibold ${i ? "text-right" : ""}`}>{h}</th>)}</tr></thead>
+            <tbody>
+              {visible.map((row) => (
+                <tr key={row.id} className="h-9 border-t even:bg-[#FAFBFC] hover:bg-[#EEF4FF]">
+                  <td className="whitespace-nowrap px-3 py-1"><span className="font-semibold">{row.vehicle}</span><span className="ml-2 text-xs text-[#475467]">{row.ownership}</span></td>
+                  <td className="px-3 py-1 text-right">{money(row.revenue, `${row.vehicle} · Earned`, row.sources)}</td>
+                  <td className="px-3 py-1 text-right">{money(row.expenses, `${row.vehicle} · Expenses`, row.sources)}</td>
+                  <td className="px-3 py-1 text-right">{money(row.ownerShare, `${row.vehicle} · Owner share`, row.sources)}</td>
+                  <td className="px-3 py-1 text-right">{money(row.revenue - row.expenses - row.ownerShare, `${row.vehicle} · Profit`, row.sources)}</td>
+                </tr>
               ))}
-              <td className="p-3">{row.utilization}%</td>
-            </tr>
-          ))}
-        </Table>
+              {!visible.length && <tr><td colSpan={5} className="px-3 py-6 text-center text-[#475467]">No car earned or spent anything in this period.</td></tr>}
+            </tbody>
+          </table>
+          {idleCount > 0 && <button type="button" onClick={() => setShowIdle((v) => !v)} className="w-full border-t border-[#EAECF0] px-3 py-2 text-left text-[13px] font-semibold text-[#0058B8] hover:bg-[#F8FAFC]">{showIdle ? "Hide cars with no activity" : `Show ${idleCount} cars with no activity`}</button>}
+        </div>
       ) : (
         <EmptyState title="No vehicles match" description="Change the city or ownership filter." />
       )}
@@ -777,17 +714,11 @@ function Collections({ data }: { data: ReportsData["periods"][number]["collectio
   return (
     <>
       <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Metric label="Booked revenue" value={formatPkr(data.booked)} note="Eligible bookings in period" />
-        <Metric label="Collected cash" value={formatPkr(data.collected)} note="Posted transactions" />
-        <Metric label="Outstanding" value={formatPkr(data.outstanding)} note="Booked less collected" />
-        <Metric label="Overdue exposure" value={formatPkr(data.overdue)} note="Past-return open bookings" />
+        <Metric label="Booked" value={formatPkr(data.booked)} note="Rentals starting this period" />
+        <Metric label="Collected" value={formatPkr(data.collected)} note="Payments received this period" />
+        <Metric label="Not yet collected" value={formatPkr(data.outstanding)} note="Booked − collected" />
+        <Metric label="Unpaid after return" value={formatPkr(data.overdue)} note="Balance on rentals past their return date" />
       </section>
-      <div className="rounded-xl border border-[#B2DDFF] bg-[#EFF8FF] p-4 text-sm text-[#175CD3]">
-        <strong>Collection method breakdown</strong>
-        <p className="mt-1 text-xs">
-          Cash collected groups posted payments, deposit applications, refunds, and reversals by the payment method recorded on each transaction.
-        </p>
-      </div>
       <Table headers={["Payment method", "Transactions", "Collected", "Share of collections"]}>
         {data.channels.map((row) => (
           <tr key={row.name} className="border-t">
@@ -804,9 +735,7 @@ function Collections({ data }: { data: ReportsData["periods"][number]["collectio
 function Utilization({ rows }: { rows: VehicleReportRow[] }) {
   return (
     <>
-      <div className="rounded-xl border bg-white p-4 text-xs text-[#667085]">
-        <strong className="text-[#344054]">Definition:</strong> overlapping occupied days ÷ eligible days, with recorded availability-block downtime excluded.
-      </div>
+      <p className="text-xs text-[#475467]">Days a car was out on rental ÷ days it could be rented (maintenance blocks excluded). Overdue rentals count until the car is back.</p>
       <Table headers={["Vehicle", "Eligible days", "Downtime", "Occupied", "Utilization"]}>
         {rows.map((row) => (
           <tr key={row.id} className="border-t">
@@ -820,65 +749,6 @@ function Utilization({ rows }: { rows: VehicleReportRow[] }) {
                 <span className="block h-full rounded bg-[#006FE6]" style={{ width: `${row.utilization}%` }} />
               </div>
             </td>
-          </tr>
-        ))}
-      </Table>
-    </>
-  );
-}
-function ExpenseAnalysis({ data }: { data: ReportsData["periods"][number]["expenses"] }) {
-  const largest = data.categories[0];
-  return (
-    <>
-      <div className="rounded-xl border border-[#FEDF89] bg-[#FFFAEB] p-4 text-sm text-[#93370D]">
-        <strong>What “expenses” includes</strong>
-        <p className="mt-1 text-xs leading-5">
-          Only approved expense records whose occurrence date falls inside the selected reporting month are included. Draft, submitted, rejected, and reversed
-          items are excluded. Vehicle P&amp;L includes vehicle-linked costs; this tab also includes agency-wide and owner-allocated costs.
-        </p>
-      </div>
-      <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Metric label="Approved expenses" value={formatPkr(data.approved)} note="Selected reporting period" />
-        <Metric label="Largest category" value={largest?.name ?? "None"} note={largest ? formatPkr(largest.amount) : "No approved costs"} />
-        <Metric label="Owner responsibility" value={formatPkr(data.ownerResponsibility)} note="Allocated to an owner" />
-        <Metric label="Receipt exceptions" value={String(data.receiptExceptions)} note="Approved without a ready receipt" />
-      </section>
-      <Table headers={["Category", "Approved amount", "Share", "Scope"]}>
-        {data.categories.map((row) => (
-          <tr key={row.name} className="border-t">
-            <td className="p-3 font-semibold">{row.name}</td>
-            <td className="p-3">{formatPkr(row.amount)}</td>
-            <td className="p-3">{data.approved ? Math.round((row.amount / data.approved) * 100) : 0}%</td>
-            <td className="p-3">Approved in selected month</td>
-          </tr>
-        ))}
-      </Table>
-    </>
-  );
-}
-function OwnerReport({ data }: { data: ReportsData["periods"][number]["owners"] }) {
-  return (
-    <>
-      <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Metric label="Managed vehicles" value={String(data.vehicleCount)} note="Owner accounts" />
-        <Metric label="Owner share" value={formatPkr(data.ownerShare)} note="Linked agreements" />
-        <Metric label="Owner expenses" value={formatPkr(data.ownerExpenses)} note="Owner's share of vehicle costs" />
-        <Metric label="Closing payable" value={formatPkr(data.payable)} note={`After ${formatPkr(data.paid)} paid to owners`} />
-      </section>
-      <Table headers={["Owner", "Share terms", "Opening balance", "Owner share", "Owner expenses", "Paid to owner", "Closing balance"]}>
-        {data.rows.map((row) => (
-          <tr key={row.id} className="border-t">
-            <td className="p-3 font-semibold">
-              <Link className="text-[#006FE6]" href={`/owners/${row.id}`}>
-                {row.name}
-              </Link>
-            </td>
-            <td className="p-3 text-xs">{row.terms}</td>
-            <td className="p-3">{formatPkr(row.openingBalance)}</td>
-            <td className="p-3">{formatPkr(row.share)}</td>
-            <td className="p-3">{formatPkr(-row.expenses)}</td>
-            <td className="p-3">{formatPkr(-row.paid)}</td>
-            <td className="p-3 font-semibold">{formatPkr(row.payable)}</td>
           </tr>
         ))}
       </Table>

@@ -44,12 +44,13 @@ export async function startBackgroundRoles(roles: JobRole[]) {
 }
 
 async function workerHandlers(): Promise<JobHandlers> {
-  const [{ renderNotificationJob }, { handleInboundJob }, { runRecurringExpensePosting }, { queueDailyReports }, { runMaintenance }] = await Promise.all([
+  const [{ renderNotificationJob }, { handleInboundJob }, { runRecurringExpensePosting }, { queueDailyReports }, { runMaintenance }, { queueMonthEndStatements }] = await Promise.all([
     import("@/server/notifications/render-job"),
     import("@/server/whatsapp/inbound-job"),
     import("@/server/services/recurring-expense-service"),
     import("@/server/notifications/daily-report-job"),
     import("@/server/jobs/maintenance"),
+    import("@/server/notifications/month-end-statements"),
   ]);
   return {
     "notify.render": renderNotificationJob,
@@ -57,5 +58,6 @@ async function workerHandlers(): Promise<JobHandlers> {
     "recurring.post": async () => { await runRecurringExpensePosting(); },
     "report.daily": async () => { await queueDailyReports(); },
     "maintenance.cleanup": async () => { await runMaintenance(); },
+    "statements.monthly": async () => { await queueMonthEndStatements(); },
   };
 }

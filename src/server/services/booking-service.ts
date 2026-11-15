@@ -1,4 +1,5 @@
 import "server-only";
+import { withAgencyInstants } from "@/server/context/agency-time-zone";
 import { randomUUID } from "node:crypto";
 import { getTermsSnapshotForBooking } from "@/server/services/organization-settings-service";
 import { execute, inTransaction, queryAll, queryOne } from "@/db/query";
@@ -132,8 +133,25 @@ async function allocateBookingDraftInTransaction(context: RequestContext): Promi
     VALUES (?,coalesce((SELECT max(public_number)+1 FROM bookings WHERE agency_id=?),1),?,?)
     ON CONFLICT(agency_id) DO NOTHING`,[context.agencyId, context.agencyId, nowIso, nowIso]);
   const counter = (await queryOne<{ nextNumber: number }>("SELECT next_number AS nextNumber FROM booking_number_counters WHERE agency_id=? LIMIT 1 /*postgres:for-update*/",[context.agencyId]))!;
-  await execute("UPDATE booking_number_counters SET next_number=next_number+1,updated_at=? WHERE agency_id=?",[nowIso, context.agencyId]);
-  const reference = { id: `bkd_${randomUUID()}`, publicNumber: counter.nextNumber, expiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString() };
+  // Recycle the lowest number from a draft that expired without becoming a booking, so abandoned
+  // forms do not leave permanent holes. The old draft keeps its row (CNIC images stay linked) but
+  // releases the number by storing it negated, which keeps the unique index satisfied.
+  const recycled = await queryOne<{ id: string; publicNumber: number }>(
+    `SELECT d.id, d.public_number AS publicNumber FROM booking_drafts d
+     WHERE d.agency_id=? AND d.status='expired' AND d.consumed_at IS NULL AND d.public_number>0
+       AND NOT EXISTS (SELECT 1 FROM bookings b WHERE b.agency_id=d.agency_id AND b.public_number=d.public_number)
+     ORDER BY d.public_number ASC LIMIT 1`,
+    [context.agencyId],
+  );
+  let publicNumber: number;
+  if (recycled) {
+    await execute("UPDATE booking_drafts SET public_number=?,status='recycled',updated_at=? WHERE agency_id=? AND id=?",[-recycled.publicNumber, nowIso, context.agencyId, recycled.id]);
+    publicNumber = recycled.publicNumber;
+  } else {
+    await execute("UPDATE booking_number_counters SET next_number=next_number+1,updated_at=? WHERE agency_id=?",[nowIso, context.agencyId]);
+    publicNumber = counter.nextNumber;
+  }
+  const reference = { id: `bkd_${randomUUID()}`, publicNumber, expiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString() };
   await execute(`INSERT INTO booking_drafts (id,agency_id,actor_id,public_number,status,expires_at,created_at,updated_at)
     VALUES (?,?,?,?,'active',?,?,?)`,[reference.id, context.agencyId, context.userId, reference.publicNumber, reference.expiresAt, nowIso, nowIso]);
   await execute(`INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)`,[randomUUID(), context.agencyId, context.userId, "booking.number_allocated", "booking_draft", reference.id, JSON.stringify({ publicNumber: reference.publicNumber }), nowIso]);
@@ -150,6 +168,13 @@ export async function startBooking(context: RequestContext, existingDraftId?: st
       );
       if (existing) return existing;
     }
+    // Same person opening the form again (new tab, other device): give back their open draft
+    // instead of reserving another number.
+    const open = await queryOne<BookingDraftReference>(
+      `SELECT id,public_number AS publicNumber,expires_at AS expiresAt FROM booking_drafts WHERE agency_id=? AND actor_id=? AND status='active' AND expires_at>? AND consumed_at IS NULL ORDER BY created_at DESC LIMIT 1`,
+      [context.agencyId, context.userId, new Date().toISOString()],
+    );
+    if (open) return open;
     return allocateBookingDraftInTransaction(context);
   },{immediate:true});
 }
@@ -191,7 +216,7 @@ export async function listAvailabilityBlocks(context: RequestContext): Promise<A
 
 export async function createAvailabilityBlock(context: RequestContext, rawInput: unknown): Promise<AvailabilityBlockDto> {
   requireRole(context, ["agency_owner", "fleet_manager", "rental_agent"]);
-  const input = rawInput as Partial<{ vehicleId: string; from: string; to: string; reason: string; kind: string }>;
+  const input = await withAgencyInstants(context.agencyId, rawInput as Partial<{ vehicleId: string; from: string; to: string; reason: string; kind: string }>, ["from", "to"]);
   const fromDate = new Date(input.from ?? "");
   const toDate = new Date(input.to ?? "");
   const errors: Record<string,string> = {};
@@ -224,7 +249,8 @@ export async function checkInRental(context: RequestContext, bookingId: string, 
 
 async function transitionRental(context: RequestContext, bookingId: string, kind: "checkout" | "checkin", rawInput: unknown) {
   requireRole(context, ["agency_owner", "fleet_manager", "rental_agent"]);
-  const input = kind === "checkin" ? parseCheckInRentalInput(rawInput) : parseRentalInspectionInput(rawInput);
+  const zonedInput = await withAgencyInstants(context.agencyId, rawInput, ["returnedAt"]);
+  const input = kind === "checkin" ? parseCheckInRentalInput(zonedInput) : parseRentalInspectionInput(zonedInput);
   return inTransaction(async () => {
     const booking = await queryOne<{ id: string; vehicleId: string|null; customerId: string; status: string; version: number; totalAmount: number; pickupAt:string; returnAt:string; dailyRate:number; mileageRate:number; estimatedKm:number; extras:number; discount:number; paid: number; fulfillmentType:"fleet"|"external"; supplierPricingMode:"percentage"|"fixed"|null; supplierSharePercent:number|null; supplierFixedCost:number|null; supplierPayable:number|null }>(`SELECT bk.id, bk.vehicle_id AS vehicleId, bk.customer_id AS customerId, bk.status, bk.version, bk.total_amount AS totalAmount,
       bk.pickup_at AS pickupAt,bk.return_at AS returnAt,bk.daily_rate AS dailyRate,bk.mileage_rate AS mileageRate,bk.estimated_km AS estimatedKm,bk.extras,bk.discount,bk.fulfillment_type AS fulfillmentType,bk.supplier_fixed_cost AS supplierFixedCost,bk.supplier_pricing_mode AS supplierPricingMode,bk.supplier_share_percent AS supplierSharePercent,bk.supplier_payable AS supplierPayable,
@@ -301,7 +327,7 @@ async function transitionRental(context: RequestContext, bookingId: string, kind
 
 export async function confirmBooking(context: RequestContext, rawInput: unknown) {
   requireRole(context, ["agency_owner", "fleet_manager", "rental_agent"]);
-  const input = parseConfirmBookingInput(rawInput);
+  const input = parseConfirmBookingInput(await withAgencyInstants(context.agencyId, rawInput, ["pickupAt", "returnAt"]));
   return inTransaction(async () => {
     const bookingDraft = input.bookingDraftId
       ? await queryOne<{ id: string; publicNumber: number }>(`SELECT id,public_number AS publicNumber FROM booking_drafts WHERE agency_id=? AND actor_id=? AND id=? AND status='active' AND expires_at>? LIMIT 1`,[context.agencyId, context.userId, input.bookingDraftId, new Date().toISOString()])
@@ -309,7 +335,9 @@ export async function confirmBooking(context: RequestContext, rawInput: unknown)
     if (!bookingDraft) throw new DomainError("VERSION_CONFLICT", "This booking number expired or was already used. Start a new booking and try again.", 409);
     const vehicle = input.fulfillmentType==="fleet"?await queryOne<{ id: string; branch_id: string; daily_rate: number; with_driver_rate:number|null; status: string }>(`SELECT v.id, v.branch_id, v.daily_rate, v.with_driver_rate, v.status FROM vehicles v WHERE v.agency_id=? AND v.id=? AND v.archived_at IS NULL LIMIT 1 /*postgres:for-update*/`,[context.agencyId, input.vehicleId]):undefined;
     if (input.fulfillmentType==="fleet"&&!vehicle) throw new DomainError("NOT_FOUND", "Vehicle not found.", 404);
-    if (vehicle&&vehicle.status!=="available") throw new DomainError("BOOKING_CONFLICT", "The vehicle is not available for booking.", 409);
+    // A car that is out on another rental ("booked") can still be reserved for later dates; the
+    // date-overlap check below decides. Maintenance / out of service / archived cannot be booked.
+    if (vehicle&&!["available","booked"].includes(vehicle.status)) throw new DomainError("BOOKING_CONFLICT", "The vehicle is not available for booking.", 409);
     const externalBranch=input.fulfillmentType==="external"?await queryOne<{id:string}>("SELECT id FROM branches WHERE agency_id=? AND active=1 ORDER BY created_at LIMIT 1",[context.agencyId]):undefined;
     if(input.fulfillmentType==="external"&&!externalBranch)throw new DomainError("NOT_FOUND","Add an active branch before creating a sourced booking.",404);
     if(input.rentalMode==="with_driver"){
@@ -326,7 +354,9 @@ export async function confirmBooking(context: RequestContext, rawInput: unknown)
     const customer = await queryOne<{ id: string; status: string }>("SELECT id, status FROM customers WHERE agency_id=? AND id=? LIMIT 1",[context.agencyId, customerId]);
     if (!customer) throw new DomainError("NOT_FOUND", "Customer not found.", 404);
     if (customer.status === "blacklisted") throw new DomainError("FORBIDDEN", "This customer cannot be booked.", 403);
-    const bookingConflict = input.fulfillmentType==="fleet"?await queryOne<{ id: string }>(`SELECT id FROM bookings WHERE agency_id=? AND vehicle_id=? AND status IN ('confirmed','checked_out') AND pickup_at < ? AND return_at > ? LIMIT 1`,[context.agencyId, input.vehicleId, input.returnAt, input.pickupAt]):undefined;
+    // An overdue checked-out rental keeps the car until it is checked in, so it occupies up to now.
+    const conflictNow = new Date().toISOString();
+    const bookingConflict = input.fulfillmentType==="fleet"?await queryOne<{ id: string }>(`SELECT id FROM bookings WHERE agency_id=? AND vehicle_id=? AND status IN ('confirmed','checked_out') AND pickup_at < ? AND (CASE WHEN status='checked_out' AND return_at < ? THEN ? ELSE return_at END) > ? LIMIT 1`,[context.agencyId, input.vehicleId, input.returnAt, conflictNow, conflictNow, input.pickupAt]):undefined;
     if (bookingConflict) throw new DomainError("BOOKING_CONFLICT", "The vehicle is no longer available for the selected period.", 409);
     const blockConflict = input.fulfillmentType==="fleet"?await queryOne<{ id: string }>(`SELECT id FROM availability_blocks WHERE agency_id=? AND vehicle_id=? AND start_at < ? AND end_at > ? LIMIT 1`,[context.agencyId, input.vehicleId, input.returnAt, input.pickupAt]):undefined;
     if (blockConflict) throw new DomainError("BOOKING_CONFLICT", "An availability block overlaps the selected period.", 409);
@@ -384,7 +414,7 @@ export async function confirmBooking(context: RequestContext, rawInput: unknown)
 
 export async function amendBooking(context:RequestContext, bookingId:string, rawInput:unknown) {
   requireRole(context,["agency_owner","fleet_manager","rental_agent"]);
-  const input=rawInput as {vehicleId?:string;pickupAt?:string;returnAt?:string;destinationCity?:string;version?:number};
+  const input=await withAgencyInstants(context.agencyId,rawInput as {vehicleId?:string;pickupAt?:string;returnAt?:string;destinationCity?:string;version?:number},["pickupAt","returnAt"]);
   const pickup=Date.parse(input.pickupAt??""),returned=Date.parse(input.returnAt??"");
   if(!input.vehicleId||!input.destinationCity?.trim()||!Number.isFinite(pickup)||!Number.isFinite(returned)||returned<=pickup) throw new DomainError("VALIDATION_FAILED","Review the amended vehicle, destination, and dates.",400);
   const destinationCity=input.destinationCity.trim();
@@ -410,7 +440,7 @@ export async function amendBooking(context:RequestContext, bookingId:string, raw
 
 export async function extendRental(context:RequestContext, bookingId:string, rawInput:unknown) {
   requireRole(context,["agency_owner","fleet_manager","rental_agent"]);
-  const input=rawInput as {returnAt?:unknown;version?:unknown};
+  const input=await withAgencyInstants(context.agencyId,rawInput as {returnAt?:unknown;version?:unknown},["returnAt"]);
   const returned=typeof input.returnAt==="string"?Date.parse(input.returnAt):Number.NaN;
   if(!Number.isFinite(returned))throw new DomainError("VALIDATION_FAILED","Enter a valid new return time.",400,{returnAt:"Choose a valid date and time."});
   return inTransaction(async ()=>{
@@ -490,6 +520,21 @@ export async function cancelBooking(context:RequestContext, bookingId:string, ra
     await execute("UPDATE bookings SET status='cancelled',cancellation_reason=?,version=version+1,updated_at=? WHERE agency_id=? AND id=?",[reason,now,context.agencyId,bookingId]);
     if(booking.status==="checked_out"&&booking.vehicleId)await execute("UPDATE vehicles SET status='available',version=version+1,updated_at=? WHERE agency_id=? AND id=? AND status='booked'",[now,context.agencyId,booking.vehicleId]);
     await execute("INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)",[randomUUID(),context.agencyId,context.userId,"booking.cancelled","booking",bookingId,JSON.stringify({reason,previousStatus:booking.status}),now]);
+    return getBooking(context,bookingId);
+  },{immediate:true});
+}
+
+/** A confirmed booking whose pickup time has passed and the customer never came. */
+export async function markBookingNoShow(context:RequestContext, bookingId:string) {
+  requireRole(context,["agency_owner","fleet_manager","rental_agent"]);
+  return inTransaction(async ()=>{
+    const booking=await queryOne<{id:string;status:string;pickupAt:string}>("SELECT id,status,pickup_at AS pickupAt FROM bookings WHERE agency_id=? AND id=? AND archived_at IS NULL LIMIT 1 /*postgres:for-update*/",[context.agencyId,bookingId]);
+    if(!booking) throw new DomainError("NOT_FOUND","Booking not found.",404);
+    if(booking.status!=="confirmed") throw new DomainError("INVALID_STATUS_TRANSITION","Only confirmed bookings can be marked as no-show.",409);
+    const now=new Date().toISOString();
+    if(booking.pickupAt>now) throw new DomainError("INVALID_STATUS_TRANSITION","The pickup time has not passed yet.",409);
+    await execute("UPDATE bookings SET status='no_show',version=version+1,updated_at=? WHERE agency_id=? AND id=?",[now,context.agencyId,bookingId]);
+    await execute("INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)",[randomUUID(),context.agencyId,context.userId,"booking.no_show","booking",bookingId,JSON.stringify({pickupAt:booking.pickupAt}),now]);
     return getBooking(context,bookingId);
   },{immediate:true});
 }
@@ -623,12 +668,27 @@ export async function recordBookingPayment(context: RequestContext, bookingId: s
       if (existing.bookingId !== bookingId || existing.amount !== input.amount || existing.method !== input.method || existing.reference !== (input.reference ?? "")) {
         throw new DomainError("VERSION_CONFLICT", "This payment request key was already used with different details.", 409);
       }
-      return { ...await getBooking(context, bookingId), paymentReceiptNumber: existing.receiptNumber };
+      return { ...await getBooking(context, bookingId), paymentReceiptNumber: existing.receiptNumber, discountApplied: 0 };
+    }
+
+    const now = new Date().toISOString();
+    const discount = input.discount ?? 0;
+    if (discount > 0) {
+      const replayed = await queryOne<{ id: string }>("SELECT id FROM audit_events WHERE agency_id=? AND entity_type='booking' AND entity_id=? AND action='booking.payment_discount' AND metadata LIKE ? LIMIT 1",[context.agencyId,bookingId,`%"idempotencyKey":${JSON.stringify(idempotencyKey)}%`]);
+      if (replayed && input.amount === 0) return { ...await getBooking(context, bookingId), paymentReceiptNumber: null, discountApplied: 0 };
+      if (replayed) throw new DomainError("VERSION_CONFLICT", "This payment request key was already used.", 409);
+      const outstanding = Math.max(0, booking.totalAmount - booking.paid);
+      if (discount > outstanding) throw new DomainError("VALIDATION_FAILED", "Discount exceeds the outstanding balance.", 400, { discount: `Outstanding balance is PKR ${outstanding.toLocaleString("en-PK")}.` });
+      // A settlement discount lowers what the customer owes; it is not money received.
+      await execute("UPDATE bookings SET discount=discount+?,total_amount=total_amount-?,version=version+1,updated_at=? WHERE agency_id=? AND id=?",[discount,discount,now,context.agencyId,bookingId]);
+      await execute("INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)",[randomUUID(),context.agencyId,context.userId,"booking.payment_discount","booking",bookingId,JSON.stringify({discount,idempotencyKey,note:input.note??null}),now]);
+      if (input.amount === 0) {
+        return { ...await getBooking(context, bookingId), paymentReceiptNumber: null, discountApplied: discount };
+      }
     }
 
     // Overpayment is allowed: anything above the outstanding balance is held as customer credit.
     const id = `TXN-${randomUUID().slice(0, 8).toUpperCase()}`;
-    const now = new Date().toISOString();
     const receiptNumber = await allocatePaymentReceiptNumber(context.agencyId, now);
 
     await execute(`
@@ -660,11 +720,11 @@ export async function recordBookingPayment(context: RequestContext, bookingId: s
       context.agencyId,
       context.userId,
       bookingId,
-      JSON.stringify({ transactionId: id, receiptNumber, amount: input.amount, method: input.method, reference: input.reference, account: input.account, note: input.note }),
+      JSON.stringify({ transactionId: id, receiptNumber, amount: input.amount, discount, method: input.method, reference: input.reference, account: input.account, note: input.note }),
       now
     ]);
 
-    return { ...await getBooking(context, bookingId), paymentReceiptNumber: receiptNumber };
+    return { ...await getBooking(context, bookingId), paymentReceiptNumber: receiptNumber, discountApplied: discount };
   },{immediate:true});
 }
 

@@ -1,5 +1,6 @@
 import "server-only";
 
+import { DEFAULT_TIME_ZONE, formatInZone } from "@/lib/timezone";
 import PDFDocument from "pdfkit";
 
 export type InvoiceLine = { label: string; value: string };
@@ -14,6 +15,7 @@ export async function createTransactionInvoice(input: {
   amountLabel?: string;
   amount?: number;
   note?: string;
+  timeZone?: string;
 }): Promise<Buffer> {
   const doc = new PDFDocument({
     size: "A4",
@@ -36,7 +38,7 @@ export async function createTransactionInvoice(input: {
   doc.moveDown(0.4);
   doc.font("Helvetica").fontSize(9).fillColor("#475467")
     .text(`Reference: ${input.reference}`)
-    .text(`Issued: ${formatDate(input.issuedAt)}`)
+    .text(`Issued: ${formatDate(input.issuedAt, input.timeZone)}`)
     .text(`For: ${input.recipient}`);
   doc.moveDown(1.4);
 
@@ -66,6 +68,6 @@ function money(value: number) {
   return `PKR ${value.toLocaleString("en-PK")}`;
 }
 
-function formatDate(value: string) {
-  return new Intl.DateTimeFormat("en-PK", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Karachi" }).format(new Date(value));
+function formatDate(value: string, timeZone = DEFAULT_TIME_ZONE) {
+  return formatInZone(value, { dateStyle: "medium", timeStyle: "short" }, timeZone);
 }

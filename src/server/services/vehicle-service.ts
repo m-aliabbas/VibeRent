@@ -1,4 +1,5 @@
 import "server-only";
+import { agencyInstant } from "@/server/context/agency-time-zone";
 import { randomUUID } from "node:crypto";
 import { unlink } from "node:fs/promises";
 import path from "node:path";
@@ -158,7 +159,7 @@ export async function transitionVehicleStatus(context: RequestContext, id: strin
   requireRole(context, ["agency_owner", "fleet_manager"]);
   const reason = input.reason?.trim();
   const notes = input.notes?.trim() ?? "";
-  const effectiveAt = new Date(input.effectiveAt);
+  const effectiveAt = new Date(await agencyInstant(context.agencyId, input.effectiveAt));
   if (!reason || !Number.isFinite(effectiveAt.getTime())) {
     throw new DomainError("VALIDATION_FAILED", "Choose a reason and a valid effective time.", 400);
   }
@@ -280,6 +281,8 @@ export async function getVehicleFormOptions(context: RequestContext) {
 
 export async function listAvailableVehicles(context: RequestContext, pickupAt: string, returnAt: string) {
   requireRole(context, ["agency_owner", "fleet_manager", "rental_agent"]);
+  pickupAt = await agencyInstant(context.agencyId, pickupAt);
+  returnAt = await agencyInstant(context.agencyId, returnAt);
   const pickup = Date.parse(pickupAt);
   const returned = Date.parse(returnAt);
   if (!Number.isFinite(pickup) || !Number.isFinite(returned) || returned <= pickup) {

@@ -17,7 +17,8 @@ export type CustomerDetailDto = CustomerDto & {
   /** Paid above booking totals (overpayments not yet refunded). */
   credit: number;
   lastRentalAt: string | null;
-  bookings: Array<{ id: string; vehicle: string; plate: string; status: string; pickupAt: string; returnAt: string; totalAmount: number; paid: number }>;
+  /** totalAmount is net of discount; discount covers booking-time and settlement discounts. */
+  bookings: Array<{ id: string; publicNumber: number | null; vehicle: string; plate: string; status: string; pickupAt: string; returnAt: string; totalAmount: number; discount: number; dailyRate: number; paid: number }>;
   /** Approved expenses charged to this customer, with recovered amounts, for the income/expense summary. */
   expenses: AccountExpense[];
 };
@@ -74,9 +75,10 @@ export async function getCustomerDetail(context: RequestContext, id: string): Pr
   const customer = await getCustomer(context, id);
   const expenses = await listAccountExpenses(context.agencyId, { customerId: id });
   const expenseDue = expenses.reduce((sum, row) => sum + row.amount - row.recovered, 0);
-  const bookings = await queryAll<{ id: string; vehicle: string; plate: string; status: string; pickupAt: string; returnAt: string; totalAmount: number; paid: number; archivedAt: string | null }>(`
+  const bookings = await queryAll<{ id: string; publicNumber: number | null; vehicle: string; plate: string; status: string; pickupAt: string; returnAt: string; totalAmount: number; discount: number; dailyRate: number; paid: number; archivedAt: string | null }>(`
     SELECT bk.id, CASE WHEN bk.fulfillment_type='external' THEN bk.external_vehicle_make||' '||bk.external_vehicle_model||coalesce(' '||bk.external_vehicle_year,'') ELSE v.make||' '||v.model||' '||v.year END AS vehicle, coalesce(bk.external_vehicle_plate,v.plate) AS plate,
       bk.status, bk.pickup_at AS pickupAt, bk.return_at AS returnAt, bk.total_amount AS totalAmount, bk.archived_at AS archivedAt,
+      bk.public_number AS publicNumber, coalesce(bk.discount,0) AS discount, coalesce(bk.daily_rate,0) AS dailyRate,
       coalesce((SELECT sum(CASE WHEN lower(ft.kind) IN ('refund','reversal','payment_adjustment_decrease') THEN -ft.amount ELSE ft.amount END)
         FROM financial_transactions ft WHERE ft.agency_id=bk.agency_id AND ft.booking_id=bk.id AND ft.status='posted' AND lower(ft.kind) IN ('payment','late_return_charge','deposit_applied','payment_adjustment_increase','payment_adjustment_decrease','reversal','refund')),0) AS paid
     FROM bookings bk
@@ -92,15 +94,17 @@ export async function getCustomerDetail(context: RequestContext, id: string): Pr
     expenseDue,
     credit: bookings.filter(item => !item.archivedAt).reduce((sum, item) => sum + Math.max(0, item.paid - item.totalAmount), 0),
     lastRentalAt: bookings[0]?.returnAt ?? null,
-    bookings: bookings.map(booking => ({ id: booking.id, vehicle: booking.vehicle, plate: booking.plate, status: booking.status, pickupAt: booking.pickupAt, returnAt: booking.returnAt, totalAmount: booking.totalAmount, paid: booking.paid })),
+    bookings: bookings.map(booking => ({ id: booking.id, publicNumber: booking.publicNumber, vehicle: booking.vehicle, plate: booking.plate, status: booking.status, pickupAt: booking.pickupAt, returnAt: booking.returnAt, totalAmount: booking.totalAmount, discount: booking.discount, dailyRate: booking.dailyRate, paid: booking.paid })),
     expenses,
   };
 }
 
 /** Allocates a customer balance payment to the newest unpaid booking first, then to expenses charged to the customer (oldest first). */
-export async function payCustomerBalance(context: RequestContext, customerId: string, input: { amount: number; method: string; reference?: string; idempotencyKey: string }) {
+export async function payCustomerBalance(context: RequestContext, customerId: string, input: { amount: number; method: string; reference?: string; idempotencyKey: string; discount?: number }) {
   requireRole(context, ["agency_owner", "fleet_manager", "rental_agent", "accountant"]);
-  if (!input || !Number.isSafeInteger(input.amount) || input.amount <= 0 || !input.method?.trim() || !input.idempotencyKey?.trim()) throw new DomainError("VALIDATION_FAILED", "Enter a positive whole amount and payment method.", 400);
+  const discount = input?.discount ?? 0;
+  if (!Number.isSafeInteger(discount) || discount < 0) throw new DomainError("VALIDATION_FAILED", "Enter a non-negative whole discount.", 400, { discount: "Enter a non-negative whole PKR discount." });
+  if (!input || !Number.isSafeInteger(input.amount) || input.amount < 0 || (input.amount === 0 && discount === 0) || !input.method?.trim() || !input.idempotencyKey?.trim()) throw new DomainError("VALIDATION_FAILED", "Enter a positive whole amount and payment method.", 400);
   return inTransaction(async () => {
     await getCustomer(context, customerId);
     const previous=await queryAll<{metadata:string}>("SELECT metadata FROM audit_events WHERE agency_id=? AND entity_type='customer' AND entity_id=? AND action='customer.balance_payment_allocated' ORDER BY occurred_at DESC",[context.agencyId,customerId]);
@@ -111,16 +115,22 @@ export async function payCustomerBalance(context: RequestContext, customerId: st
       FROM bookings bk WHERE bk.agency_id=? AND bk.customer_id=? AND bk.archived_at IS NULL AND bk.status NOT IN ('draft','cancelled','no_show') ORDER BY bk.pickup_at DESC,bk.created_at DESC,bk.id DESC`,[context.agencyId,customerId]);
     const openExpenses=(await listAccountExpenses(context.agencyId,{customerId})).filter(row=>row.amount>row.recovered);
     const outstanding=bookings.reduce((sum,row)=>sum+row.balance,0)+openExpenses.reduce((sum,row)=>sum+row.amount-row.recovered,0);
-    if (input.amount>outstanding) throw new DomainError("VALIDATION_FAILED", "Payment exceeds the customer balance.",400,{amount:`Available balance is PKR ${outstanding.toLocaleString("en-PK")}.`});
+    if (input.amount+discount>outstanding) throw new DomainError("VALIDATION_FAILED", "Payment and discount exceed the customer balance.",400,{amount:`Available balance is PKR ${outstanding.toLocaleString("en-PK")}.`});
+    const bookingOutstanding=bookings.reduce((sum,row)=>sum+row.balance,0);
+    if (discount>bookingOutstanding) throw new DomainError("VALIDATION_FAILED", "Discount can only reduce rental balances.",400,{discount:`Rental balance is PKR ${bookingOutstanding.toLocaleString("en-PK")}.`});
     let remaining=input.amount;
-    const allocations:Array<{bookingId?:string;expenseId?:string;amount:number}>=[];
+    let remainingDiscount=discount;
+    const allocations:Array<{bookingId?:string;expenseId?:string;amount:number;discount?:number}>=[];
     for (const booking of bookings) {
-      if (!remaining) break;
+      if (!remaining && !remainingDiscount) break;
       const amount=Math.min(remaining,booking.balance);
-      if (!amount) continue;
-      await recordBookingPayment(context,booking.id,{amount,method:input.method.trim(),reference:input.reference?.trim()??"",idempotencyKey:`customer_${input.idempotencyKey}_${booking.id}`});
-      allocations.push({bookingId:booking.id,amount});
+      // The discount settles whatever the payment leaves open on the same booking.
+      const bookingDiscount=Math.min(remainingDiscount,booking.balance-amount);
+      if (!amount && !bookingDiscount) continue;
+      await recordBookingPayment(context,booking.id,{amount,discount:bookingDiscount,method:input.method.trim(),reference:input.reference?.trim()??"",idempotencyKey:`customer_${input.idempotencyKey}_${booking.id}`});
+      allocations.push({bookingId:booking.id,amount,...(bookingDiscount?{discount:bookingDiscount}:{})});
       remaining-=amount;
+      remainingDiscount-=bookingDiscount;
     }
     const today=new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Karachi"}).format(new Date());
     for (const expense of openExpenses) {
@@ -131,7 +141,7 @@ export async function payCustomerBalance(context: RequestContext, customerId: st
       remaining-=amount;
     }
     const now=new Date().toISOString();
-    await execute("INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)",[randomUUID(),context.agencyId,context.userId,"customer.balance_payment_allocated","customer",customerId,JSON.stringify({idempotencyKey:input.idempotencyKey,amount:input.amount,method:input.method.trim(),reference:input.reference?.trim()??"",allocations,order:"LIFO"}),now]);
+    await execute("INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)",[randomUUID(),context.agencyId,context.userId,"customer.balance_payment_allocated","customer",customerId,JSON.stringify({idempotencyKey:input.idempotencyKey,amount:input.amount,discount,method:input.method.trim(),reference:input.reference?.trim()??"",allocations,order:"LIFO"}),now]);
     return {allocations,customer:await getCustomerDetail(context,customerId)};
   },{immediate:true});
 }

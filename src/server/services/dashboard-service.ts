@@ -14,7 +14,7 @@ export type DashboardData = {
   finance: {
     today: DashboardFinancePeriod;
     month: DashboardFinancePeriod;
-    allTime: DashboardFinancePeriod;
+    previousMonth: DashboardFinancePeriod;
   };
   activeRentalRows: Array<{ id:string; customer:string; vehicle:string; plate:string; returnAt:string; destinationCity:string }>;
   schedule: Array<{ id: string; time: string; type: "Pickup" | "Return"; customer: string; vehicle: string; plate: string; location: string }>;
@@ -53,12 +53,15 @@ export async function getDashboard(context: RequestContext): Promise<DashboardDa
       (SELECT count(*) FROM bookings WHERE agency_id=? AND status='checked_out') AS activeRentals,
       (SELECT count(DISTINCT vehicle_id) FROM bookings WHERE agency_id=? AND status='checked_out') AS utilizedVehicles
   `, [context.agencyId, context.agencyId, context.agencyId]))!;
-  const [todayFinance, monthFinance, allTimeFinance] = await Promise.all([
+  const [year, month] = localDate.split("-").map(Number);
+  const previousKey = month === 1 ? `${year - 1}-12` : `${year}-${String(month - 1).padStart(2, "0")}`;
+  const previousMonthStart = new Date(`${previousKey}-01T00:00:00+05:00`).toISOString();
+  const [todayFinance, monthFinance, previousMonthFinance] = await Promise.all([
     financePeriod(context.agencyId,start,end),
     financePeriod(context.agencyId,monthStart,end),
-    financePeriod(context.agencyId),
+    financePeriod(context.agencyId,previousMonthStart,monthStart),
   ]);
-  const finance={today:todayFinance,month:monthFinance,allTime:allTimeFinance};
+  const finance={today:todayFinance,month:monthFinance,previousMonth:previousMonthFinance};
   const scheduleRows = await queryAll<{ id: string; status: "confirmed" | "checked_out"; pickupAt: string; returnAt: string; customer: string; vehicle: string; plate: string; location: string }>(`
     SELECT bk.id, bk.status, bk.pickup_at AS pickupAt, bk.return_at AS returnAt, c.name AS customer,
       CASE WHEN bk.fulfillment_type='external' THEN bk.external_vehicle_make||' '||bk.external_vehicle_model||coalesce(' '||bk.external_vehicle_year,'') ELSE v.make||' '||v.model||' '||v.year END AS vehicle, coalesce(bk.external_vehicle_plate,v.plate) AS plate, br.name || ', ' || br.city AS location

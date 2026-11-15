@@ -3,11 +3,31 @@
 import { revalidatePath } from "next/cache";
 import { getWebRequestContext } from "@/server/auth/session";
 import { asDomainError } from "@/server/domain/errors";
-import { archiveCustomer, createCustomer, listCustomers, updateCustomer, payCustomerBalance } from "@/server/services/customer-service";
+import { archiveCustomer, createCustomer, getCustomer, listCustomers, updateCustomer, payCustomerBalance } from "@/server/services/customer-service";
+import { notices, withNotices } from "@/server/notifications/notices";
+import { requireRole } from "@/server/auth/authorize";
 
-export async function payCustomerBalanceAction(id:string,input:{amount:number;method:string;reference?:string;idempotencyKey:string}) {
+/** One click: queue the customer's ledger PDF to their WhatsApp. */
+export async function sendCustomerStatementAction(id:string,filters:{from?:string;to?:string;plate?:string}={}) {
   try {
-    const data=await payCustomerBalance(await getWebRequestContext(),id,input);
+    const context=await getWebRequestContext();
+    requireRole(context,["agency_owner","fleet_manager","rental_agent","accountant"]);
+    await getCustomer(context,id);
+    const valid=(value?:string)=>!value||/^\d{4}-\d{2}-\d{2}$/.test(value);
+    if(!valid(filters.from)||!valid(filters.to))return {ok:false as const,error:{code:"VALIDATION_FAILED",message:"Choose a valid date range.",fieldErrors:{}}};
+    const data=await notices.customerStatement(context,"server",id,{from:filters.from||undefined,to:filters.to||undefined,plate:filters.plate||undefined,reason:"manual"});
+    return {ok:true as const,data};
+  } catch(error) { return failure(error); }
+}
+
+export async function payCustomerBalanceAction(id:string,input:{amount:number;method:string;reference?:string;idempotencyKey:string;discount?:number}) {
+  try {
+    const context=await getWebRequestContext();
+    const data=await withNotices(()=>payCustomerBalance(context,id,input),async result=>({
+      notificationDelivery:input.amount>0
+        ?await notices.customerPayment(context,"server",id,{amount:input.amount,discount:input.discount??0,method:input.method,reference:input.reference,allocations:result.allocations,idempotencyKey:input.idempotencyKey})
+        :{status:"skipped" as const,message:"Discount recorded. No payment receipt was needed."},
+    }));
     revalidatePath(`/customers/${id}`);revalidatePath("/customers");revalidatePath("/bookings");revalidatePath("/reports");revalidatePath("/");
     return {ok:true as const,data};
   } catch(error) { return failure(error); }

@@ -17,9 +17,9 @@ export type OwnerStatementLine={id:string;kind:"Rental revenue"|"Owner expense"|
   /** Cumulative owner balance after this line, carried across months like a bank statement. */
   balance:number};
 export type OwnerStatementDto={id:string;period:string;periodFrom:string;periodTo:string;status:"Open"|"Paid";lines:OwnerStatementLine[];rentalRevenue:number;expenses:number;payouts:number;closing:number;openingBalance:number;closingBalance:number};
-export type OwnerListItem={id:string;name:string;phone:string;email:string|null;status:string;version:number;vehicleCount:number;share:string;payable:number;balanceStatus:"Due"|"Settled"|"Inactive"};
+export type OwnerListItem={id:string;name:string;phone:string;email:string|null;status:string;version:number;vehicleCount:number;share:string;payable:number;balanceStatus:"Due"|"Settled"|"Owes agency"|"Inactive"};
 export type OwnerDetailDto=OwnerListItem&{vehicles:Array<{id:string;name:string;plate:string;status:string}>;agreements:AgreementRow[];statements:OwnerStatementDto[];payoutHistory:OwnerPayoutDto[];totals:{income:number;expenses:number;fixedCharges:number;paid:number;balance:number}};
-export type OwnerWorkspaceData={owners:OwnerListItem[];summary:{activeOwners:number;managedVehicles:number;ownerShare:number;payable:number};fixedCharge:OwnerFixedChargeSettings};
+export type OwnerWorkspaceData={owners:OwnerListItem[];summary:{activeOwners:number;managedVehicles:number;ownerShare:number;payable:number;owedToAgency:number};fixedCharge:OwnerFixedChargeSettings};
 
 const ownerBase=`SELECT o.id,o.name,o.phone,o.email,o.status,o.version,
   (SELECT count(*) FROM vehicles v WHERE v.agency_id=o.agency_id AND v.owner_id=o.id AND v.archived_at IS NULL) AS vehicleCount
@@ -29,7 +29,6 @@ function shareAmount(total:number,row:{shareBasis:string|null;ownerSharePercent:
   if(row.shareBasis==="percentage") return Math.round(total*(row.ownerSharePercent??0)/100);
   return row.ownerShareAmount??0;
 }
-function totalShare(rows:RevenueRow[]){const fixed=new Set<string>();return rows.reduce((sum,row)=>{if(row.shareBasis!=="fixed_monthly")return sum+shareAmount(row.totalAmount,row);const key=`${row.agreementId??row.vehicleId}-${row.date.slice(0,7)}`;if(fixed.has(key))return sum;fixed.add(key);return sum+(row.ownerShareAmount??0)},0)}
 function shareLabel(row:AgreementRow|undefined){if(!row)return "No agreement";return row.shareBasis==="percentage"?`${row.ownerSharePercent??0}% owner`:`${(row.ownerShareAmount??0).toLocaleString("en-PK")} PKR fixed`;}
 function monthBounds(date:string){const value=new Date(date);const from=new Date(Date.UTC(value.getUTCFullYear(),value.getUTCMonth(),1));const to=new Date(Date.UTC(value.getUTCFullYear(),value.getUTCMonth()+1,1));return {from:from.toISOString().slice(0,10),to:to.toISOString().slice(0,10)};}
 function listAgreements(agencyId:string,ownerId:string){return queryAll<AgreementRow>(`SELECT id,version,effective_from AS effectiveFrom,effective_to AS effectiveTo,share_basis AS shareBasis,owner_share_percent AS ownerSharePercent,owner_share_amount AS ownerShareAmount,expense_responsibility AS expenseResponsibility,payout_frequency AS payoutFrequency,created_at AS createdAt FROM management_agreements WHERE agency_id=? AND owner_id=? ORDER BY version DESC`,[agencyId,ownerId]);}
@@ -82,11 +81,13 @@ export async function listOwners(context:RequestContext):Promise<OwnerWorkspaceD
   requireRole(context,["agency_owner","fleet_manager","rental_agent","accountant"]);
   const base=await queryAll<Omit<OwnerListItem,"share"|"payable"|"balanceStatus">>(`${ownerBase} ORDER BY o.name`,[context.agencyId]);
   const owners=await Promise.all(base.map(async row=>{
-    const [entries,agreement]=await Promise.all([ledger(context,row.id),latestAgreement(context.agencyId,row.id)]);
-    const payable=Math.max(0,totalShare(entries.revenue)-entries.expenses.reduce((s,x)=>s+x.amount,0)-entries.payouts.reduce((s,x)=>s+x.amount,0));
-    return {...row,share:shareLabel(agreement),payable,balanceStatus:row.status!=="active"?"Inactive" as const:payable>0?"Due" as const:"Settled" as const};
+    // One source of truth: the owner statement's carried closing balance (same figure as the owner page,
+    // the payout check and Reports). Negative means the owner owes the agency.
+    const [statements,agreement]=await Promise.all([buildStatements(context,row.id),latestAgreement(context.agencyId,row.id)]);
+    const payable=statements[0]?.closingBalance??0;
+    return {...row,share:shareLabel(agreement),payable,balanceStatus:row.status!=="active"?"Inactive" as const:payable>0?"Due" as const:payable<0?"Owes agency" as const:"Settled" as const};
   }));
-  return {owners,summary:{activeOwners:owners.filter(x=>x.status==="active").length,managedVehicles:owners.reduce((s,x)=>s+x.vehicleCount,0),ownerShare:owners.reduce((s,x)=>s+x.payable,0),payable:owners.reduce((s,x)=>s+x.payable,0)},fixedCharge:await getOwnerFixedChargeSettings(context)};
+  return {owners,summary:{activeOwners:owners.filter(x=>x.status==="active").length,managedVehicles:owners.reduce((s,x)=>s+x.vehicleCount,0),ownerShare:owners.reduce((s,x)=>s+x.payable,0),payable:owners.reduce((s,x)=>s+Math.max(0,x.payable),0),owedToAgency:owners.reduce((s,x)=>s+Math.max(0,-x.payable),0)},fixedCharge:await getOwnerFixedChargeSettings(context)};
 }
 export async function getOwner(context:RequestContext,id:string):Promise<OwnerDetailDto>{
   const item=(await listOwners(context)).owners.find(x=>x.id===id);if(!item)throw new DomainError("NOT_FOUND","Owner not found.",404);

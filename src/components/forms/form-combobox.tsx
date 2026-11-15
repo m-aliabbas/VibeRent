@@ -117,7 +117,7 @@ export function FormCombobox({
             setOpen(true);
           }}
           onKeyDown={handleKeyDown}
-          className={`h-11 w-full rounded-[9px] border bg-white pl-9 pr-9 text-sm text-[#19191F] outline-none placeholder:text-[#98A2B3] focus:border-[#006FE6] focus:ring-2 focus:ring-[#006FE6]/10 disabled:bg-[#F2F4F7] ${error ? "border-[#F04438]" : "border-[#D0D5DD]"}`}
+          className={`h-11 w-full rounded-[9px] border bg-white pl-9 pr-9 text-sm text-[#19191F] outline-none placeholder:text-[#667085] focus:border-[#006FE6] focus:ring-2 focus:ring-[#006FE6]/10 disabled:bg-[#F2F4F7] ${error ? "border-[#F04438]" : "border-[#D0D5DD]"}`}
         />
         <ChevronDown aria-hidden="true" className={`pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[#667085] transition-transform ${open ? "rotate-180" : ""}`} size={17} />
       </div>

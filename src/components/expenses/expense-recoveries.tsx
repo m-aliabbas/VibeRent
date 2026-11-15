@@ -105,7 +105,7 @@ export function ExpenseRecoveries({ item, onChange, onNotice }: { item: ExpenseD
           {item.recoveries.map((row) => (
             <li key={row.id} className="flex items-center justify-between gap-3 p-3 text-sm">
               <div className="min-w-0">
-                <p className={`font-semibold ${row.status === "reversed" ? "text-[#98A2B3] line-through" : ""}`}>
+                <p className={`font-semibold ${row.status === "reversed" ? "text-[#667085] line-through" : ""}`}>
                   {formatPkr(row.amount)} from {sources.find((source) => source.value === row.source)?.label.toLowerCase() ?? row.source}
                 </p>
                 <p className="text-xs text-[#667085]">

@@ -133,13 +133,18 @@ export type RecordPaymentInput = {
   account?: string;
   note?: string;
   idempotencyKey?: string;
+  /** Discount given while settling; reduces the booking total instead of being collected. */
+  discount?: number;
 };
 
 export function parseRecordPaymentInput(value: unknown): RecordPaymentInput {
   const input = value as Partial<RecordPaymentInput> | null;
   const errors: Record<string, string> = {};
   if (!input || typeof input !== "object") throw new DomainError("VALIDATION_FAILED", "Invalid payment payload.", 400);
-  if (!Number.isInteger(input.amount) || (input.amount ?? 0) <= 0) {
+  const discount = input.discount ?? 0;
+  if (!Number.isInteger(discount) || discount < 0) errors.discount = "Enter a non-negative whole PKR discount.";
+  // A settlement can be discount-only (nothing collected), but it cannot be empty.
+  if (!Number.isInteger(input.amount) || (input.amount ?? 0) < 0 || ((input.amount ?? 0) === 0 && !(discount > 0))) {
     errors.amount = "Enter a positive whole PKR amount.";
   }
   if (!input.method?.trim() || !paymentMethods.includes(input.method as PaymentMethod)) {
@@ -147,6 +152,7 @@ export function parseRecordPaymentInput(value: unknown): RecordPaymentInput {
   }
   if (Object.keys(errors).length) throw new DomainError("VALIDATION_FAILED", "Review the payment details.", 400, errors);
   return {
+    discount: Number.isInteger(discount) && discount > 0 ? discount : 0,
     amount: input.amount!,
     method: input.method!.trim(),
     reference: input.reference?.trim() || "",

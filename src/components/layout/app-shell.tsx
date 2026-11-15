@@ -1,10 +1,11 @@
 "use client";
 
+import { setActiveTimeZone } from "@/lib/timezone";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import * as Dialog from "@radix-ui/react-dialog";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   BarChart3,
   Archive,
@@ -14,12 +15,12 @@ import {
   CarFront,
   ChevronDown,
   CircleDollarSign,
-  CircleHelp,
   Gauge,
+  Keyboard,
   LogOut,
   Menu, MessageCircle,
   Search,
-  ScanText,
+  ShieldCheck,
   Settings,
   Users,
   UserSquare2,
@@ -33,22 +34,32 @@ import type { SessionViewer } from "@/server/auth/session";
 import { updateMyProfileAction } from "@/app/actions/organization";
 import { FormInput } from "@/components/forms/form-controls";
 import { Button } from "@/components/ui/button";
+import { Kbd } from "@/components/ui/kbd";
+import { goShortcuts, ShortcutsDialog } from "@/components/layout/shortcuts-dialog";
+import { useHotkey, useSequencePrefixes } from "@/lib/hotkeys";
 
-const nav = [
-  { label: "Dashboard", href: "/", icon: Gauge },
-  { label: "Vehicles", href: "/vehicles", icon: CarFront },
-  { label: "Bookings", href: "/bookings", icon: CalendarDays },
-  { label: "Customers", href: "/customers", icon: Users },
-  { label: "Expenses", href: "/expenses", icon: CircleDollarSign },
-  { label: "Reports", href: "/reports", icon: BarChart3 },
-  { label: "Owners", href: "/owners", icon: UserSquare2 },
-  { label: "Drivers", href: "/drivers", icon: UserRound },
-  { label: "Guarantors", href: "/guarantors", icon: UserRound },
-  { label: "Archive", href: "/archive", icon: Archive },
-  { label: "WhatsApp", href: "/whatsapp", icon: MessageCircle },
-  { label: "CNIC OCR", href: "/cnic-ocr", icon: ScanText },
-  { label: "Settings", href: "/settings", icon: Settings },
-];
+const navGroups = [
+  { label: "Daily work", items: [
+    { label: "Dashboard", href: "/", icon: Gauge, combo: "g d" },
+    { label: "Bookings", href: "/bookings", icon: CalendarDays, combo: "g b" },
+    { label: "Vehicles", href: "/vehicles", icon: CarFront, combo: "g v" },
+    { label: "Customers", href: "/customers", icon: Users, combo: "g c" },
+  ] },
+  { label: "Money", items: [
+    { label: "Expenses", href: "/expenses", icon: CircleDollarSign, combo: "g e" },
+    { label: "Owners", href: "/owners", icon: UserSquare2, combo: "g o" },
+    { label: "Reports", href: "/reports", icon: BarChart3, combo: "g r" },
+  ] },
+  { label: "People", items: [
+    { label: "Drivers", href: "/drivers", icon: UserRound },
+    { label: "Guarantors", href: "/guarantors", icon: ShieldCheck },
+  ] },
+  { label: "Tools", items: [
+    { label: "WhatsApp", href: "/whatsapp", icon: MessageCircle },
+    { label: "Archive", href: "/archive", icon: Archive },
+    { label: "Settings", href: "/settings", icon: Settings, combo: "g s" },
+  ] },
+] as const;
 
 function Brand() {
   return (
@@ -85,71 +96,78 @@ function Brand() {
 function NavLinks({ close }: { close?: () => void }) {
   const pathname = usePathname();
   return (
-    <nav className="space-y-1" aria-label="Main navigation">
-      {nav.map(({ label, href, icon: Icon }) => {
-        const active =
-          href === "/" ? pathname === "/" : pathname.startsWith(href);
-        return (
-          <Link
-            key={href}
-            href={href}
-            onClick={close}
-            className={cn(
-              "flex h-12 items-center gap-3.5 rounded-[10px] px-3.5 text-[15px] font-medium transition-colors",
-              active
-                ? "bg-[#EAF3FF] font-semibold text-[#006FE6]"
-                : "text-[#15213B] hover:bg-[#F5F8FC]",
-            )}
-          >
-            <Icon size={20} strokeWidth={active ? 2.35 : 1.85} />
-            {label}
-          </Link>
-        );
-      })}
+    <nav className="space-y-4" aria-label="Main navigation">
+      {navGroups.map(group => (
+        <div key={group.label}>
+          <p className="px-3.5 pb-1 text-xs font-bold uppercase tracking-[.08em] text-[#667085]">{group.label}</p>
+          <div className="space-y-0.5">
+            {group.items.map((item) => {
+              const { label, href, icon: Icon } = item;
+              const combo = "combo" in item ? item.combo : undefined;
+              const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
+              return (
+                <Link
+                  key={href}
+                  href={href}
+                  onClick={close}
+                  aria-current={active ? "page" : undefined}
+                  aria-keyshortcuts={combo ? combo.replace(" ", "+").toUpperCase() : undefined}
+                  className={cn(
+                    "group flex h-10 items-center gap-3 rounded-[10px] px-3.5 text-[15px] font-medium transition-colors focus-visible:outline-2 focus-visible:outline-[#006FE6]",
+                    active ? "bg-[#EAF3FF] font-semibold text-[#0058B8]" : "text-[#15213B] hover:bg-[#F5F8FC]",
+                  )}
+                >
+                  <Icon size={19} strokeWidth={active ? 2.35 : 1.85} />
+                  <span className="flex-1">{label}</span>
+                  {combo && <Kbd combo={combo} className="invisible group-hover:visible group-focus-visible:visible" />}
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+      ))}
     </nav>
   );
 }
 
+function GlobalShortcuts({ onSearch, onHelp }: { onSearch: () => void; onHelp: () => void }) {
+  const router = useRouter();
+  useSequencePrefixes(SEQUENCE_PREFIXES);
+  useHotkey("mod+k", onSearch, { allowInInput: true });
+  useHotkey("?", onHelp);
+  useHotkey("/", () => {
+    const field = document.querySelector<HTMLInputElement>("[data-page-search]");
+    if (field) { field.focus(); field.select(); } else onSearch();
+  });
+  return <>{goShortcuts.map(item => <GoShortcut key={item.combo} combo={item.combo} go={() => router.push(item.href)} />)}</>;
+}
+const SEQUENCE_PREFIXES = ["g"];
+function GoShortcut({ combo, go }: { combo: string; go: () => void }) { useHotkey(combo, go); return null; }
+
 export function AppShell({ children, viewer }: { children: React.ReactNode; viewer: SessionViewer }) {
+  // Children format and parse booking times in the agency zone; set it before they render.
+  if (typeof window !== "undefined") setActiveTimeZone(viewer.timeZone);
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [profileOpen,setProfileOpen]=useState(false);
-  useEffect(() => {
-    const handler = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        setSearchOpen(true);
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, []);
+  const [helpOpen,setHelpOpen]=useState(false);
   return (
     <div className="min-h-screen bg-[#F8FAFC]">
       <aside data-app-chrome className="fixed inset-y-0 left-0 z-30 hidden w-[224px] flex-col border-r border-[#E6EAF0] bg-white px-3 py-5 lg:flex">
         <div className="px-2.5">
           <Brand />
         </div>
-        <div className="-mx-1 mt-7 min-h-0 flex-1 overflow-y-auto overscroll-contain px-1 pb-3">
+        <div className="-mx-1 mt-6 min-h-0 flex-1 overflow-y-auto overscroll-contain px-1 pb-3">
           <NavLinks />
         </div>
         <button
-          className="flex w-full shrink-0 items-center gap-3 rounded-xl border border-[#E4E7EC] bg-white p-3 text-left shadow-[0_2px_6px_rgba(16,24,40,.04)] hover:border-[#B9D9FF]"
-          aria-label="Open help center"
+          onClick={() => setHelpOpen(true)}
+          className="flex h-10 w-full shrink-0 items-center gap-2 rounded-[10px] border-t border-[#EAECF0] px-3.5 pt-2 text-left text-sm font-medium text-[#475467] hover:text-[#19191F] focus-visible:outline-2 focus-visible:outline-[#006FE6]"
         >
-          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#0878F9] text-white">
-            <CircleHelp size={18} />
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block text-xs font-bold text-[#15213B]">
-              Need help?
-            </span>
-            <span className="mt-0.5 block text-[11px] text-[#667085]">
-              Visit our Help Center
-            </span>
-          </span>
-          <span className="text-lg text-[#344054]">›</span>
+          <Keyboard size={17} />
+          <span className="flex-1">Keyboard shortcuts</span>
+          <Kbd combo="?" />
         </button>
       </aside>
 
@@ -171,7 +189,7 @@ export function AppShell({ children, viewer }: { children: React.ReactNode; view
             <span className="flex-1 text-sm text-[#667085]">
               Search vehicles, bookings, customers, owners...
             </span>
-            <kbd className="text-xs font-medium text-[#667085]">⌘ K</kbd>
+            <Kbd combo="mod+k" />
           </button>
           <div className="ml-auto flex items-center gap-3">
             <button
@@ -190,7 +208,7 @@ export function AppShell({ children, viewer }: { children: React.ReactNode; view
             </button>
             <DropdownMenu.Root>
               <DropdownMenu.Trigger asChild><button className="ml-1 hidden items-center gap-2.5 rounded-lg p-1 text-left hover:bg-[#F8FAFC] sm:flex" aria-label="Open user menu"><span className="grid h-10 w-10 place-items-center rounded-full bg-gradient-to-br from-[#1488FF] to-[#0057B8] text-xs font-bold text-white ring-2 ring-white">{initials(viewer.name)}</span><span><span className="block max-w-36 truncate text-sm font-semibold text-[#101828]">{viewer.name}</span><span className="block max-w-36 truncate text-xs text-[#667085]">{roleLabel(viewer.role)}</span></span><ChevronDown size={16} className="text-[#344054]"/></button></DropdownMenu.Trigger>
-              <DropdownMenu.Portal><DropdownMenu.Content align="end" sideOffset={8} className="z-50 min-w-64 rounded-xl border border-[#E4E7EC] bg-white p-1.5 shadow-xl"><div className="border-b px-3 py-2.5"><p className="truncate text-sm font-semibold">{viewer.name}</p><p className="truncate text-xs text-[#667085]">{viewer.email}</p></div><DropdownMenu.Item onSelect={()=>setProfileOpen(true)} className="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm outline-none hover:bg-[#F2F4F7]"><UserRound size={16}/>Edit my profile</DropdownMenu.Item><div className="px-3 py-2 text-xs font-semibold uppercase tracking-wide text-[#98A2B3]">Agency</div>{viewer.organizations.map(org=><DropdownMenu.Item key={org.id} disabled={org.id===viewer.activeAgencyId} onSelect={async()=>{await authClient.organization.setActive({organizationId:org.id});router.push("/");router.refresh()}} className="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm outline-none hover:bg-[#F2F4F7] disabled:cursor-default disabled:bg-[#EFF8FF] disabled:text-[#175CD3]"><Building2 size={16}/><span className="flex-1 truncate">{org.name}</span>{org.id===viewer.activeAgencyId&&<span className="text-xs">Active</span>}</DropdownMenu.Item>)}<DropdownMenu.Separator className="my-1 h-px bg-[#EAECF0]"/><DropdownMenu.Item onSelect={async()=>{await authClient.signOut();router.push("/sign-in");router.refresh()}} className="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm text-[#B42318] outline-none hover:bg-[#FEF3F2]"><LogOut size={16}/>Sign out</DropdownMenu.Item></DropdownMenu.Content></DropdownMenu.Portal>
+              <DropdownMenu.Portal><DropdownMenu.Content align="end" sideOffset={8} className="z-50 min-w-64 rounded-xl border border-[#E4E7EC] bg-white p-1.5 shadow-xl"><div className="border-b px-3 py-2.5"><p className="truncate text-sm font-semibold">{viewer.name}</p><p className="truncate text-xs text-[#667085]">{viewer.email}</p></div><DropdownMenu.Item onSelect={()=>setProfileOpen(true)} className="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm outline-none hover:bg-[#F2F4F7]"><UserRound size={16}/>Edit my profile</DropdownMenu.Item><div className="px-3 py-2 text-xs font-semibold uppercase tracking-wide text-[#667085]">Agency</div>{viewer.organizations.map(org=><DropdownMenu.Item key={org.id} disabled={org.id===viewer.activeAgencyId} onSelect={async()=>{await authClient.organization.setActive({organizationId:org.id});router.push("/");router.refresh()}} className="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm outline-none hover:bg-[#F2F4F7] disabled:cursor-default disabled:bg-[#EFF8FF] disabled:text-[#175CD3]"><Building2 size={16}/><span className="flex-1 truncate">{org.name}</span>{org.id===viewer.activeAgencyId&&<span className="text-xs">Active</span>}</DropdownMenu.Item>)}<DropdownMenu.Separator className="my-1 h-px bg-[#EAECF0]"/><DropdownMenu.Item onSelect={async()=>{await authClient.signOut();router.push("/sign-in");router.refresh()}} className="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm text-[#B42318] outline-none hover:bg-[#FEF3F2]"><LogOut size={16}/>Sign out</DropdownMenu.Item></DropdownMenu.Content></DropdownMenu.Portal>
             </DropdownMenu.Root>
           </div>
         </header>
@@ -231,6 +249,8 @@ export function AppShell({ children, viewer }: { children: React.ReactNode; view
         </div>
       )}
       <CommandPalette open={searchOpen} onOpenChange={setSearchOpen} />
+      <ShortcutsDialog open={helpOpen} onOpenChange={setHelpOpen} />
+      <GlobalShortcuts onSearch={() => setSearchOpen(true)} onHelp={() => setHelpOpen(true)} />
       <ProfileDialog open={profileOpen} onOpenChange={setProfileOpen} viewer={viewer} onSaved={()=>router.refresh()}/>
     </div>
   );

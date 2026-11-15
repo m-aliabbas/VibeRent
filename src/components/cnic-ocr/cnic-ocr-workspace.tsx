@@ -155,11 +155,11 @@ export function CnicOcrWorkspace() {
             </div>
           ) : result ? (
             <dl className="mt-5 space-y-3">
-              {fields.map(({ key, label }) => <div key={key} className="rounded-xl border border-[#E4E7EC] bg-[#FAFCFF] p-4"><dt className="text-xs font-bold uppercase tracking-wide text-[#667085]">{label}</dt><dd className="mt-1.5 break-words text-[15px] font-semibold text-[#1D2939]">{result[key] ?? <span className="font-normal text-[#98A2B3]">Not readable</span>}</dd><code className="mt-2 block text-[11px] text-[#98A2B3]">{key}</code></div>)}
+              {fields.map(({ key, label }) => <div key={key} className="rounded-xl border border-[#E4E7EC] bg-[#FAFCFF] p-4"><dt className="text-xs font-bold uppercase tracking-wide text-[#667085]">{label}</dt><dd className="mt-1.5 break-words text-[15px] font-semibold text-[#1D2939]">{result[key] ?? <span className="font-normal text-[#667085]">Not readable</span>}</dd><code className="mt-2 block text-xs text-[#667085]">{key}</code></div>)}
             </dl>
           ) : (
             <div className="grid min-h-[330px] place-items-center rounded-xl border border-dashed border-[#D0D5DD] bg-[#FAFCFF] px-6 text-center">
-              <div><span className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-white text-[#98A2B3] shadow-sm"><ScanText size={23} /></span><p className="mt-3 text-sm font-semibold text-[#344054]">No result yet</p><p className="mt-1 max-w-xs text-xs leading-5 text-[#667085]">Upload both CNIC sides and select Analyze CNIC to see the structured response.</p></div>
+              <div><span className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-white text-[#667085] shadow-sm"><ScanText size={23} /></span><p className="mt-3 text-sm font-semibold text-[#344054]">No result yet</p><p className="mt-1 max-w-xs text-xs leading-5 text-[#667085]">Upload both CNIC sides and select Analyze CNIC to see the structured response.</p></div>
             </div>
           )}
         </section>

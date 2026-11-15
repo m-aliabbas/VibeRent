@@ -14,7 +14,7 @@ export function Toast({
     <div
       role="status"
       aria-live="polite"
-      className="fixed right-4 top-20 z-[60] flex max-w-[calc(100%-32px)] items-center gap-3 rounded-[10px] border border-[#ABEFC6] bg-white px-4 py-3 text-sm font-semibold text-[#067647] shadow-lg"
+      className="fixed bottom-4 right-4 z-[60] flex max-w-[calc(100%-32px)] items-center gap-3 rounded-[10px] border border-[#ABEFC6] bg-white px-4 py-3 text-sm font-semibold text-[#067647] shadow-lg"
     >
       <Icon size={18} className="shrink-0" />
       <span>{message}</span>

@@ -3,13 +3,15 @@ import "server-only";
 import { queryAll, queryOne } from "@/db/query";
 import { buildLedgerEntries, summarizeLedger } from "@/lib/reports/ledger";
 import type { LedgerEntry, LedgerSummary } from "@/lib/reports/ledger";
+import type { AgencyAccountEntry, AgencyAccountSummary } from "@/lib/reports/agency-account";
+import { summarizeAgencyAccount } from "@/lib/reports/agency-account";
 import { formatPercent, ownerExpenseAmount, ownerExpensePercent } from "@/lib/owner-share";
 import { requireRole } from "@/server/auth/authorize";
 import type { RequestContext } from "@/server/context/request-context";
 import { listOwnerFixedCharges } from "@/server/services/owner-fixed-charge-service";
 
 type Vehicle = { id: string; name: string; plate: string; city: string; ownership: string; ownerId: string | null; archivedAt: string | null; status: string; expenseResponsibility: string | null; shareBasis: string | null; ownerSharePercent: number | null };
-type Booking = { id: string; vehicleId: string | null; ownerId: string | null; customer: string | null; meter: number | null; source: string; pickupAt: string; returnAt: string; completedAt: string | null; status: string; totalAmount: number; shareBasis: string | null; ownerSharePercent: number | null; ownerShareAmount: number | null; fulfillmentType:"fleet"|"external"; externalVehicle:string|null; externalPlate:string|null; externalSupplierName:string|null; city:string; destinationCity:string };
+type Booking = { id: string; vehicleId: string | null; ownerId: string | null; customer: string | null; meter: number | null; source: string; pickupAt: string; returnAt: string; completedAt: string | null; status: string; totalAmount: number; shareBasis: string | null; ownerSharePercent: number | null; ownerShareAmount: number | null; fulfillmentType:"fleet"|"external"; externalVehicle:string|null; externalPlate:string|null; externalSupplierName:string|null; supplierPayable:number|null; city:string; destinationCity:string };
 type Cost = { id: string; vehicleId: string | null; ownerId: string | null; customer: string | null; meter: number | null; date: string; category: string; description: string; amount: number; status: string; receipt: number; recurringExpenseId: string | null };
 type Transaction = { id: string; bookingId: string | null; date: string; amount: number; kind: string; originalKind:string|null; linkedId:string|null; status: string; method: string; reference:string };
 
@@ -82,6 +84,8 @@ export type ReportsData = {
   periods: ReportPeriod[];
   cities: string[];
   ledgerEntries: LedgerEntry[];
+  /** Agency-owned money: own-car rentals, managed-car agency share, external commission, other income, minus agency expenses. */
+  agencyEntries: AgencyAccountEntry[];
   dateBounds: { min: string; max: string };
   ledgerAccounts: {
     vehicles: Array<{ id: string; label: string; city: string; ownership: "Owned" | "Managed"; ownerId: string | null; archived: boolean }>;
@@ -134,6 +138,21 @@ export async function getReports(context: RequestContext): Promise<ReportsData> 
   return buildReports(context);
 }
 
+export type AgencyAccountSnapshot = { today: AgencyAccountSummary; month: AgencyAccountSummary; previousMonth: AgencyAccountSummary; dates: { today: string; monthStart: string; previousMonthStart: string; previousMonthEnd: string } };
+
+/** Agency-owned money for today, this month and last month (Pakistan time), using the same rules as Reports → Agency account. */
+export async function getAgencyAccountSnapshot(context: RequestContext): Promise<AgencyAccountSnapshot> {
+  requireRole(context, ["agency_owner", "fleet_manager", "accountant"]);
+  const { agencyEntries } = await buildReports(context);
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Karachi", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  const [year, month] = today.split("-").map(Number);
+  const monthStart = `${today.slice(0, 7)}-01`;
+  const previousMonthStart = month === 1 ? `${year - 1}-12-01` : `${year}-${String(month - 1).padStart(2, "0")}-01`;
+  const previousMonthEnd = new Date(Date.parse(`${monthStart}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
+  const within = (from: string, to: string) => summarizeAgencyAccount(agencyEntries.filter((row) => row.date >= from && row.date <= to));
+  return { today: within(today, today), month: within(monthStart, today), previousMonth: within(previousMonthStart, previousMonthEnd), dates: { today, monthStart, previousMonthStart, previousMonthEnd } };
+}
+
 export type OwnerLedgerData = { entries: LedgerEntry[]; dateBounds: { min: string; max: string }; cars: Array<{ id: string; plate: string }> };
 
 /** The owner's slice of the agency ledger, for the owner profile (same rows and math as Reports → Ledger). */
@@ -166,7 +185,7 @@ async function buildReports(context: RequestContext): Promise<ReportsData> {
            a.owner_share_percent AS ownerSharePercent, a.owner_share_amount AS ownerShareAmount,
            b.fulfillment_type AS fulfillmentType,
            CASE WHEN b.fulfillment_type='external' THEN b.external_vehicle_make||' '||b.external_vehicle_model||coalesce(' '||b.external_vehicle_year,'') END AS externalVehicle,
-           b.external_vehicle_plate AS externalPlate,b.external_supplier_name AS externalSupplierName,br.city,b.destination_city AS destinationCity,
+           b.external_vehicle_plate AS externalPlate,b.external_supplier_name AS externalSupplierName,b.supplier_payable AS supplierPayable,br.city,b.destination_city AS destinationCity,
            c.name AS customer,
            (SELECT ri.odometer FROM rental_inspections ri WHERE ri.agency_id=b.agency_id AND ri.booking_id=b.id AND ri.kind='checkin' LIMIT 1) AS meter
     FROM bookings b
@@ -360,7 +379,46 @@ async function buildReports(context: RequestContext): Promise<ReportsData> {
     ...sourcePayouts.map(row=>{const booking=bookingById.get(row.bookingId);return {id:`SRC-${row.id}`,date:row.paidAt.slice(0,10),vehicleId:null,vehicle:booking?.externalVehicle??"Externally sourced vehicle",city:booking?.city??"Unknown city",ownership:"Managed" as const,ownerId:null,owner:row.supplierName,kind:"Source settlement" as const,reference:row.reference||row.id,description:`${row.method.replaceAll("_"," ")} source payment`,income:0,expense:0,ownerMovement:-row.amount,operatingResult:-row.amount}}),
   ].sort((a, b) => a.date.localeCompare(b.date) || a.kind.localeCompare(b.kind) || a.id.localeCompare(b.id));
 
-  const today = new Date().toISOString().slice(0, 10);
+  const vehicleLabel = (row: Booking) => (row.vehicleId ? vehicleById.get(row.vehicleId)?.plate : null) ?? row.externalPlate ?? row.externalVehicle ?? "Historical vehicle";
+  const agencyEntries: AgencyAccountEntry[] = [
+    ...completedBookings.map((row): AgencyAccountEntry => {
+      const base = { id: `AGY-${row.id}`, date: row.pickupAt.slice(0, 10), city: (row.vehicleId ? vehicleById.get(row.vehicleId)?.city : null) ?? row.city, vehicle: vehicleLabel(row), customer: row.customer, reference: row.id, gross: row.totalAmount };
+      if (row.fulfillmentType === "external") {
+        const payable = row.supplierPayable ?? 0;
+        return { ...base, source: "External car", amount: row.totalAmount - payable, description: `Commission on ${pkr(row.totalAmount)} · ${row.externalSupplierName ?? "supplier"} gets ${pkr(payable)}` };
+      }
+      if (row.ownerId) {
+        const share = ownerShares.get(row.id) ?? 0;
+        const owner = ownerById.get(row.ownerId)?.name ?? "owner";
+        const terms = row.shareBasis === "percentage" ? `Agency keeps ${formatPercent(100 - (row.ownerSharePercent ?? 0))}` : "Fixed monthly owner share";
+        return { ...base, source: "Managed car", amount: row.totalAmount - share, description: `${terms} of ${pkr(row.totalAmount)} · ${owner} gets ${pkr(share)}` };
+      }
+      return { ...base, source: "Own car", amount: row.totalAmount, description: `Full rental ${pkr(row.totalAmount)}` };
+    }),
+    ...correctedIncome(transactions).filter(({ transaction }) => !transaction.bookingId).map(({ transaction, amount }): AgencyAccountEntry => ({
+      id: `AGY-TXN-${transaction.id}`, date: transaction.date.slice(0, 10), source: "Other income", city: "All cities", vehicle: "Agency", customer: null,
+      reference: transaction.reference || transaction.id, description: `${transaction.kind.replaceAll("_", " ")} · ${transaction.method.replaceAll("_", " ")}`, gross: amount, amount,
+    })),
+    ...approvedCosts.flatMap((row): AgencyAccountEntry[] => {
+      const { amount: ownerAmount } = costOwnerPortion(row);
+      const agencyAmount = row.amount - ownerAmount;
+      if (!agencyAmount) return [];
+      const vehicle = row.vehicleId ? vehicleById.get(row.vehicleId) : undefined;
+      return [{ id: `AGY-COST-${row.id}`, date: row.date.slice(0, 10), source: "Agency expense", city: vehicle?.city ?? "All cities", vehicle: vehicle?.plate ?? (row.vehicleId ? "Historical vehicle" : "Agency-wide"), customer: row.customer, reference: row.id, gross: row.amount, amount: -agencyAmount, description: `${row.category} - ${row.description}${ownerAmount ? ` · owner pays ${pkr(ownerAmount)}` : ""}` }];
+    }),
+    ...recoveries.flatMap((row): AgencyAccountEntry[] => {
+      const cost = costById.get(row.expenseId);
+      if (!cost || cost.status !== "approved") return [];
+      const vehicle = cost.vehicleId ? vehicleById.get(cost.vehicleId) : undefined;
+      const ownerId = cost.ownerId ?? vehicle?.ownerId ?? null;
+      const agencyAmount = row.amount - (ownerId ? ownerExpenseAmount(row.amount, costOwnerPortion(cost).percent) : 0);
+      if (!agencyAmount) return [];
+      return [{ id: `AGY-RCV-${row.id}`, date: row.date.slice(0, 10), source: "Expense recovery", city: vehicle?.city ?? "All cities", vehicle: vehicle?.plate ?? (cost.vehicleId ? "Historical vehicle" : "Agency-wide"), customer: cost.customer, reference: row.reference || row.id, gross: row.amount, amount: agencyAmount, description: `Returned by ${row.source} against ${cost.id} - ${cost.description}` }];
+    }),
+  ].sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
+
+  const nowIso = new Date().toISOString();
+  const today = nowIso.slice(0, 10);
   const dates = ledgerEntries.map((row) => row.date);
   const latestDate = dates.at(-1);
   const dateBounds = { min: dates[0] ?? `${today.slice(0, 7)}-01`, max: latestDate && latestDate > today ? latestDate : today };
@@ -384,8 +442,9 @@ async function buildReports(context: RequestContext): Promise<ReportsData> {
     const rows = vehicles.map((vehicle) => {
       const rental = periodBookings.filter((row) => row.vehicleId === vehicle.id);
       const expense = periodCosts.filter((row) => row.vehicleId === vehicle.id);
+      // A checked-out rental occupies the car until it is checked in, even when overdue.
       const occupied = bookings.filter((row) => row.vehicleId === vehicle.id && ["confirmed", "checked_out", "completed"].includes(row.status))
-        .reduce((sum, row) => sum + overlapDays(row.pickupAt, row.returnAt, from, to), 0);
+        .reduce((sum, row) => sum + overlapDays(row.pickupAt, row.status === "checked_out" && row.returnAt < nowIso ? nowIso : row.returnAt, from, to), 0);
       const downtime = blocks.filter((row) => row.vehicleId === vehicle.id).reduce((sum, row) => sum + overlapDays(row.startAt, row.endAt, from, to), 0);
       const availableDays = Math.max(0, days - downtime);
       const revenue = rental.reduce((sum, row) => sum + row.totalAmount, 0);
@@ -416,6 +475,9 @@ async function buildReports(context: RequestContext): Promise<ReportsData> {
     })).sort((a, b) => b.collected - a.collected);
     const booked = bookedBookings.reduce((sum, row) => sum + row.totalAmount, 0);
     const collected = periodTransactions.reduce((sum, row) => sum + (["refund", "reversal"].includes(row.kind) ? -row.amount : row.amount), 0);
+    // Unpaid balance per booking across all posted transactions (not just this period).
+    const paidByBooking = new Map<string, number>();
+    for (const row of transactions) if (row.bookingId && row.status === "posted" && !row.kind.startsWith("deposit")) paidByBooking.set(row.bookingId, (paidByBooking.get(row.bookingId) ?? 0) + (["refund", "reversal"].includes(row.kind) ? -row.amount : row.amount));
     const categories = [...new Set(periodCosts.map((row) => row.category))].map((name) => ({
       name,
       amount: periodCosts.filter((row) => row.category === name).reduce((sum, row) => sum + row.amount, 0),
@@ -439,7 +501,7 @@ async function buildReports(context: RequestContext): Promise<ReportsData> {
       to,
       vehicles: rows,
       ledger: { entries: periodLedgerEntries, summary: summarizeLedger(periodLedgerEntries) },
-      collections: { booked, collected, outstanding: Math.max(0, booked - collected), overdue: bookedBookings.filter((row) => row.returnAt < new Date().toISOString()).reduce((sum, row) => sum + row.totalAmount, 0), channels },
+      collections: { booked, collected, outstanding: Math.max(0, booked - collected), overdue: bookedBookings.filter((row) => row.returnAt < nowIso).reduce((sum, row) => sum + Math.max(0, row.totalAmount - (paidByBooking.get(row.id) ?? 0)), 0), channels },
       expenses: { approved: periodCosts.reduce((sum, row) => sum + row.amount, 0), ownerResponsibility: periodCosts.reduce((sum, row) => sum + costOwnerPortion(row).amount, 0), receiptExceptions: periodCosts.filter((row) => !row.receipt).length, categories },
       owners: { managedRevenue: ownerRows.reduce((sum, row) => sum + row.revenue, 0), ownerShare: ownerRows.reduce((sum, row) => sum + row.share, 0), ownerExpenses: ownerRows.reduce((sum, row) => sum + row.expenses, 0), paid: ownerRows.reduce((sum, row) => sum + row.paid, 0), payable: ownerRows.reduce((sum, row) => sum + row.payable, 0), vehicleCount: vehicles.filter((row) => row.ownerId && !row.archivedAt).length, rows: ownerRows },
     } satisfies ReportPeriod;
@@ -451,6 +513,7 @@ async function buildReports(context: RequestContext): Promise<ReportsData> {
     periods,
     cities: [...new Set(vehicles.map((vehicle) => vehicle.city))].sort(),
     ledgerEntries,
+    agencyEntries,
     dateBounds,
     ledgerAccounts: {
       vehicles: vehicles.filter((vehicle) => vehicle.status !== "deleted").map((vehicle) => ({ id: vehicle.id, label: vehicle.plate, city: vehicle.city, ownership: vehicle.ownership === "managed" ? "Managed" : "Owned", ownerId: vehicle.ownerId, archived: Boolean(vehicle.archivedAt) })),
