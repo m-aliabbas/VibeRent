@@ -622,9 +622,9 @@ export async function editBookingAmounts(context: RequestContext, bookingId: str
     if (total === booking.total && paid === booking.paid) throw new DomainError("VALIDATION_FAILED", "Change Total or Paid before saving.", 400);
     const now = new Date().toISOString();
     const reason = input.reason!.trim();
-    const post = async (kind: string, amount: number, before: number, after: number) => {
+    const post = async (kind: string, amount: number, before: number, after: number, postedAt = now) => {
       await execute(`INSERT INTO financial_transactions (id,agency_id,booking_id,customer_id,kind,amount,method,reference,idempotency_key,status,actor_id,posted_at,created_at,updated_at)
-        VALUES (?,?,?,?,?,?,'manual_correction',?,?,'posted',?,?,?,?)`, [`TXN-${randomUUID().slice(0,8).toUpperCase()}`,context.agencyId,bookingId,booking.customerId,kind,amount,`${reason} · ${before} → ${after}`,`edit_${randomUUID()}`,context.userId,now,now,now]);
+        VALUES (?,?,?,?,?,?,'manual_correction',?,?,'posted',?,?,?,?)`, [`TXN-${randomUUID().slice(0,8).toUpperCase()}`,context.agencyId,bookingId,booking.customerId,kind,amount,`${reason} · ${before} → ${after}`,`edit_${randomUUID()}`,context.userId,postedAt,now,now]);
     };
     if (total !== booking.total) {
       const difference = total - booking.total;
@@ -633,7 +633,11 @@ export async function editBookingAmounts(context: RequestContext, bookingId: str
     }
     if (paid !== booking.paid) {
       const difference = paid - booking.paid;
-      await post(difference > 0 ? "payment_adjustment_increase" : "payment_adjustment_decrease",Math.abs(difference),booking.paid,paid);
+      // Lowering "paid" fixes money that was entered wrongly, so it belongs to the day of the payment it
+      // corrects (the latest money-in entry on this booking), not to today's income. created_at keeps the real time.
+      const corrected = difference < 0 ? await queryOne<{postedAt:string}>(`SELECT posted_at AS postedAt FROM financial_transactions WHERE agency_id=? AND booking_id=? AND status='posted'
+        AND lower(kind) IN ('payment','payment_adjustment_increase','late_return_charge','deposit_applied') AND posted_at<=? ORDER BY posted_at DESC LIMIT 1`,[context.agencyId,bookingId,now]) : undefined;
+      await post(difference > 0 ? "payment_adjustment_increase" : "payment_adjustment_decrease",Math.abs(difference),booking.paid,paid,corrected?.postedAt ?? now);
     }
     await execute(`UPDATE bookings SET version=version+1,updated_at=? WHERE agency_id=? AND id=?`, [now,context.agencyId,bookingId]);
     await execute(`INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)`, [randomUUID(),context.agencyId,context.userId,"booking.amounts_edited","booking",bookingId,JSON.stringify({previousTotal:booking.total,total,previousPaid:booking.paid,paid,previousOutstanding:booking.total-booking.paid,outstanding:total-paid,reason}),now]);
