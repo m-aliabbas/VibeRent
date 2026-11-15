@@ -9,6 +9,9 @@ import { GuarantorsWorkspace } from "@/components/guarantors/guarantors-workspac
 import { ArchiveWorkspace } from "@/components/archive/archive-workspace";
 import { SettingsWorkspace } from "@/components/settings/settings-workspace";
 import { getWebRequestContext } from "@/server/auth/session";
+import { listAvailabilityBlocks, listBookings } from "@/server/services/booking-service";
+import { listVehicles } from "@/server/services/vehicle-service";
+import { listCustomers } from "@/server/services/customer-service";
 import { getExpenseWorkspace } from "@/server/services/expense-service";
 import { listOwners } from "@/server/services/owner-service";
 import { getReports } from "@/server/services/report-service";
@@ -66,8 +69,12 @@ export default async function SectionPage({
   const query = await searchParams;
   const data = sections[section];
   if (!data) notFound();
-  if (section === "customers") return <CustomersModule />;
-  if (section === "bookings") return <BookingsWorkspace />;
+  if (section === "customers") return <CustomersModule initial={await listCustomers(await getWebRequestContext())} />;
+  if (section === "bookings") {
+    const context = await getWebRequestContext();
+    const [bookings, vehicles, blocks] = await Promise.all([listBookings(context), listVehicles(context), listAvailabilityBlocks(context)]);
+    return <BookingsWorkspace initial={{ bookings, vehicles, blocks }} />;
+  }
   if (section === "owners") { const context = await getWebRequestContext(); return <OwnersWorkspace data={await listOwners(context)} canEditFixedCharge={context.roles.some(role=>["agency_owner","accountant"].includes(role))} />; }
   if (section === "expenses") return <ExpensesWorkspace data={await getExpenseWorkspace(await getWebRequestContext())} />;
   if (section === "reports") return <ReportsWorkspace data={await getReports(await getWebRequestContext())} />;

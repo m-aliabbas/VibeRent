@@ -118,7 +118,11 @@ function listRateRules(agencyId: string, vehicleId: string): Promise<VehicleRate
 export class DatabaseVehicleRepository implements VehicleRepository {
   async list(agencyId: string) {
     const rows=await queryAll<VehicleRow>(`${selectSql} WHERE v.agency_id = ? AND v.status <> 'deleted' ORDER BY v.created_at DESC`,[agencyId]);
-    return Promise.all(rows.map(async row => ({ ...mapVehicle(row), rateRules: await listRateRules(agencyId, row.id) })));
+    // One query for every vehicle's rate rules instead of one per vehicle.
+    const rules = await queryAll<VehicleRateRule & { vehicleId: string }>(`SELECT vehicle_id AS vehicleId, destination_city AS destinationCity, daily_rate AS dailyRate, per_km_rate AS perKmRate, minimum_days AS minimumDays FROM vehicle_rate_rules WHERE agency_id = ? AND active=1 ORDER BY destination_city`,[agencyId]);
+    const byVehicle = new Map<string, VehicleRateRule[]>();
+    for (const { vehicleId, ...rule } of rules) byVehicle.set(vehicleId, [...(byVehicle.get(vehicleId) ?? []), rule]);
+    return rows.map(row => ({ ...mapVehicle(row), rateRules: byVehicle.get(row.id) ?? [] }));
   }
 
   async getById(agencyId: string, id: string) {

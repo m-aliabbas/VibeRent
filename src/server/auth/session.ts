@@ -1,6 +1,7 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { headers } from "next/headers";
+import { cache } from "react";
 import type { RequestContext, StaffRole } from "@/server/context/request-context";
 import { staffRoles } from "@/server/context/request-context";
 import { DomainError } from "@/server/domain/errors";
@@ -34,10 +35,18 @@ export async function getOptionalWebSession() {
 }
 
 export async function getSessionViewer(requestHeaders?: Headers): Promise<SessionViewer | null> {
-  const session = await auth.api.getSession({ headers: requestHeaders ?? await headers() });
+  if (!requestHeaders) return currentRequestViewer();
+  const session = await auth.api.getSession({ headers: requestHeaders });
   if (!session) return null;
   return resolveViewer(session);
 }
+
+/** The layout, the page and its data calls all need the viewer; resolve it once per request. */
+const currentRequestViewer = cache(async (): Promise<SessionViewer | null> => {
+  const session = await auth.api.getSession({ headers: await headers() });
+  if (!session) return null;
+  return resolveViewer(session);
+});
 
 export async function getWebRequestContext(): Promise<RequestContext> {
   assertDesktopLicense();
@@ -132,11 +141,16 @@ async function resolveViewer(session: BetterSession): Promise<SessionViewer> {
 }
 
 async function syncStaffProfile(input: { authUserId: string; membershipId: string; agencyId: string; email: string; name: string; role: StaffRole }) {
-  const existing = await queryOne<{ id: string; active: number; role: string }>(
-    "SELECT id, active, role FROM users WHERE agency_id=? AND (auth_user_id=? OR lower(email)=lower(?)) LIMIT 1",
+  const existing = await queryOne<{ id: string; active: number; role: string; authUserId: string | null; membershipId: string | null; email: string; name: string }>(
+    "SELECT id, active, role, auth_user_id AS authUserId, membership_id AS membershipId, email, name FROM users WHERE agency_id=? AND (auth_user_id=? OR lower(email)=lower(?)) LIMIT 1",
     [input.agencyId, input.authUserId, input.email],
   );
   const now = new Date().toISOString();
+
+  // Nothing changed: skip the write that used to run on every request.
+  if (existing && existing.authUserId === input.authUserId && existing.membershipId === input.membershipId && existing.email === input.email.toLowerCase() && existing.name === input.name && existing.role === input.role) {
+    return { id: existing.id, active: existing.active };
+  }
 
   if (existing) {
     await execute(

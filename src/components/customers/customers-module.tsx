@@ -32,9 +32,10 @@ type CustomerRecord = {
 
 const displayStatus = (value: string) => value.replaceAll("_", " ").replace(/\b\w/g, letter => letter.toUpperCase());
 
-export function CustomersModule() {
-  const [items, setItems] = useState<CustomerRecord[]>([]);
-  const [loading, setLoading] = useState(true);
+/** `initial` is loaded on the server with the page, so the list shows without an extra round trip. */
+export function CustomersModule({ initial }: { initial?: CustomerRecord[] } = {}) {
+  const [items, setItems] = useState<CustomerRecord[]>(initial ?? []);
+  const [loading, setLoading] = useState(!initial);
   const [loadError, setLoadError] = useState("");
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("All");
@@ -55,6 +56,7 @@ export function CustomersModule() {
     setLoading(false);
   }
   useEffect(() => {
+    if (initial) return;
     let active = true;
     void listCustomersAction().then(result => {
       if (!active) return;
@@ -63,6 +65,8 @@ export function CustomersModule() {
       setLoading(false);
     });
     return () => { active = false; };
+    // Server-loaded data is read once on mount; later changes are applied locally.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const rows = useMemo(() => items.filter(item => {
