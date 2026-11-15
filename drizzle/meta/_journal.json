@@ -1,0 +1,202 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1790446229197,
+      "tag": "0000_shiny_harry_osborn",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1790471391186,
+      "tag": "0001_glossy_gideon",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1790472504560,
+      "tag": "0002_flawless_tyrannus",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1790473241639,
+      "tag": "0003_motionless_pepper_potts",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1790473809737,
+      "tag": "0004_spicy_mongoose",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1790493641213,
+      "tag": "0005_low_eddie_brock",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1790965496617,
+      "tag": "0006_known_gravity",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1791163585374,
+      "tag": "0007_sour_sway",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1791163709813,
+      "tag": "0008_wonderful_thunderbolt_ross",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1791174951514,
+      "tag": "0009_chemical_starfox",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1791197041789,
+      "tag": "0010_even_madrox",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1791197522696,
+      "tag": "0011_melodic_odin",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1791200219604,
+      "tag": "0012_sleepy_golden_guardian",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1791272052689,
+      "tag": "0013_jittery_pyro",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1791274790608,
+      "tag": "0014_busy_falcon",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "6",
+      "when": 1791306823725,
+      "tag": "0015_real_roland_deschain",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1791361433880,
+      "tag": "0016_nosy_skrulls",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1791715853529,
+      "tag": "0017_yummy_northstar",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1791901971642,
+      "tag": "0018_parched_sersi",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1792076279209,
+      "tag": "0019_exotic_omega_red",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1792292434146,
+      "tag": "0020_absurd_leper_queen",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1792293961511,
+      "tag": "0021_bright_madame_masque",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "6",
+      "when": 1792294814666,
+      "tag": "0022_salty_wallflower",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1792819074920,
+      "tag": "0023_early_rhodey",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1792999394251,
+      "tag": "0024_background_jobs_and_notifications",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1794208716220,
+      "tag": "0025_owner_fixed_charges",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1794210321099,
+      "tag": "0026_expense_recoveries",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "6",
+      "when": 1794752024414,
+      "tag": "0027_month_end_statements",
+      "breakpoints": true
+    }
+  ]
+}

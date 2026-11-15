@@ -1,0 +1,1 @@
+ALTER TABLE "whatsapp_settings" ADD COLUMN "month_end_statements" integer DEFAULT 0 NOT NULL;
