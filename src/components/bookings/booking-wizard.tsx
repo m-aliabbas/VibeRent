@@ -12,7 +12,8 @@ import { listBookingsAction } from "@/app/actions/bookings";
 import { createAgencyCityAction, listAgencyCitiesAction } from "@/app/actions/catalogs";
 import { getBookingCnicAction, getGuarantorCnicAction, uploadBookingCnicAction, uploadGuarantorCnicAction } from "@/app/actions/booking-cnic";
 import { listDriversAction } from "@/app/actions/drivers";
-import { listGuarantorsAction, saveGuarantorAction } from "@/app/actions/guarantors";
+import { guarantorFromCustomerAction, listGuarantorsAction, saveGuarantorAction } from "@/app/actions/guarantors";
+import { PersonDocuments } from "@/components/shared/person-documents";
 import type { GuarantorDto } from "@/server/services/guarantor-service";
 import { ExternalVehiclePicker } from "@/components/bookings/external-vehicle-picker";
 import { CnicDocumentDrawer } from "@/components/customers/cnic-document-drawer";
@@ -93,6 +94,8 @@ type Draft = {
   notes: string;
   estimatedKm: number;
   overrideReason: string;
+  /** Set when the booking starts from a quotation; the quotation is linked on confirm. */
+  quotationId?: string;
 };
 
 function defaultDraft(): Draft {
@@ -172,8 +175,12 @@ export function BookingWizard() {
   const [dataLoading, setDataLoading] = useState(true);
   const [dataError, setDataError] = useState("");
 
-  // Draft persistence
+  // Draft persistence. The restore runs once: in development React runs effects twice, and by the
+  // second run the save effect below has already replaced the stored draft with the blank one.
+  const draftRestored = useRef(false);
   useEffect(() => {
+    if (draftRestored.current) return;
+    draftRestored.current = true;
     const saved = sessionStorage.getItem("viberent-booking-draft");
     if (!saved) return;
     try {
@@ -276,6 +283,7 @@ export function BookingWizard() {
     setSubmitError("");
     const result = await confirmBookingAction({
       bookingDraftId: bookingReference.id,
+      quotationId: draft.quotationId,
       vehicleId: vehicle?.id,
       fulfillmentType:draft.fulfillmentType,
       external:draft.fulfillmentType==="external"?draft.external:undefined,
@@ -659,6 +667,10 @@ function CustomerStep({ draft, setDraft, customers, bookingReference, onCustomer
 
       <div className="space-y-3">
         {selected && <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#B2DDFF] bg-[#EFF8FF] px-3 py-2 text-sm"><div><p className="font-bold text-[#1D2939]"><Check size={14} className="mr-1 inline text-[#067647]"/>{selected.name}</p><p className="text-xs text-[#667085]">{selected.phone || "No phone"} · {selected.cnic || "No CNIC"} · {selected.status}{selected.status==="review"&&" · Manager review required"}</p></div><div className="flex flex-wrap gap-2"><Button type="button" size="sm" variant="secondary" onClick={()=>editExisting(selected)}>Update details</Button><Button type="button" size="sm" variant="secondary" onClick={()=>{setDraft(current=>({...current,customerId:""}));setCustomerSearch("")}}>Change</Button></div></div>}
+        {selected&&!showNewForm&&<details className="rounded-lg border border-[#E4E7EC] bg-white p-3" open>
+          <summary className="cursor-pointer text-sm font-semibold text-[#344054]">CNIC &amp; driving license images <span className="font-normal text-[#667085]">(optional, saved on the customer)</span></summary>
+          <div className="mt-3"><PersonDocuments key={selected.id} owner="customer" ownerId={selected.id} compact/></div>
+        </details>}
         {!selected&&<FormInput
           label="Find customer"
           placeholder="Name, phone or CNIC (35202-1234567-1)"
@@ -737,9 +749,12 @@ function GuarantorSection({draft,setDraft,bookingReference}:{draft:Draft;setDraf
   const [error,setError]=useState("");
   const lastExtraction=useRef<CnicExtractedValues|undefined>(undefined);
   const lastExtractionKey=useRef("");
-  useEffect(()=>{let active=true;void listGuarantorsAction().then(result=>{if(active&&result.ok)setSavedGuarantors(result.data)});return()=>{active=false}},[]);
+  const [customerCandidates,setCustomerCandidates]=useState<Array<{id:string;name:string;phone:string;cnic:string}>>([]);
+  useEffect(()=>{let active=true;void listGuarantorsAction().then(result=>{if(active&&result.ok)setSavedGuarantors(result.data)});void listCustomersAction().then(result=>{if(active&&result.ok)setCustomerCandidates(result.data.map(item=>({id:item.id,name:item.name,phone:item.phone,cnic:item.cnic})))});return()=>{active=false}},[]);
+  // A customer can stand guarantee for someone else: reuse their saved guarantor record, or create one from their details.
+  async function pickCustomer(customerId:string){setSavingGuarantor(true);setGuarantorNotice("");const result=await guarantorFromCustomerAction(customerId);setSavingGuarantor(false);if(!result.ok){setGuarantorNotice(result.error.message);return}setSavedGuarantors(current=>[result.data,...current.filter(item=>item.id!==result.data.id)]);pickSaved(result.data)}
 
-  async function saveToDirectory(){if(!guarantor||!isGuarantorComplete(guarantor))return;setSavingGuarantor(true);const cnic=guarantor.cnic.replace(/\D/g,"");const existing=cnic?savedGuarantors.find(item=>item.cnic.replace(/\D/g,"")===cnic):undefined;const result=await saveGuarantorAction({...guarantor,id:savedGuarantorId??existing?.id??""});setSavingGuarantor(false);if(result.ok){setSavedGuarantors(current=>[result.data,...current.filter(item=>item.id!==result.data.id)]);setSavedGuarantorId(result.data.id);setEditingSaved(false);setGuarantorNotice("Guarantor saved for future bookings.")}else setGuarantorNotice(result.error.message)}
+  async function saveToDirectory(){if(!guarantor||!isGuarantorComplete(guarantor))return;setSavingGuarantor(true);const cnic=guarantor.cnic.replace(/\D/g,"");const existing=cnic?savedGuarantors.find(item=>item.cnic.replace(/\D/g,"")===cnic):undefined;const result=await saveGuarantorAction({...guarantor,id:savedGuarantorId??existing?.id??""});setSavingGuarantor(false);if(result.ok){setSavedGuarantors(current=>[result.data,...current.filter(item=>item.id!==result.data.id)]);setSavedGuarantorId(result.data.id);update({id:result.data.id});setEditingSaved(false);setGuarantorNotice("Guarantor saved for future bookings. Add their CNIC and license images below.")}else setGuarantorNotice(result.error.message)}
 
   function update(values:Partial<GuarantorDraft>){
     setDraft(current=>current.guarantor?{...current,guarantor:{...current.guarantor,...values}}:current);
@@ -790,7 +805,7 @@ function GuarantorSection({draft,setDraft,bookingReference}:{draft:Draft;setDraf
     const next=result.data as CnicIntake;setIntake(next);applyExtracted(next);
   }
 
-  function pickSaved(selected:GuarantorDto){setSavedGuarantorId(selected.id);setEditingSaved(false);setGuarantorNotice("");setDraft(current=>({...current,guarantor:{name:selected.name,parentage:selected.parentage,cnic:selected.cnic,phone:selected.phone,address:selected.address,carAmount:selected.carAmount}}))}
+  function pickSaved(selected:GuarantorDto){setSavedGuarantorId(selected.id);setEditingSaved(false);setGuarantorNotice("");setDraft(current=>({...current,guarantor:{id:selected.id,name:selected.name,parentage:selected.parentage,cnic:selected.cnic,phone:selected.phone,address:selected.address,carAmount:selected.carAmount}}))}
   function startNew(name=""){setSavedGuarantorId(undefined);setEditingSaved(false);setGuarantorNotice("");setDraft(current=>({...current,guarantor:{name,parentage:"",cnic:"",phone:"",address:"",carAmount:0}}))}
   function clearGuarantor(){setSavedGuarantorId(undefined);setEditingSaved(false);setGuarantorQuery("");setDraft(current=>({...current,guarantor:null}))}
 
@@ -799,6 +814,8 @@ function GuarantorSection({draft,setDraft,bookingReference}:{draft:Draft;setDraf
     const digits=query.replace(/\D/g,"");
     const matches=savedGuarantors.filter(item=>!query||`${item.name} ${item.parentage} ${item.phone} ${item.address}`.toLowerCase().includes(query)||(digits.length>2&&`${item.cnic}${item.phone}`.replace(/\D/g,"").includes(digits)));
     const visible=matches.slice(0,query?8:4);
+    const savedCnics=new Set(savedGuarantors.map(item=>item.cnic.replace(/\D/g,"")).filter(Boolean));
+    const customerMatches=query?customerCandidates.filter(item=>item.id!==draft.customerId&&!savedCnics.has(item.cnic.replace(/\D/g,""))&&(item.name.toLowerCase().includes(query)||(digits.length>2&&`${item.cnic}${item.phone}`.replace(/\D/g,"").includes(digits)))).slice(0,5):[];
     return <section className="rounded-xl border border-[#E4E7EC] bg-white p-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div className="flex gap-3"><span className="grid size-10 shrink-0 place-items-center rounded-lg bg-[#EFF8FF] text-[#006FE6]"><ShieldCheck size={19}/></span><div><h3 className="text-sm font-bold text-[#1D2939]">Guarantor <span className="font-normal text-[#667085]">(optional)</span></h3><p className="mt-1 text-xs text-[#667085]">Pick someone who stood guarantee before, or add a new guarantor.</p></div></div><Button type="button" size="sm" variant="secondary" className="shrink-0" onClick={()=>startNew()}><Plus size={15}/>New guarantor</Button></div>
       {savedGuarantors.length>0&&<div className="mt-4">
@@ -811,12 +828,19 @@ function GuarantorSection({draft,setDraft,bookingReference}:{draft:Draft;setDraf
         :<div className="mt-2 rounded-xl border border-dashed border-[#D0D5DD] p-4 text-center text-sm text-[#667085]">No saved guarantor matches “{guarantorQuery}”.<div className="mt-2"><Button type="button" size="sm" variant="secondary" onClick={()=>startNew(/\d/.test(guarantorQuery)?"":guarantorQuery.trim())}><Plus size={15}/>Add as new guarantor</Button></div></div>}
         {matches.length>visible.length&&<p className="mt-2 text-xs text-[#667085]">Showing {visible.length} of {matches.length}. Search to narrow the list.</p>}
       </div>}
+      {customerMatches.length>0&&<div className="mt-3"><p className="text-xs font-semibold text-[#475467]">Customers — use as guarantor</p><ul className="mt-1.5 divide-y divide-[#EAECF0] overflow-hidden rounded-xl border border-[#E4E7EC]" aria-label="Customers who can be guarantors">{customerMatches.map(item=><li key={item.id}><button type="button" disabled={savingGuarantor} onClick={()=>void pickCustomer(item.id)} className="flex min-h-14 w-full items-center gap-3 px-3 py-2.5 text-left hover:bg-[#F5FAFF] disabled:opacity-60">
+        <span className="grid size-9 shrink-0 place-items-center rounded-full bg-[#F4F3FF] text-xs font-bold text-[#5925DC]">{initials(item.name)}</span>
+        <span className="min-w-0 flex-1"><strong className="block truncate text-sm text-[#19191F]">{item.name}</strong><span className="mt-0.5 block truncate text-xs text-[#667085]">Customer · {[item.cnic,item.phone].filter(Boolean).join(" · ")}</span></span>
+        <span className="shrink-0 text-xs font-semibold text-[#006FE6]">Use</span>
+      </button></li>)}</ul></div>}
+      {guarantorNotice&&<p role="status" className="mt-2 text-xs text-[#B42318]">{guarantorNotice}</p>}
     </section>;
   }
 
   if(savedGuarantorId&&!editingSaved)return <section className="rounded-xl border border-[#B2DDFF] bg-[#F5FAFF] p-4">
     <div className="flex items-start gap-3"><span className="grid size-10 shrink-0 place-items-center rounded-full bg-white text-sm font-bold text-[#006FE6] ring-1 ring-[#B2DDFF]">{initials(guarantor.name)}</span><div className="min-w-0 flex-1"><p className="text-xs font-semibold text-[#175CD3]">Guarantor · saved record</p><h3 className="truncate text-base font-bold text-[#19191F]">{guarantor.name}</h3>{guarantor.parentage&&<p className="text-xs text-[#667085]">s/o {guarantor.parentage}</p>}</div><button type="button" onClick={clearGuarantor} className="grid size-9 shrink-0 place-items-center rounded-lg text-[#667085] hover:bg-white" aria-label="Remove guarantor"><X size={16}/></button></div>
     <dl className="mt-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">{[["CNIC",guarantor.cnic||"Not provided"],["Phone",guarantor.phone||"Not provided"],["Car amount",guarantor.carAmount?formatPkr(guarantor.carAmount):"Not set"],["Address",guarantor.address||"Not provided"]].map(([label,value])=><div key={label} className="min-w-0 rounded-lg bg-white p-2.5 ring-1 ring-[#E4E7EC]"><dt className="text-[#667085]">{label}</dt><dd className="mt-0.5 truncate font-semibold text-[#344054]" title={value}>{value}</dd></div>)}</dl>
+    <div className="mt-3 rounded-lg bg-white p-3 ring-1 ring-[#E4E7EC]"><p className="mb-2 text-xs font-semibold text-[#344054]">CNIC &amp; driving license images</p><PersonDocuments key={savedGuarantorId} owner="guarantor" ownerId={savedGuarantorId} compact/></div>
     <div className="mt-3 flex flex-wrap gap-2"><Button type="button" size="sm" variant="secondary" onClick={()=>setEditingSaved(true)}><Pencil size={15}/>Edit for this booking</Button><Button type="button" size="sm" variant="ghost" onClick={clearGuarantor}>Choose a different guarantor</Button></div>
     {guarantorNotice&&<p role="status" className="mt-2 text-xs text-[#475467]">{guarantorNotice}</p>}
   </section>;

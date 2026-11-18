@@ -2,6 +2,8 @@ import { DomainError } from "@/server/domain/errors";
 
 export type ConfirmBookingInput = {
   bookingDraftId?: string;
+  /** Quotation this booking was created from; it is marked accepted and linked. */
+  quotationId?: string;
   vehicleId?: string;
   fulfillmentType: "fleet" | "external";
   external?: {
@@ -41,6 +43,8 @@ export type ConfirmBookingInput = {
 };
 
 export type GuarantorInput = {
+  /** Saved guarantor to link; the server verifies it belongs to the agency. */
+  id?: string;
   name: string;
   parentage: string;
   cnic: string;
@@ -67,7 +71,8 @@ function parseGuarantor(value: unknown, errors: Record<string, string>): Guarant
   if (phone && !/^(?:92|0)?3\d{9}$/.test(phone)) errors["guarantor.phone"] = "Enter a valid Pakistani mobile number.";
   if (address && address.length < 5) errors["guarantor.address"] = "Enter at least 5 address characters.";
   if (input.carAmount !== undefined && (!Number.isInteger(input.carAmount) || input.carAmount < 0)) errors["guarantor.carAmount"] = "Enter a non-negative whole PKR amount.";
-  return { name, parentage, cnic, phone, address, carAmount: input.carAmount ?? 0 };
+  const id = typeof input.id === "string" && input.id.trim() && input.id.trim().length <= 80 ? input.id.trim() : undefined;
+  return { ...(id ? { id } : {}), name, parentage, cnic, phone, address, carAmount: input.carAmount ?? 0 };
 }
 
 /** Stored when the agent skips the optional fuel reading (the column is NOT NULL). */
@@ -116,7 +121,7 @@ export function parseConfirmBookingInput(value: unknown): ConfirmBookingInput {
   }
   if (Object.keys(errors).length) throw new DomainError("VALIDATION_FAILED", "Review the booking details.", 400, errors);
   return {
-    bookingDraftId: input.bookingDraftId?.trim() || undefined, vehicleId: input.vehicleId?.trim() || undefined, fulfillmentType, external:fulfillmentType==="external"&&external?{supplierName:external.supplierName.trim(),supplierPhone:external.supplierPhone.trim(),vehicleMake:external.vehicleMake.trim(),vehicleModel:external.vehicleModel.trim(),vehicleYear:external.vehicleYear,vehiclePlate:external.vehiclePlate.trim().toUpperCase(),vehicleColor:external.vehicleColor?.trim()||undefined,pricingMode:external.pricingMode,supplierSharePercent:external.supplierSharePercent,supplierFixedCost:external.supplierFixedCost}:undefined, customerId: input.customerId?.trim() || "", rentalMode, driverId:input.driverId?.trim()||undefined, renterSkipped:Boolean(input.renterSkipped), guarantor, destinationCity: input.destinationCity?.trim() || "Local", pickupAt: new Date(pickup).toISOString(), returnAt: new Date(returned).toISOString(),
+    bookingDraftId: input.bookingDraftId?.trim() || undefined, quotationId: typeof input.quotationId === "string" && input.quotationId.trim() ? input.quotationId.trim() : undefined, vehicleId: input.vehicleId?.trim() || undefined, fulfillmentType, external:fulfillmentType==="external"&&external?{supplierName:external.supplierName.trim(),supplierPhone:external.supplierPhone.trim(),vehicleMake:external.vehicleMake.trim(),vehicleModel:external.vehicleModel.trim(),vehicleYear:external.vehicleYear,vehiclePlate:external.vehiclePlate.trim().toUpperCase(),vehicleColor:external.vehicleColor?.trim()||undefined,pricingMode:external.pricingMode,supplierSharePercent:external.supplierSharePercent,supplierFixedCost:external.supplierFixedCost}:undefined, customerId: input.customerId?.trim() || "", rentalMode, driverId:input.driverId?.trim()||undefined, renterSkipped:Boolean(input.renterSkipped), guarantor, destinationCity: input.destinationCity?.trim() || "Local", pickupAt: new Date(pickup).toISOString(), returnAt: new Date(returned).toISOString(),
     extras: input.extras ?? 0, discount: input.discount ?? 0, depositRequired: input.depositRequired ?? 0, source: input.source?.trim() || "counter", notes: input.notes?.trim() || undefined, estimatedKm: input.estimatedKm ?? 0, dailyRateOverride: input.dailyRateOverride, overrideReason: input.overrideReason?.trim() || undefined,
     startImmediately,
     checkoutInspection:startImmediately&&checkoutInspection?{odometer:checkoutInspection.odometer,fuelLevel:checkoutInspection.fuelLevel?.trim()||NOT_RECORDED_FUEL,conditionNotes:checkoutInspection.conditionNotes?.trim()??""}:undefined,
@@ -135,7 +140,16 @@ export type RecordPaymentInput = {
   idempotencyKey?: string;
   /** Discount given while settling; reduces the booking total instead of being collected. */
   discount?: number;
+  /** Day the money was received (YYYY-MM-DD, agency time). Defaults to now; dates the ledger entries. */
+  paidOn?: string;
 };
+
+/** A YYYY-MM-DD calendar date that exists (rejects 2026-02-31). */
+export function isCalendarDate(value: unknown): value is string {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00Z`);
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value && value >= "2000-01-01";
+}
 
 export function parseRecordPaymentInput(value: unknown): RecordPaymentInput {
   const input = value as Partial<RecordPaymentInput> | null;
@@ -150,6 +164,7 @@ export function parseRecordPaymentInput(value: unknown): RecordPaymentInput {
   if (!input.method?.trim() || !paymentMethods.includes(input.method as PaymentMethod)) {
     errors.method = "Select a valid payment method.";
   }
+  if (input.paidOn !== undefined && input.paidOn !== "" && !isCalendarDate(input.paidOn)) errors.paidOn = "Enter a valid payment date.";
   if (Object.keys(errors).length) throw new DomainError("VALIDATION_FAILED", "Review the payment details.", 400, errors);
   return {
     discount: Number.isInteger(discount) && discount > 0 ? discount : 0,
@@ -159,6 +174,7 @@ export function parseRecordPaymentInput(value: unknown): RecordPaymentInput {
     account: input.account?.trim() || undefined,
     note: input.note?.trim() || undefined,
     idempotencyKey: input.idempotencyKey?.trim() || undefined,
+    paidOn: input.paidOn || undefined,
   };
 }
 

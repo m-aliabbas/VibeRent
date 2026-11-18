@@ -9,6 +9,7 @@ export type NotificationKind =
   | "owner.payout_receipt"
   | "owner.expense_notice"
   | "owner.command_reply"
+  | "quotation.document"
   | "report.daily";
 
 export type NotificationStatus = "queued" | "rendering" | "ready" | "sending" | "sent" | "failed" | "skipped" | "cancelled";
@@ -32,6 +33,7 @@ export const notificationKinds: Record<NotificationKind, KindDefinition> = {
   "owner.payout_receipt": { label: "Owner payout receipt", entityType: "owner", sentAction: "owner_payout_sent", failedAction: "owner_payout_failed" },
   "owner.expense_notice": { label: "Owner expense notice", entityType: "expense", sentAction: "expense.owner_notice_sent", failedAction: "expense.owner_notice_failed" },
   "owner.command_reply": { label: "Command reply", entityType: "whatsapp_message" },
+  "quotation.document": { label: "Quotation", entityType: "quotation", sentAction: "quotation.sent_whatsapp", failedAction: "quotation.whatsapp_failed" },
   "report.daily": { label: "Daily report", entityType: "report", sentAction: "daily_report.sent", failedAction: "daily_report.failed" },
 };
 

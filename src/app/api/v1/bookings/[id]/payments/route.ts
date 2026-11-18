@@ -11,6 +11,6 @@ export const POST = apiHandler<{ id: string }>(async ({ request, context, params
   const mode = requestedDeliveryMode(request);
   const input = parseRecordPaymentInput(await parseJsonRequest(request));
   return withNotices(() => recordBookingPayment(context, params.id, input), async data => ({
-    notificationDelivery: await notices.payment(context, mode, params.id, { amount: input.amount, method: input.method, reference: input.reference, receiptNumber: data.paymentReceiptNumber }),
+    notificationDelivery: await notices.payment(context, mode, params.id, { amount: input.amount, method: input.method, reference: input.reference, paidOn: input.paidOn, receiptNumber: data.paymentReceiptNumber }),
   }));
 }, { revalidate: true });

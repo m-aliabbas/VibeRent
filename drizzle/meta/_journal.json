@@ -197,6 +197,13 @@
       "when": 1794752024414,
       "tag": "0027_month_end_statements",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "6",
+      "when": 1794973733930,
+      "tag": "0028_quotations_guarantor_links",
+      "breakpoints": true
     }
   ]
 }

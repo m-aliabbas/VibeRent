@@ -256,6 +256,8 @@ export async function deleteVehicle(context:RequestContext,id:string,input:{dele
     await execute(`DELETE FROM rental_inspections WHERE agency_id=? AND booking_id IN (${bookingIds})`,[agency,agency,id]);
     await execute(`UPDATE financial_transactions SET linked_transaction_id=NULL WHERE agency_id=? AND booking_id IN (${bookingIds})`,[agency,agency,id]);
     await execute(`DELETE FROM financial_transactions WHERE agency_id=? AND booking_id IN (${bookingIds})`,[agency,agency,id]);
+    await execute(`UPDATE quotations SET booking_id=NULL WHERE agency_id=? AND booking_id IN (${bookingIds})`,[agency,agency,id]);
+    await execute("UPDATE quotations SET vehicle_id=NULL WHERE agency_id=? AND vehicle_id=?",[agency,id]);
     await execute("DELETE FROM bookings WHERE agency_id=? AND vehicle_id=?",[agency,id]);
     await execute("DELETE FROM availability_blocks WHERE agency_id=? AND vehicle_id=?",[agency,id]);
     await execute("DELETE FROM vehicle_rate_rules WHERE agency_id=? AND vehicle_id=?",[agency,id]);

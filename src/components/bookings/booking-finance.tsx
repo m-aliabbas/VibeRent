@@ -1,6 +1,6 @@
 "use client";
 
-import { formatInZone } from "@/lib/timezone";
+import { formatInZone, zonedDayKey } from "@/lib/timezone";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useEffect, useState } from "react";
 import { CreditCard, FileText, RotateCcw, X } from "lucide-react";
@@ -159,11 +159,13 @@ function PaymentDialog({
   const [method, setMethod] = useState<PaymentMethod>("Cash");
   const [reference, setReference] = useState("");
   const [account, setAccount] = useState("Lahore cash drawer");
+  const [today] = useState(() => zonedDayKey());
+  const [paidOn, setPaidOn] = useState(today);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
 
   const discountValid = Number.isInteger(discount) && discount >= 0 && discount <= Math.max(0, balance);
-  const valid = Number.isInteger(amount) && amount >= 0 && discountValid && amount + discount > 0;
+  const valid = Number.isInteger(amount) && amount >= 0 && discountValid && amount + discount > 0 && Boolean(paidOn) && paidOn <= today;
   const creditAmount = valid ? amount + discount - Math.max(balance, 0) : 0;
   const remainingAfter = Math.max(0, balance - amount - discount);
 
@@ -177,6 +179,7 @@ function PaymentDialog({
       method,
       reference: reference.trim(),
       account,
+      paidOn,
     });
     setPending(false);
     if (result.ok) {
@@ -230,6 +233,15 @@ function PaymentDialog({
           value={reference}
           onChange={(e) => setReference(e.target.value)}
           placeholder="e.g. IBFT-90418"
+        />
+        <FormInput
+          label="Paid on"
+          type="date"
+          max={today}
+          value={paidOn}
+          hint="Used on the receipt and in the customer and system ledgers."
+          error={paidOn && paidOn > today ? "The payment date cannot be in the future." : undefined}
+          onChange={(e) => setPaidOn(e.target.value)}
         />
         <FormSelect
           label="Receiving account"

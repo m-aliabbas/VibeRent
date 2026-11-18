@@ -17,7 +17,7 @@ export type PrivateFileDto = {
   originalName: string;
   mimeType: string;
   size: number;
-  classification: "vehicle_photo" | "vehicle_document" | "customer_cnic_front" | "customer_cnic_back" | "guarantor_cnic_front" | "guarantor_cnic_back" | "agreement_terms_image" | "notification_document";
+  classification: "vehicle_photo" | "vehicle_document" | "customer_cnic_front" | "customer_cnic_back" | "customer_license_front" | "customer_license_back" | "guarantor_cnic_front" | "guarantor_cnic_back" | "guarantor_license_front" | "guarantor_license_back" | "agreement_terms_image" | "notification_document";
   createdAt: string;
   downloadUrl: string;
 };
@@ -49,6 +49,14 @@ async function assertCustomer(context: RequestContext, entityId: string) {
   const row = await queryOne(`SELECT id FROM customers WHERE agency_id=? AND id=? AND archived_at IS NULL LIMIT 1`,[context.agencyId, entityId]);
   if (!row) throw new DomainError("NOT_FOUND", "Customer not found.", 404);
 }
+
+async function assertGuarantor(context: RequestContext, entityId: string) {
+  const row = await queryOne(`SELECT id FROM guarantors WHERE agency_id=? AND id=? LIMIT 1`,[context.agencyId, entityId]);
+  if (!row) throw new DomainError("NOT_FOUND", "Guarantor not found.", 404);
+}
+
+/** A vehicle keeps at most this many photos; documents are not limited. */
+export const MAX_VEHICLE_PHOTOS = 5;
 
 async function assertBooking(context: RequestContext, entityId: string) {
   const row = await queryOne(`SELECT id FROM bookings WHERE agency_id=? AND id=? LIMIT 1`,[context.agencyId, entityId]);
@@ -83,6 +91,10 @@ export async function uploadVehicleFile(context: RequestContext, vehicleId: stri
   const rule = allowed[classification as keyof typeof allowed];
   if (!rule.mime.includes(file.type as never)) throw new DomainError("VALIDATION_FAILED", "This file type is not supported.", 415, { file: "Use PDF, JPG, PNG, or WebP as appropriate." });
   if (file.size <= 0 || file.size > rule.max) throw new DomainError("VALIDATION_FAILED", `File must be smaller than ${Math.round(rule.max / 1024 / 1024)} MB.`, 413, { file: "Choose a smaller file." });
+  if (classification === "vehicle_photo") {
+    const photos = await queryOne<{ count: number }>(`SELECT count(*) AS count FROM private_files WHERE agency_id=? AND entity_type='vehicle' AND entity_id=? AND classification='vehicle_photo' AND status='ready'`,[context.agencyId, vehicleId]);
+    if (Number(photos?.count ?? 0) >= MAX_VEHICLE_PHOTOS) throw new DomainError("VALIDATION_FAILED", `A vehicle can have up to ${MAX_VEHICLE_PHOTOS} photos. Remove one before adding another.`, 409, { file: `Up to ${MAX_VEHICLE_PHOTOS} photos.` });
+  }
 
   const id = `file_${randomUUID()}`;
   const storageKey = `${context.agencyId}/${randomUUID()}`;
@@ -103,6 +115,19 @@ export async function uploadVehicleFile(context: RequestContext, vehicleId: stri
     throw error;
   }
   return { id, entityType: "vehicle", entityId: vehicleId, originalName: safeName(file.name), mimeType: file.type, size: file.size, classification: classification as PrivateFileDto["classification"], createdAt: now, downloadUrl: `/api/v1/files/${id}` };
+}
+
+/** Removes a vehicle photo or document from the media register (the stored bytes stay for history). */
+export async function removeVehicleFile(context: RequestContext, fileId: string) {
+  requireRole(context, ["agency_owner", "fleet_manager"]);
+  const now = new Date().toISOString();
+  return inTransaction(async () => {
+    const row = await queryOne<{ entityId: string; classification: string }>(`SELECT entity_id AS entityId,classification FROM private_files WHERE agency_id=? AND id=? AND entity_type='vehicle' AND status='ready' LIMIT 1`,[context.agencyId, fileId]);
+    if (!row) throw new DomainError("NOT_FOUND", "File not found.", 404);
+    await execute(`UPDATE private_files SET status='removed',updated_at=? WHERE agency_id=? AND id=?`,[now, context.agencyId, fileId]);
+    await execute(`INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)`,[randomUUID(), context.agencyId, context.userId, "vehicle.file_removed", "vehicle", row.entityId, JSON.stringify({ fileId, classification: row.classification }), now]);
+    return { id: fileId };
+  },{immediate:true});
 }
 
 export async function uploadAgreementTermsImage(context: RequestContext, file: File): Promise<PrivateFileDto> {
@@ -141,6 +166,7 @@ export async function readPrivateFile(context: RequestContext, id: string) {
   if (row.entityType === "booking_draft") await assertBookingDraft(context, row.entityId);
   if (row.entityType === "customer") await assertCustomer(context, row.entityId);
   if (row.entityType === "booking") await assertBooking(context, row.entityId);
+  if (row.entityType === "guarantor") await assertGuarantor(context, row.entityId);
   if (row.entityType === "agency" && row.entityId !== context.agencyId) throw new DomainError("NOT_FOUND", "File not found.", 404);
   const absolutePath = path.resolve(storageRoot, row.storageKey);
   if (!absolutePath.startsWith(`${storageRoot}${path.sep}`)) throw new DomainError("INTERNAL_ERROR", "File storage path is invalid.", 500);

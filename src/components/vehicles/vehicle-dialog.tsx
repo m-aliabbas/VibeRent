@@ -1,8 +1,8 @@
 "use client";
 
 import * as Dialog from "@radix-ui/react-dialog";
-import { useEffect, useState, type FormEvent } from "react";
-import { CarFront, LoaderCircle, Plus, Trash2, X } from "lucide-react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { Camera, CarFront, LoaderCircle, Plus, Trash2, X } from "lucide-react";
 import { saveOwnerAction } from "@/app/actions/owners";
 import { getVehicleFormOptionsAction } from "@/app/actions/vehicles";
 import { Button } from "@/components/ui/button";
@@ -32,6 +32,8 @@ const blank: Vehicle = {
   fuel: "Petrol",
 };
 
+const MAX_PHOTOS = 5;
+
 export function VehicleDialog({
   open,
   onOpenChange,
@@ -54,6 +56,19 @@ export function VehicleDialog({
   const [ownerForm, setOwnerForm] = useState({ name: "", phone: "", email: "" });
   const [ownerError, setOwnerError] = useState("");
   const [savingOwner, setSavingOwner] = useState(false);
+  // Photos picked while adding a car upload right after the vehicle is created (it needs an id first).
+  const [photos, setPhotos] = useState<Array<{ file: File; url: string }>>([]);
+  const [photoIssue, setPhotoIssue] = useState("");
+  const photoUrls = useRef<string[]>([]);
+  useEffect(() => () => photoUrls.current.forEach(url => URL.revokeObjectURL(url)), []);
+  function addPhotos(files: FileList | null) {
+    const picked = [...(files ?? [])].filter(file => ["image/jpeg", "image/png", "image/webp"].includes(file.type) && file.size <= 8 * 1024 * 1024);
+    const added = picked.slice(0, Math.max(0, MAX_PHOTOS - photos.length)).map(file => ({ file, url: URL.createObjectURL(file) }));
+    photoUrls.current.push(...added.map(photo => photo.url));
+    setPhotos(current => [...current, ...added].slice(0, MAX_PHOTOS));
+    if (picked.length < (files?.length ?? 0)) setErrors(current => ({ ...current, photos: "Only JPG, PNG or WebP photos up to 8 MB each are accepted." }));
+    else setErrors(current => { const next = { ...current }; delete next.photos; return next; });
+  }
   const update = (key: keyof Vehicle, value: string | number) =>
     setForm((current) => ({ ...current, [key]: value }));
   const dirty = JSON.stringify(form) !== initialSnapshot;
@@ -108,12 +123,24 @@ export function VehicleDialog({
     if (Object.keys(nextErrors).length) return;
     setSaving(true);
     const result = await onSave({ ...form, plate: form.plate.toUpperCase() });
-    setSaving(false);
     if (!result.ok) {
+      setSaving(false);
       setErrors((current) => ({
         ...current,
         [result.error.field ?? "form"]: result.error.message,
       }));
+      return;
+    }
+    let failed = 0;
+    for (const photo of vehicle ? [] : photos) {
+      const data = new FormData();
+      data.set("vehicleId", result.data.id); data.set("classification", "vehicle_photo"); data.set("file", photo.file);
+      try { const response = await fetch("/api/v1/files", { method: "POST", body: data }); if (!response.ok) failed += 1; }
+      catch { failed += 1; }
+    }
+    setSaving(false);
+    if (failed) {
+      setPhotoIssue(`${result.data.plate} was added, but ${failed} photo${failed === 1 ? "" : "s"} could not be uploaded. Add ${failed === 1 ? "it" : "them"} from the vehicle's Media tab.`);
       return;
     }
     onOpenChange(false);
@@ -441,6 +468,20 @@ export function VehicleDialog({
                 <div className="flex items-center justify-between gap-3"><div><h3 className="text-sm font-bold text-[#175CD3]">Destination rates</h3><p className="mt-1 text-xs text-[#475467]">Optional city-specific daily and mileage rates. The standard daily rate is used when no rule matches.</p></div><Button type="button" size="sm" variant="secondary" onClick={()=>setForm(current=>({...current,rateRules:[...(current.rateRules??[]),{destinationCity:"",dailyRate:current.dailyRate,perKmRate:0,minimumDays:1}]}))}><Plus size={15}/>Add rate</Button></div>
                 {(form.rateRules??[]).length>0&&<div className="mt-4 space-y-3">{(form.rateRules??[]).map((rule,index)=><div key={index} className="grid gap-3 rounded-lg bg-white p-3 sm:grid-cols-[1fr_1fr_1fr_1fr_auto] sm:items-end"><FormInput label="Going to city" value={rule.destinationCity} onChange={e=>setForm(current=>({...current,rateRules:current.rateRules?.map((item,i)=>i===index?{...item,destinationCity:e.target.value}:item)}))}/><FormInput label="Daily rate" type="number" min={1000} value={rule.dailyRate} onChange={e=>setForm(current=>({...current,rateRules:current.rateRules?.map((item,i)=>i===index?{...item,dailyRate:Number(e.target.value)}:item)}))}/><FormInput label="Per km" type="number" min={0} value={rule.perKmRate} onChange={e=>setForm(current=>({...current,rateRules:current.rateRules?.map((item,i)=>i===index?{...item,perKmRate:Number(e.target.value)}:item)}))}/><FormInput label="Minimum days" type="number" min={1} value={rule.minimumDays} onChange={e=>setForm(current=>({...current,rateRules:current.rateRules?.map((item,i)=>i===index?{...item,minimumDays:Number(e.target.value)}:item)}))}/><Button type="button" size="sm" variant="ghost" aria-label={`Remove ${rule.destinationCity||"rate"}`} onClick={()=>setForm(current=>({...current,rateRules:current.rateRules?.filter((_,i)=>i!==index)}))}><Trash2 size={16}/></Button></div>)}</div>}
               </div>
+              {!vehicle && <section className="rounded-xl border border-[#E4E7EC] p-4 sm:col-span-2" aria-label="Vehicle photos">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div><h3 className="text-sm font-bold text-[#1D2939]">Photos <span className="font-normal text-[#667085]">(optional)</span></h3><p className="mt-1 text-xs text-[#475467]">Add 3–5 photos: front, back, both sides and the interior. Up to {MAX_PHOTOS}, JPG, PNG or WebP, 8 MB each.</p></div>
+                  <label className={`inline-flex h-9 cursor-pointer items-center gap-2 rounded-[9px] border border-[#D0D5DD] bg-white px-3 text-sm font-semibold hover:bg-[#F8FAFC] ${photos.length >= MAX_PHOTOS || saving ? "pointer-events-none opacity-50" : ""}`}><Camera size={16} />Add photos<input type="file" multiple accept="image/jpeg,image/png,image/webp" className="sr-only" disabled={photos.length >= MAX_PHOTOS || saving} onChange={event => { addPhotos(event.target.files); event.target.value = ""; }} /></label>
+                </div>
+                {photos.length > 0 && <ul className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-5">{photos.map((photo, index) => <li key={photo.url} className="relative aspect-[4/3] overflow-hidden rounded-lg border border-[#EAECF0] bg-[#F2F4F7]">
+                  {/* eslint-disable-next-line @next/next/no-img-element -- local object URL preview before upload */}
+                  <img src={photo.url} alt={`Photo ${index + 1}`} className="h-full w-full object-cover" />
+                  <button type="button" disabled={saving} onClick={() => setPhotos(current => current.filter(item => item.url !== photo.url))} className="absolute right-1 top-1 grid h-7 w-7 place-items-center rounded-full bg-black/60 text-white hover:bg-black/75" aria-label={`Remove photo ${index + 1}`}><X size={14} /></button>
+                </li>)}</ul>}
+                <p className="mt-2 text-xs text-[#667085]">{photos.length} of {MAX_PHOTOS} selected{photos.length > 0 && photos.length < 3 ? " · 3 or more gives customers a better view" : ""}</p>
+                {errors.photos && <p role="alert" className="mt-1 text-xs text-[#B42318]">{errors.photos}</p>}
+              </section>}
+              {photoIssue && <p role="alert" className="rounded-lg bg-[#FFFAEB] p-3 text-sm font-medium text-[#B54708] sm:col-span-2">{photoIssue}</p>}
               {errors.form && (
                 <p
                   role="alert"
@@ -451,7 +492,7 @@ export function VehicleDialog({
               )}
             </div>
             <div className="sticky bottom-0 flex flex-col-reverse gap-2 border-t border-[#EAECF0] bg-white px-5 py-4 sm:flex-row sm:justify-end sm:px-6">
-              <Button
+              {photoIssue ? <Button type="button" onClick={() => onOpenChange(false)}>Done</Button> : <><Button
                 type="button"
                 variant="secondary"
                 disabled={saving}
@@ -461,8 +502,8 @@ export function VehicleDialog({
               </Button>
               <Button type="submit" disabled={saving}>
                 {saving && <LoaderCircle className="animate-spin" size={17} />}{" "}
-                {saving ? "Saving…" : vehicle ? "Save changes" : "Add vehicle"}
-              </Button>
+                {saving ? (photos.length && !vehicle ? "Saving and uploading photos…" : "Saving…") : vehicle ? "Save changes" : "Add vehicle"}
+              </Button></>}
             </div>
           </form>
         </Dialog.Content>

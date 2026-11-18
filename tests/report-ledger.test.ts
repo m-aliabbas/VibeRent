@@ -150,3 +150,28 @@ test("an unreturned customer expense stays due after all rent is paid", () => {
   assert.deepEqual(ledger.rows.map((row) => [row.kind, row.amount, row.paid, row.balance]), [["booking", 10_000, 10_000, 0], ["expense", 4_000, 1_500, 2_500]]);
   assert.equal(ledger.closing, 2_500);
 });
+
+test("with dated payments, each payment is its own row on the day it was received", () => {
+  const bookings = [
+    { id: "B1", vehicle: "", plate: "LEA-1", status: "completed", pickupAt: "2026-09-01T09:00:00Z", returnAt: "2026-09-03T09:00:00Z", totalAmount: 10_000, paid: 10_000 },
+    { id: "B2", vehicle: "", plate: "LEA-1", status: "completed", pickupAt: "2026-09-05T09:00:00Z", returnAt: "2026-09-06T09:00:00Z", totalAmount: 6_000, paid: 2_000 },
+  ];
+  const payments = [
+    { id: "P1", date: "2026-09-10", amount: 10_000, bookingId: "B1", plate: "LEA-1", description: "Payment received · #1" },
+    { id: "P2", date: "2026-09-10", amount: 2_000, bookingId: "B2", plate: "LEA-1", description: "Payment received · #2" },
+  ];
+  const ledger = customerLedger(bookings, {}, [], payments);
+  assert.deepEqual(ledger.rows.map((row) => [row.kind, row.id, row.amount, row.paid, row.balance]), [
+    ["booking", "B1", 10_000, 0, 10_000],
+    ["booking", "B2", 6_000, 0, 16_000],
+    ["payment", "P1", 0, 10_000, 6_000],
+    ["payment", "P2", 0, 2_000, 4_000],
+  ]);
+  assert.equal(ledger.closing, 4_000);
+  // Same closing balance as the booking-based view.
+  assert.equal(customerLedger(bookings).closing, 4_000);
+  // A period after the rentals opens with what was owed and shows only the payments in it.
+  const later = customerLedger(bookings, { from: "2026-09-08" }, [], payments);
+  assert.equal(later.opening, 16_000);
+  assert.deepEqual(later.rows.map((row) => row.id), ["P1", "P2"]);
+});

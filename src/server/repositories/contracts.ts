@@ -18,6 +18,8 @@ export type BookingListItem = {
   driver?: string|null;
   renterSkipped?: boolean;
   guarantor?: {
+    /** Saved guarantor record, when the booking is linked to one. */
+    id?: string | null;
     name: string;
     parentage: string;
     cnic: string;

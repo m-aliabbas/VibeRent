@@ -2,7 +2,6 @@ import { cn } from "@/lib/utils";
 
 const tones: Record<string, string> = {
   available: "bg-[#ECFDF3] text-[#067647] ring-[#ABEFC6]",
-  booked: "bg-[#EFF8FF] text-[#175CD3] ring-[#B2DDFF]",
   maintenance: "bg-[#FFFAEB] text-[#B54708] ring-[#FEDF89]",
   "out of service": "bg-[#FEF3F2] text-[#B42318] ring-[#FECDCA]",
   own: "bg-[#F2F4F7] text-[#475467] ring-[#D0D5DD]",
@@ -33,6 +32,12 @@ const tones: Record<string, string> = {
   archived: "bg-[#F2F4F7] text-[#475467] ring-[#D0D5DD]",
   paused: "bg-[#FFFAEB] text-[#B54708] ring-[#FEDF89]",
   ended: "bg-[#F2F4F7] text-[#475467] ring-[#D0D5DD]",
+  draft: "bg-[#F2F4F7] text-[#475467] ring-[#D0D5DD]",
+  sent: "bg-[#EFF8FF] text-[#175CD3] ring-[#B2DDFF]",
+  accepted: "bg-[#ECFDF3] text-[#067647] ring-[#ABEFC6]",
+  declined: "bg-[#FEF3F2] text-[#B42318] ring-[#FECDCA]",
+  expired: "bg-[#FFFAEB] text-[#B54708] ring-[#FEDF89]",
+  booked: "bg-[#EFF8FF] text-[#175CD3] ring-[#B2DDFF]",
 };
 
 export function StatusBadge({ status }: { status: string }) {

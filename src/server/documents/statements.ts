@@ -19,7 +19,7 @@ export type BuiltStatement = { bytes: Buffer; fileName: string; name: string; ph
 export const customerLedgerColumns: Column[] = [
   { label: "Date", width: 50 },
   { label: "Car", width: 66 },
-  { label: "Booking / charge", width: 85 },
+  { label: "Booking / charge / payment", width: 85 },
   { label: "Rent", width: 60, align: "right" },
   { label: "Discount", width: 55, align: "right" },
   { label: "Net amount", width: 63, align: "right" },
@@ -34,7 +34,7 @@ export async function buildCustomerStatement(context: RequestContext, customerId
   const [customer, agency] = await Promise.all([getCustomerDetail(context, customerId), getReportAgencyHeader(context)]);
   const { from = "", to = "", plate = "" } = filters;
   if (plate && !customer.bookings.some((row) => row.plate === plate) && !customer.expenses.some((row) => row.plate === plate)) throw new DomainError("VALIDATION_FAILED", "Unknown car filter.", 400);
-  const ledger = customerLedger(customer.bookings, { from, to, plate }, customer.expenses);
+  const ledger = customerLedger(customer.bookings, { from, to, plate }, customer.expenses, customer.payments);
   const otherCharges = filterAccountExpenses(customer.expenses, { from, to, plate });
   const periodLabel = `${from ? sheetDate(from) : "All dates"} to ${to ? sheetDate(to) : "present"}${plate ? ` | ${plate}` : ""}`;
   const bytes = await createStatementPdf({
@@ -51,10 +51,19 @@ export async function buildCustomerStatement(context: RequestContext, customerId
     bandNote: "Net amount = rent - discount (plus other charges). Outstanding = opening balance + net amount - received. Cr means the customer is in credit.",
     sections: [
       {
-        title: "Rentals and charges",
+        title: "Rentals, charges and payments",
         columns: customerLedgerColumns,
         opening: ledger.opening ? ["", "", "Opening balance", "", "", "", "", outstanding(ledger.opening)] : undefined,
-        rows: ledger.rows.map((row) => [
+        rows: ledger.rows.map((row) => row.kind === "payment" ? [
+          sheetDate(row.pickupAt),
+          row.plate,
+          row.description,
+          "-",
+          "-",
+          "-",
+          number(row.paid),
+          outstanding(row.balance),
+        ] : [
           sheetDate(row.pickupAt),
           row.plate,
           row.kind === "expense" ? row.description : `${row.publicNumber ? `#${row.publicNumber}` : row.id}${row.status === "completed" ? "" : ` (${row.status.replaceAll("_", " ")})`}`,

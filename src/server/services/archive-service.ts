@@ -83,6 +83,10 @@ export async function restoreArchived(context:RequestContext,kind:ArchiveKind,id
       changes=(await execute("UPDATE owners SET status='active',version=version+1,updated_at=? WHERE agency_id=? AND id=? AND status='archived'",[now,context.agencyId,id])).changes;
     }else{
       const table={customer:"customers",driver:"drivers",guarantor:"guarantors"}[kind];
+      // Saved guarantor links and quotations only point at the person; they do not block deleting them.
+      if(kind==="customer"||kind==="guarantor")await execute(`DELETE FROM customer_guarantors WHERE agency_id=? AND ${kind}_id=?`,[context.agencyId,id]);
+      if(kind==="customer")await execute("UPDATE quotations SET customer_id=NULL WHERE agency_id=? AND customer_id=?",[context.agencyId,id]);
+      if(kind==="guarantor")await execute("UPDATE bookings SET guarantor_id=NULL WHERE agency_id=? AND guarantor_id=?",[context.agencyId,id]);
       const status=kind==="guarantor"?"":"status='active',";
       changes=(await execute(`UPDATE ${table} SET archived_at=NULL,${status}updated_at=? WHERE agency_id=? AND id=? AND archived_at IS NOT NULL`,[now,context.agencyId,id])).changes;
     }
@@ -100,6 +104,7 @@ async function deleteArchivedBooking(context:RequestContext,id:string){
   for(const file of files)await execute("DELETE FROM private_files WHERE agency_id=? AND id=?",[agency,file.id]);
   await execute(`DELETE FROM notification_deliveries WHERE id IN (${deliveries})`,[agency,id]);
   await execute("UPDATE expenses SET booking_id=NULL,updated_at=? WHERE agency_id=? AND booking_id=?",[new Date().toISOString(),agency,id]);
+  await execute("UPDATE quotations SET booking_id=NULL WHERE agency_id=? AND booking_id=?",[agency,id]);
   await execute("DELETE FROM source_payouts WHERE agency_id=? AND booking_id=?",[agency,id]);
   await execute("DELETE FROM rental_inspections WHERE agency_id=? AND booking_id=?",[agency,id]);
   await execute("UPDATE financial_transactions SET linked_transaction_id=NULL WHERE agency_id=? AND booking_id=?",[agency,id]);

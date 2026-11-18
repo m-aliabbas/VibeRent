@@ -20,12 +20,12 @@ export async function sendCustomerStatementAction(id:string,filters:{from?:strin
   } catch(error) { return failure(error); }
 }
 
-export async function payCustomerBalanceAction(id:string,input:{amount:number;method:string;reference?:string;idempotencyKey:string;discount?:number}) {
+export async function payCustomerBalanceAction(id:string,input:{amount:number;method:string;reference?:string;idempotencyKey:string;discount?:number;paidOn?:string}) {
   try {
     const context=await getWebRequestContext();
     const data=await withNotices(()=>payCustomerBalance(context,id,input),async result=>({
       notificationDelivery:input.amount>0
-        ?await notices.customerPayment(context,"server",id,{amount:input.amount,discount:input.discount??0,method:input.method,reference:input.reference,allocations:result.allocations,idempotencyKey:input.idempotencyKey})
+        ?await notices.customerPayment(context,"server",id,{amount:input.amount,discount:input.discount??0,method:input.method,reference:input.reference,allocations:result.allocations,idempotencyKey:input.idempotencyKey,paidOn:input.paidOn})
         :{status:"skipped" as const,message:"Discount recorded. No payment receipt was needed."},
     }));
     revalidatePath(`/customers/${id}`);revalidatePath("/customers");revalidatePath("/bookings");revalidatePath("/reports");revalidatePath("/");

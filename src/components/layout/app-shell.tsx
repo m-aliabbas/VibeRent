@@ -23,6 +23,7 @@ import {
   ShieldCheck,
   Settings,
   Users,
+  FileText,
   UserSquare2,
   UserRound,
   X,
@@ -44,6 +45,7 @@ const navGroups = [
     { label: "Bookings", href: "/bookings", icon: CalendarDays, combo: "g b" },
     { label: "Vehicles", href: "/vehicles", icon: CarFront, combo: "g v" },
     { label: "Customers", href: "/customers", icon: Users, combo: "g c" },
+    { label: "Quotations", href: "/quotations", icon: FileText },
   ] },
   { label: "Money", items: [
     { label: "Expenses", href: "/expenses", icon: CircleDollarSign, combo: "g e" },

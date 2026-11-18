@@ -6,6 +6,7 @@ import { ExpensesWorkspace } from "@/components/expenses/expenses-workspace";
 import { ReportsWorkspace } from "@/components/reports/reports-workspace";
 import { DriversWorkspace } from "@/components/drivers/drivers-workspace";
 import { GuarantorsWorkspace } from "@/components/guarantors/guarantors-workspace";
+import { QuotationsWorkspace } from "@/components/quotations/quotations-workspace";
 import { ArchiveWorkspace } from "@/components/archive/archive-workspace";
 import { SettingsWorkspace } from "@/components/settings/settings-workspace";
 import { getWebRequestContext } from "@/server/auth/session";
@@ -17,6 +18,7 @@ import { listOwners } from "@/server/services/owner-service";
 import { getReports } from "@/server/services/report-service";
 import { listDriverSummaries, listDrivers } from "@/server/services/driver-service";
 import { listGuarantors } from "@/server/services/guarantor-service";
+import { listQuotations } from "@/server/services/quotation-service";
 import { listArchive } from "@/server/services/archive-service";
 import { getOrganizationSettings } from "@/server/services/organization-settings-service";
 import { isDesktopRuntime } from "@/server/desktop/runtime-paths";
@@ -47,6 +49,7 @@ const sections: Record<string, { title: string; description: string }> = {
   },
   drivers: { title:"Drivers",description:"Drivers for with-driver rentals." },
   guarantors: { title:"Guarantors",description:"Guarantors for rental bookings." },
+  quotations: { title:"Quotations",description:"Price quotes before a booking." },
   archive: { title:"Archive",description:"Deleted and archived records." },
   settings: {
     title: "Settings",
@@ -79,6 +82,7 @@ export default async function SectionPage({
   if (section === "expenses") return <ExpensesWorkspace data={await getExpenseWorkspace(await getWebRequestContext())} />;
   if (section === "reports") return <ReportsWorkspace data={await getReports(await getWebRequestContext())} />;
   if (section === "drivers") { const context = await getWebRequestContext(); const [drivers, summaries] = await Promise.all([listDrivers(context), listDriverSummaries(context)]); return <DriversWorkspace initial={drivers} summaries={summaries} />; }
+  if (section === "quotations") { const context = await getWebRequestContext(); const [quotations, customers, vehicles] = await Promise.all([listQuotations(context), listCustomers(context), listVehicles(context)]); return <QuotationsWorkspace initial={quotations} customers={customers.map(item => ({ id: item.id, name: item.name, phone: item.phone }))} vehicles={vehicles.map(item => ({ id: item.id, label: `${item.make} ${item.model} ${item.year} · ${item.plate}`, dailyRate: item.dailyRate, withDriverRate: item.withDriverRate ?? item.dailyRate, city: item.city }))} canEdit={context.roles.some(role => ["agency_owner","fleet_manager","rental_agent"].includes(role))} />; }
   if (section === "guarantors") return <GuarantorsWorkspace initial={await listGuarantors(await getWebRequestContext())} />;
   if (section === "archive") { const context = await getWebRequestContext(); return <ArchiveWorkspace initial={await listArchive(context)} canRestore={context.roles.some(role=>["agency_owner","fleet_manager"].includes(role))} canPurge={context.roles.includes("agency_owner")}/>; }
   if (section === "settings") {

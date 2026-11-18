@@ -85,6 +85,13 @@
       "when": 1794752025044,
       "tag": "0011_month_end_statements",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1794973747257,
+      "tag": "0012_quotations_guarantor_links",
+      "breakpoints": true
     }
   ]
 }

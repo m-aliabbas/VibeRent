@@ -190,7 +190,7 @@ export async function recordBookingPaymentAction(bookingId: string, input: Recor
       // A discount-only settlement has no receipt to send.
       notificationDelivery: payment.paymentReceiptNumber == null
         ? { status: "skipped" as const, message: "Discount applied. No payment receipt was needed." } satisfies QueuedDeliveryResult
-        : await notices.payment(context, "server", bookingId, { amount: input.amount, method: input.method, reference: input.reference, receiptNumber: payment.paymentReceiptNumber }),
+        : await notices.payment(context, "server", bookingId, { amount: input.amount, method: input.method, reference: input.reference, paidOn: input.paidOn, receiptNumber: payment.paymentReceiptNumber }),
     }));
     revalidatePath("/bookings");
     revalidatePath(`/bookings/${bookingId}`);

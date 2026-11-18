@@ -1,8 +1,11 @@
 import "server-only";
-import { withAgencyInstants } from "@/server/context/agency-time-zone";
+import { getAgencyTimeZone, withAgencyInstants } from "@/server/context/agency-time-zone";
 import { randomUUID } from "node:crypto";
 import { getTermsSnapshotForBooking } from "@/server/services/organization-settings-service";
 import { execute, inTransaction, queryAll, queryOne } from "@/db/query";
+import { resolveBookingGuarantor } from "@/server/services/guarantor-service";
+import { linkQuotationBooking } from "@/server/services/quotation-service";
+import { zonedDayKey, zonedWallTimeToIso } from "@/lib/timezone";
 import { requireRole } from "@/server/auth/authorize";
 import type { RequestContext } from "@/server/context/request-context";
 import { DomainError } from "@/server/domain/errors";
@@ -182,7 +185,7 @@ export async function startBooking(context: RequestContext, existingDraftId?: st
 export async function getBooking(context: RequestContext, id: string) {
   const booking = (await listBookings(context)).find((item) => item.id === id);
   if (!booking) throw new DomainError("NOT_FOUND", "Booking not found.", 404);
-  const renter = await queryOne<{ customerCnic: string; customerPhone: string; guarantorName:string|null;guarantorParentage:string|null;guarantorCnic:string|null;guarantorPhone:string|null;guarantorAddress:string|null;guarantorCarAmount:number|null }>(`SELECT c.cnic_normalized AS customerCnic,c.phone_normalized AS customerPhone,
+  const renter = await queryOne<{ customerCnic: string; customerPhone: string; guarantorName:string|null;guarantorParentage:string|null;guarantorCnic:string|null;guarantorPhone:string|null;guarantorAddress:string|null;guarantorCarAmount:number|null;guarantorId:string|null }>(`SELECT c.cnic_normalized AS customerCnic,c.phone_normalized AS customerPhone,b.guarantor_id AS guarantorId,
       b.guarantor_name AS guarantorName,b.guarantor_parentage AS guarantorParentage,b.guarantor_cnic AS guarantorCnic,
       b.guarantor_phone AS guarantorPhone,b.guarantor_address AS guarantorAddress,b.guarantor_car_amount AS guarantorCarAmount
     FROM customers c
@@ -202,8 +205,9 @@ export async function getBooking(context: RequestContext, id: string) {
     ORDER BY ft.posted_at DESC, ft.created_at DESC
   `,[context.agencyId, id]);
   const sourcePayouts=await queryAll<SourcePayoutDto>(`SELECT id,amount,method,reference,status,paid_at AS paidAt FROM source_payouts WHERE agency_id=? AND booking_id=? ORDER BY paid_at DESC,created_at DESC`,[context.agencyId,id]);
-  const guarantor=renter?.guarantorName&&renter.guarantorParentage&&renter.guarantorCnic&&renter.guarantorPhone&&renter.guarantorAddress&&renter.guarantorCarAmount?{
-    name:renter.guarantorName,parentage:renter.guarantorParentage,cnic:renter.guarantorCnic,phone:renter.guarantorPhone,address:renter.guarantorAddress,carAmount:renter.guarantorCarAmount,
+  // Parentage, CNIC, phone, address and amount are optional on a guarantor, so a name is enough to show one.
+  const guarantor=renter?.guarantorName?{
+    id:renter.guarantorId,name:renter.guarantorName,parentage:renter.guarantorParentage??"",cnic:renter.guarantorCnic??"",phone:renter.guarantorPhone??"",address:renter.guarantorAddress??"",carAmount:Number(renter.guarantorCarAmount??0),
   }:undefined;
   const lastVehicleOdometer=booking.fulfillmentType==="fleet"?await getLastVehicleOdometer(context.agencyId,booking.vehicleId):undefined;
   return { ...booking, customerCnic:renter?.customerCnic, customerPhone:renter?.customerPhone, guarantor, inspections, transactions, sourcePayouts, lastVehicleOdometer };
@@ -401,9 +405,14 @@ export async function confirmBooking(context: RequestContext, rawInput: unknown)
       await execute(`INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)`,[randomUUID(),context.agencyId,context.userId,"booking.checked_out","booking",id,JSON.stringify({odometer:input.checkoutInspection.odometer,fuelLevel:input.checkoutInspection.fuelLevel,source:"immediate_booking"}),now]);
     }
     await execute("UPDATE booking_drafts SET status='consumed',consumed_at=?,updated_at=? WHERE agency_id=? AND id=? AND status='active'",[now, now, context.agencyId, bookingDraft.id]);
+    if(input.quotationId)await linkQuotationBooking(context,input.quotationId,id,now);
     await execute(`UPDATE private_files SET entity_type='customer',entity_id=?,updated_at=? WHERE agency_id=? AND entity_type='booking_draft' AND entity_id=? AND classification IN ('customer_cnic_front','customer_cnic_back') AND status='ready'`,[customerId,now,context.agencyId,bookingDraft.id]);
     if(input.guarantor){
-      await execute(`UPDATE private_files SET entity_type='booking',entity_id=?,updated_at=? WHERE agency_id=? AND entity_type='booking_draft' AND entity_id=? AND classification IN ('guarantor_cnic_front','guarantor_cnic_back') AND status='ready'`,[id,now,context.agencyId,bookingDraft.id]);
+      // The booking's guarantor becomes (or reuses) a saved guarantor linked to the customer; their CNIC images follow them.
+      const guarantorId=await resolveBookingGuarantor(context,input.guarantor,input.rentalMode==="with_driver"&&input.renterSkipped?null:customerId,now);
+      await execute("UPDATE bookings SET guarantor_id=? WHERE agency_id=? AND id=?",[guarantorId,context.agencyId,id]);
+      await execute(`UPDATE private_files SET status='replaced',updated_at=? WHERE agency_id=? AND entity_type='guarantor' AND entity_id=? AND classification IN (SELECT classification FROM private_files WHERE agency_id=? AND entity_type='booking_draft' AND entity_id=? AND classification IN ('guarantor_cnic_front','guarantor_cnic_back') AND status='ready') AND status='ready'`,[now,context.agencyId,guarantorId,context.agencyId,bookingDraft.id]);
+      await execute(`UPDATE private_files SET entity_type='guarantor',entity_id=?,updated_at=? WHERE agency_id=? AND entity_type='booking_draft' AND entity_id=? AND classification IN ('guarantor_cnic_front','guarantor_cnic_back') AND status='ready'`,[guarantorId,now,context.agencyId,bookingDraft.id]);
     }else{
       await execute(`UPDATE private_files SET status='replaced',updated_at=? WHERE agency_id=? AND entity_type='booking_draft' AND entity_id=? AND classification IN ('guarantor_cnic_front','guarantor_cnic_back') AND status='ready'`,[now,context.agencyId,bookingDraft.id]);
     }
@@ -645,6 +654,18 @@ export async function editBookingAmounts(context: RequestContext, bookingId: str
   },{immediate:true});
 }
 
+/**
+ * Ledger time for money received on `paidOn` (agency calendar day). Today keeps the real time; an
+ * earlier day posts at noon of that day, so customer and system ledgers show the day it was paid.
+ */
+export async function paymentPostedAt(agencyId: string, paidOn: string | undefined, now: string) {
+  if (!paidOn) return now;
+  const timeZone = await getAgencyTimeZone(agencyId);
+  const today = zonedDayKey(new Date(now), timeZone);
+  if (paidOn > today) throw new DomainError("VALIDATION_FAILED", "The payment date cannot be in the future.", 400, { paidOn: "Choose today or an earlier date." });
+  return paidOn === today ? now : zonedWallTimeToIso(`${paidOn}T12:00`, timeZone);
+}
+
 export async function recordBookingPayment(context: RequestContext, bookingId: string, rawInput: unknown) {
   requireRole(context, ["agency_owner", "fleet_manager", "rental_agent", "accountant"]);
   const input = parseRecordPaymentInput(rawInput);
@@ -693,6 +714,7 @@ export async function recordBookingPayment(context: RequestContext, bookingId: s
 
     // Overpayment is allowed: anything above the outstanding balance is held as customer credit.
     const id = `TXN-${randomUUID().slice(0, 8).toUpperCase()}`;
+    const postedAt = await paymentPostedAt(context.agencyId, input.paidOn, now);
     const receiptNumber = await allocatePaymentReceiptNumber(context.agencyId, now);
 
     await execute(`
@@ -710,7 +732,7 @@ export async function recordBookingPayment(context: RequestContext, bookingId: s
       input.reference ?? "",
       idempotencyKey,
       context.userId,
-      now,
+      postedAt,
       now,
       now
     ]);
@@ -724,7 +746,7 @@ export async function recordBookingPayment(context: RequestContext, bookingId: s
       context.agencyId,
       context.userId,
       bookingId,
-      JSON.stringify({ transactionId: id, receiptNumber, amount: input.amount, discount, method: input.method, reference: input.reference, account: input.account, note: input.note }),
+      JSON.stringify({ transactionId: id, receiptNumber, amount: input.amount, discount, method: input.method, reference: input.reference, account: input.account, note: input.note, postedAt }),
       now
     ]);
 

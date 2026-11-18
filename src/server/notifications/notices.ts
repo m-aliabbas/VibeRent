@@ -27,18 +27,21 @@ export const notices = {
     queueNotification(context, mode, { kind: "booking.checkout_notice", entityId: bookingId, idempotencyKey: `booking.checkout_notice:${bookingId}` }),
   checkin: (context: RequestContext, mode: DeliveryMode, bookingId: string) =>
     queueNotification(context, mode, { kind: "booking.checkin_invoice", entityId: bookingId, idempotencyKey: `booking.checkin_invoice:${bookingId}` }),
-  payment: (context: RequestContext, mode: DeliveryMode, bookingId: string, payment: { amount: number; method: string; reference?: string; receiptNumber: number | null }) =>
+  payment: (context: RequestContext, mode: DeliveryMode, bookingId: string, payment: { amount: number; method: string; reference?: string; receiptNumber: number | null; paidOn?: string }) =>
     queueNotification(context, mode, {
       kind: "booking.payment_receipt", entityId: bookingId, payload: payment,
       idempotencyKey: payment.receiptNumber == null ? undefined : `booking.payment_receipt:${payment.receiptNumber}`,
     }),
   /** One receipt for a customer-level payment, however many bookings it was spread across. */
-  customerPayment: (context: RequestContext, mode: DeliveryMode, customerId: string, payment: { amount: number; discount: number; method: string; reference?: string; allocations: Array<{ bookingId?: string; expenseId?: string; amount: number; discount?: number }>; idempotencyKey: string }) =>
+  customerPayment: (context: RequestContext, mode: DeliveryMode, customerId: string, payment: { amount: number; discount: number; method: string; reference?: string; paidOn?: string; allocations: Array<{ bookingId?: string; expenseId?: string; amount: number; discount?: number }>; idempotencyKey: string }) =>
     queueNotification(context, mode, {
       kind: "customer.payment_receipt", entityId: customerId,
-      payload: { amount: payment.amount, discount: payment.discount, method: payment.method, reference: payment.reference ?? "", allocations: payment.allocations },
+      payload: { amount: payment.amount, discount: payment.discount, method: payment.method, reference: payment.reference ?? "", paidOn: payment.paidOn, allocations: payment.allocations },
       idempotencyKey: `customer.payment_receipt:${payment.idempotencyKey}`,
     }),
+  /** Quotation PDF to the customer. Each send is a new delivery so a revised quote can be re-sent. */
+  quotation: (context: RequestContext, mode: DeliveryMode, quotationId: string) =>
+    queueNotification(context, mode, { kind: "quotation.document", entityId: quotationId }),
   /** Ledger PDF to a customer. `key` makes scheduled (month-end) sends run once; manual sends always queue. */
   customerStatement: (context: RequestContext, mode: DeliveryMode, customerId: string, filters: { from?: string; to?: string; plate?: string; reason: "manual" | "month_end" }, key?: string) =>
     queueNotification(context, mode, { kind: "customer.statement", entityId: customerId, payload: filters, idempotencyKey: key }),
