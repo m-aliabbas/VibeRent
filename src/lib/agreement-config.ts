@@ -3,6 +3,8 @@ export type AgreementTemplate = "classic" | "modern" | "minimal";
 export type AgreementDensity = "compact" | "comfortable";
 export type AgreementTermsLanguage = "en" | "ur";
 export type AgreementTermsSource = "text" | "image";
+/** single: one flowing document. two_page: page 1 details + signatures, page 2 terms + signatures. */
+export type AgreementPageLayout = "single" | "two_page";
 export type AgreementSectionId = "rental" | "renter" | "vehicle" | "charges" | "terms" | "signatures";
 
 export type AgreementTermsImage = {
@@ -35,6 +37,7 @@ export type AgreementDesignConfig = {
   attachVehicleImages: boolean;
   /** Print the agency signature and business stamp in the representative signature box. */
   showSignatureStamp: boolean;
+  pageLayout: AgreementPageLayout;
   titleEn: string;
   titleUr: string;
   footerEn: string;
@@ -98,6 +101,7 @@ export const defaultAgreementConfig: AgreementDesignConfig = {
   attachIdDocuments: true,
   attachVehicleImages: true,
   showSignatureStamp: true,
+  pageLayout: "single",
   titleEn: "Rental Agreement",
   titleUr: "کرایہ نامہ",
   footerEn: "Thank you for choosing our rental service.",
@@ -143,6 +147,7 @@ export function normalizeAgreementConfig(value: unknown, legacyTerms?: string | 
     attachIdDocuments: input.attachIdDocuments !== false,
     attachVehicleImages: input.attachVehicleImages !== false,
     showSignatureStamp: input.showSignatureStamp !== false,
+    pageLayout: input.pageLayout === "two_page" ? "two_page" : "single",
     titleEn: cleanText(input.titleEn, defaultAgreementConfig.titleEn, 80),
     titleUr: cleanText(input.titleUr, defaultAgreementConfig.titleUr, 100),
     footerEn: cleanText(input.footerEn, defaultAgreementConfig.footerEn, 180),

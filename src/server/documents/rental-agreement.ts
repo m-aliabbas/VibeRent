@@ -99,13 +99,26 @@ export async function createRentalAgreementPdf(context: RequestContext, bookingI
   doc.on("data", chunk => chunks.push(Buffer.from(chunk)));
   const completed = new Promise<Buffer>((resolve, reject) => { doc.on("end", () => resolve(Buffer.concat(chunks))); doc.on("error", reject); });
 
-  const compactImageLayout = Boolean(termsImage);
-  renderHeader(doc, fonts, row, config, compactImageLayout);
-  const sections = config.sections.filter(item => item.enabled);
-  for (const [index, section] of sections.entries()) {
-    const remainingHeight = sections.slice(index + 1).reduce((total, item) => total + estimatedRenderedSectionHeight(item.id, compactImageLayout, hasGuarantor(row)), 0);
-    renderSection(doc, fonts, row, config, section.id, section.titleEn, section.titleUr, termsImage, remainingHeight, compactImageLayout, branding);
-    if (section.id === "renter" && hasGuarantor(row)) renderGuarantorSection(doc, fonts, row, config, compactImageLayout);
+  const enabled = config.sections.filter(item => item.enabled);
+  const renderPage = (sections: typeof enabled, pageConfig: AgreementDesignConfig) => {
+    const compactImageLayout = Boolean(termsImage) && sections.some(item => item.id === "terms");
+    renderHeader(doc, fonts, row, pageConfig, compactImageLayout);
+    for (const [index, section] of sections.entries()) {
+      const remainingHeight = sections.slice(index + 1).reduce((total, item) => total + estimatedRenderedSectionHeight(item.id, compactImageLayout, hasGuarantor(row)), 0);
+      renderSection(doc, fonts, row, pageConfig, section.id, section.titleEn, section.titleUr, termsImage, remainingHeight, compactImageLayout, branding);
+      if (section.id === "renter" && hasGuarantor(row)) renderGuarantorSection(doc, fonts, row, pageConfig, compactImageLayout);
+    }
+  };
+  if (config.pageLayout === "two_page") {
+    // Page 1: every detail, signed by customer and agency. Page 2: terms and conditions, signed again.
+    const pageConfig = twoPageSignatureConfig(config);
+    const signatures = config.sections.find(item => item.id === "signatures")!;
+    const terms = config.sections.find(item => item.id === "terms")!;
+    renderPage([...enabled.filter(item => item.id !== "terms" && item.id !== "signatures"), signatures], pageConfig);
+    doc.addPage();
+    renderPage([terms, signatures], pageConfig);
+  } else {
+    renderPage(enabled, config);
   }
   for (const group of attachments.identity) renderAttachmentPage(doc, fonts, config, row, group);
   for (const group of attachments.vehicle) renderAttachmentPage(doc, fonts, config, row, group);
@@ -116,13 +129,20 @@ export async function createRentalAgreementPdf(context: RequestContext, bookingI
 
 export async function getRentalAgreementPrintData(context:RequestContext,bookingId:string):Promise<RentalAgreementPrintData>{
   const timeZone=await getAgencyTimeZone(context.agencyId);
-  const {row,config,termsImageId}=await loadAgreementSource(context,bookingId);
+  const source=await loadAgreementSource(context,bookingId);
+  const {row,termsImageId}=source;
+  let {config}=source;
   const [brandingUrls, attachments] = await Promise.all([
     config.showSignatureStamp ? documentBrandingUrls(context.agencyId, await bookingActorId(context.agencyId, bookingId)) : Promise.resolve({ signatureUrl: null, stampUrl: null }),
     loadAgreementAttachments(context.agencyId, { customerId: row.renterSkipped ? null : row.customerId, guarantorId: row.guarantorId, vehicleId: row.vehicleId, ownerId: row.ownerId }, { idDocuments: config.attachIdDocuments, vehicleImages: config.attachVehicleImages, withBytes: false }),
   ]);
   documentTimeZone=timeZone;
-  const sections=config.sections.filter(section=>section.enabled).map(section=>({
+  const twoPage=config.pageLayout==="two_page";
+  const ordered=twoPage
+    ?[...config.sections.filter(section=>section.enabled&&section.id!=="terms"&&section.id!=="signatures"),config.sections.find(section=>section.id==="signatures")!,config.sections.find(section=>section.id==="terms")!,config.sections.find(section=>section.id==="signatures")!]
+    :config.sections.filter(section=>section.enabled);
+  if(twoPage)config=twoPageSignatureConfig(config);
+  const sections=ordered.map(section=>({
     id:section.id,
     titleEn:section.titleEn,
     titleUr:section.titleUr,
@@ -180,6 +200,11 @@ async function loadAgreementSource(context:RequestContext,bookingId:string){
     termsImage = stored.bytes;
   }
   return {row,config,termsImageId,termsImage};
+}
+
+/** Both two-page signature blocks carry the customer and the agency (owner/representative). */
+function twoPageSignatureConfig(config: AgreementDesignConfig): AgreementDesignConfig {
+  return { ...config, signatures: { ...config.signatures, customer: true, representative: true } };
 }
 
 function renderHeader(doc: PDFKit.PDFDocument, fonts: PdfFonts, row: AgreementRow, config: AgreementDesignConfig, compactImageLayout: boolean) {
@@ -264,13 +289,15 @@ function renderTerms(doc: PDFKit.PDFDocument, fonts: PdfFonts, snapshot: string,
   const bilingual = Boolean(english && urdu);
   let englishBottom = startY;
   if (english) {
-    doc.font(fonts.regular).fontSize(config.density === "compact" ? 6.8 : 7.2).fillColor("#344054").text(english, 44, startY, { width: bilingual ? 242 : contentWidth, lineGap: 0.5 });
+    // A dedicated terms page (two-page layout) has room for comfortable reading sizes.
+    const roomy = config.pageLayout === "two_page";
+    doc.font(fonts.regular).fontSize(roomy ? 9 : config.density === "compact" ? 6.8 : 7.2).fillColor("#344054").text(english, 44, startY, { width: bilingual ? 242 : contentWidth, lineGap: roomy ? 3 : 0.5 });
     englishBottom = doc.y;
   }
   let urduBottom = startY;
   if (urdu) {
     const cleanUrdu = urdu.split("\n").map(line => line.replace(/^\s*\d+[.)]\s*/, "")).join("\n");
-    urduText(doc, fonts, cleanUrdu, bilingual ? 309 : 44, startY, bilingual ? 242 : contentWidth, config.density === "compact" ? 7.5 : 8, "#344054", 0.5);
+    urduText(doc, fonts, cleanUrdu, bilingual ? 309 : 44, startY, bilingual ? 242 : contentWidth, config.pageLayout === "two_page" ? 10 : config.density === "compact" ? 7.5 : 8, "#344054", config.pageLayout === "two_page" ? 3 : 0.5);
     urduBottom = doc.y;
   }
   doc.y = Math.max(englishBottom, urduBottom) + 9;

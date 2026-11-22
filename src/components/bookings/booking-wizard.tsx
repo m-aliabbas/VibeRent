@@ -59,6 +59,8 @@ type FleetOption = {
   perKmRate: number;
   minimumDays: number;
   withDriverRate:number;
+  /** Saved price for the chosen "going to" city, when the vehicle has one. */
+  cityRate?:number;
   lastOdometer?:number;
 };
 type DriverOption={id:string;name:string;phone:string};
@@ -247,7 +249,9 @@ export function BookingWizard() {
   // Derived fleet options from live vehicle data
   const fleetOptions: FleetOption[] = vehicles.filter((v) => v.status === "Available" || v.status === "Booked").map((v) => {
     const rule=v.rateRules?.find(item=>item.destinationCity.toLowerCase()===draft.city.toLowerCase());
-    return {id:v.id,label:`${v.make} ${v.model} ${v.year}`,plate:v.plate,city:v.city,baseRate:v.dailyRate,rate:draft.rentalMode==="with_driver"?(v.withDriverRate??v.dailyRate):(rule?.dailyRate??v.dailyRate),withDriverRate:v.withDriverRate??v.dailyRate,perKmRate:draft.rentalMode==="with_driver"?0:(rule?.perKmRate??0),minimumDays:rule?.minimumDays??1,lastOdometer:v.lastOdometer};
+    // Default rent = the price saved for the destination city. Self drive falls back to the standard
+    // rate; with-driver trips stay empty unless a city price is saved. Staff can always change it.
+    return {id:v.id,label:`${v.make} ${v.model} ${v.year}`,plate:v.plate,city:v.city,baseRate:v.dailyRate,rate:draft.rentalMode==="with_driver"?(rule?.dailyRate??0):(rule?.dailyRate??v.dailyRate),cityRate:rule?.dailyRate,withDriverRate:v.withDriverRate??v.dailyRate,perKmRate:draft.rentalMode==="with_driver"?0:(rule?.perKmRate??0),minimumDays:rule?.minimumDays??1,lastOdometer:v.lastOdometer};
   });
 
   // Unique cities from loaded vehicles (+ Lahore as default fallback)
@@ -288,7 +292,7 @@ export function BookingWizard() {
   // A vehicle chosen elsewhere (vehicle page, rebook) arrives without its rate: fill it once.
   useEffect(() => {
     // With-driver trips are priced per trip, so no rate is pre-filled for them.
-    if (draft.fulfillmentType === "fleet" && vehicle && draft.dailyRate === 0 && !draft.rateTouched && draft.rentalMode !== "with_driver") {
+    if (draft.fulfillmentType === "fleet" && vehicle && vehicle.rate > 0 && draft.dailyRate === 0 && !draft.rateTouched) {
       queueMicrotask(() => setDraft(current => current.vehicleId === vehicle.id && current.dailyRate === 0 && !current.rateTouched ? { ...current, dailyRate: vehicle.rate, checkout: { ...current.checkout, odometer: current.checkout.odometer || (vehicle.lastOdometer ?? 0) } } : current));
     }
   }, [draft.fulfillmentType, draft.dailyRate, draft.rateTouched, draft.rentalMode, vehicle]);
@@ -398,7 +402,7 @@ export function BookingWizard() {
               {section.id === "schedule" && <ScheduleStep draft={draft} setDraft={setDraft} cities={cities} drivers={drivers} onCityCreated={city=>setSavedCities(current=>[...new Set([...current,city])].sort())} />}
               {section.id === "vehicle" && <VehicleStep draft={draft} setDraft={setDraft} vehicles={eligibleVehicles} conflictMode={conflictMode} clearConflict={() => setConflictMode(false)} />}
               {section.id === "customer" && <CustomerStep draft={draft} setDraft={setDraft} customers={customers} bookingReference={bookingReference} onCustomerCreated={(c) => setCustomers((prev) => [c, ...prev.filter(item=>item.id!==c.id)])} />}
-              {section.id === "pricing" && <PricingStep draft={draft} setDraft={setDraft} days={days} total={total} tripTotal={tripTotal} baseRate={vehicle?.rate} />}
+              {section.id === "pricing" && <PricingStep draft={draft} setDraft={setDraft} days={days} total={total} tripTotal={tripTotal} baseRate={vehicle?.rate} cityRate={vehicle?.cityRate} />}
               {section.id === "handover" && <HandoverStep draft={draft} setDraft={setDraft} lastOdometer={draft.fulfillmentType==="fleet"?vehicle?.lastOdometer:undefined}/>}
             </BookingSection>
           ))}
@@ -472,7 +476,7 @@ function ScheduleStep({ draft, setDraft, cities, drivers, onCityCreated }: { dra
   const [pending,setPending]=useState(false);
   const [error,setError]=useState("");
   const exact=cities.find(city=>city.toLowerCase()===cityInput.trim().toLowerCase());
-  function chooseCity(value:string){setCityInput(value);setDraft({...draft,city:value,vehicleId:"",dailyRate:0,overrideReason:""})}
+  function chooseCity(value:string){setCityInput(value);setDraft({...draft,city:value,vehicleId:"",dailyRate:0,rateTouched:false,overrideReason:""})}
   async function addCity(){if(!cityInput.trim()||pending)return;setPending(true);setError("");const result=await createAgencyCityAction(cityInput);setPending(false);if(!result.ok){setError(result.error.message);return}onCityCreated(result.data.name);chooseCity(result.data.name)}
   return (
     <div className="grid gap-x-4 gap-y-3 sm:grid-cols-2 xl:grid-cols-3">
@@ -523,7 +527,7 @@ function VehicleStep({ draft, setDraft, vehicles, conflictMode, clearConflict }:
   const filteredVehicles=term?vehicles.filter(item=>`${item.label} ${item.plate} ${item.city}`.toLocaleLowerCase("en").includes(term)):vehicles;
   const availableVehicles=filteredVehicles.filter(item=>!item.conflicts.length);
   const bookedVehicles=filteredVehicles.filter(item=>item.conflicts.length>0);
-  const pick = (item: EligibleVehicle) => { setDraft({ ...draft, vehicleId: item.id, dailyRate: draft.rentalMode === "with_driver" ? (draft.rateTouched ? draft.dailyRate : 0) : draft.rateTouched ? draft.dailyRate : item.rate, checkout: { ...draft.checkout, odometer: item.lastOdometer ?? 0 } }); clearConflict(); };
+  const pick = (item: EligibleVehicle) => { setDraft({ ...draft, vehicleId: item.id, dailyRate: draft.rateTouched ? draft.dailyRate : item.rate, checkout: { ...draft.checkout, odometer: item.lastOdometer ?? 0 } }); clearConflict(); };
   if (draft.fulfillmentType === "external") return (
     <div>
       <button type="button" onClick={() => setDraft({ ...draft, fulfillmentType: "fleet", dailyRate: 0 })} className="mb-3 text-sm font-semibold text-[#0058B8] hover:underline">← Pick from our fleet instead</button>
@@ -552,7 +556,7 @@ function VehicleStep({ draft, setDraft, vehicles, conflictMode, clearConflict }:
                   {selected ? <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-[#006FE6] text-white"><Check size={13} /></span> : <span className="h-5 w-5 shrink-0 rounded-full border border-[#D0D5DD]" />}
                 </span>
                 <span className="mt-0.5 block text-xs text-[#475467]"><span className="font-mono">{item.plate}</span> · {item.city}</span>
-                <span className="mt-2 block text-base font-bold tabular-nums">{draft.rentalMode === "with_driver" ? <span className="text-sm font-semibold text-[#475467]">Price per trip</span> : <>{formatPkr(item.rate)}<span className="text-xs font-normal text-[#475467]"> /day</span></>}</span>
+                <span className="mt-2 block text-base font-bold tabular-nums">{item.rate ? <>{formatPkr(item.rate)}<span className="text-xs font-normal text-[#475467]"> /day{item.cityRate ? ` · ${draft.city} price` : ""}</span></> : <span className="text-sm font-semibold text-[#475467]">Price per trip</span>}</span>
               </button>
             );
           })}
@@ -971,19 +975,19 @@ function initials(name:string){return name.trim().split(/\s+/).slice(0,2).map(pa
 
 // ─── Pricing step ────────────────────────────────────────────────────────────
 
-function PricingStep({ draft, setDraft, days, total, tripTotal, baseRate }: { draft: Draft; setDraft: (value: Draft) => void; days: number; total: number; tripTotal: number; baseRate?: number }) {
-  const rateChanged = baseRate !== undefined && draft.dailyRate !== baseRate && draft.rentalMode !== "with_driver";
+function PricingStep({ draft, setDraft, days, total, tripTotal, baseRate, cityRate }: { draft: Draft; setDraft: (value: Draft) => void; days: number; total: number; tripTotal: number; baseRate?: number; cityRate?: number }) {
+  const rateChanged = Boolean(baseRate) && draft.dailyRate !== baseRate;
   const supplierPayable=draft.external.pricingMode==="percentage"?Math.round(Math.max(0,total-tripTotal)*draft.external.supplierSharePercent/100):draft.external.supplierFixedCost;
   const charges = draft.tripCharges ?? [];
   const setCharges = (next: TripChargeDraft[]) => setDraft({ ...draft, tripCharges: next });
   const withDriver = draft.rentalMode === "with_driver";
   return (
     <div className="grid gap-x-4 gap-y-3 sm:grid-cols-3">
-      {withDriver && <p className="rounded-lg border border-[#B2DDFF] bg-[#EFF8FF] p-3 text-xs text-[#175CD3] sm:col-span-3">With-driver trips start with no amount. Enter the agreed rent per day, or leave it at 0 and settle it after the trip. Add toll tax, fuel and driver expenses below — all of these can be changed later from the booking.</p>}
-      <FormInput label={withDriver ? "Rent per day (PKR)" : "Daily rate (PKR)"} type="number" inputMode="numeric" min={0} value={draft.dailyRate||""} placeholder="0 = agree later" onChange={(e)=>setDraft({...draft,dailyRate:Number(e.target.value)||0,rateTouched:true})} hint={`${days} day${days===1?"":"s"}${baseRate&&!withDriver?` · standard ${formatPkr(baseRate)}`:""}`} />
+      {withDriver && !cityRate && <p className="rounded-lg border border-[#B2DDFF] bg-[#EFF8FF] p-3 text-xs text-[#175CD3] sm:col-span-3">No price is saved for {draft.city || "this city"}, so this with-driver trip starts with no amount. Enter the agreed rent per day, or leave it at 0 and settle it after the trip. Toll tax, fuel and driver expenses go below — everything can be changed later from the booking.</p>}
+      <FormInput label={withDriver ? "Rent per day (PKR)" : "Daily rate (PKR)"} type="number" inputMode="numeric" min={0} value={draft.dailyRate||""} placeholder="0 = agree later" onChange={(e)=>setDraft({...draft,dailyRate:Number(e.target.value)||0,rateTouched:true})} hint={`${days} day${days===1?"":"s"}${baseRate?` · saved ${cityRate?`${draft.city} `:""}price ${formatPkr(baseRate)}`:""}${baseRate&&draft.dailyRate!==baseRate?" · changed":""}`} />
       <FormInput label="Deposit (optional)" type="number" inputMode="numeric" min={0} value={draft.deposit||""} placeholder="None" onChange={(e) => setDraft({ ...draft, deposit: Number(e.target.value) })} />
       <FormInput label="Discount" type="number" inputMode="numeric" min={0} value={draft.discount||""} placeholder="0" onChange={(e) => setDraft({ ...draft, discount: Number(e.target.value) })} />
-      {draft.fulfillmentType==="fleet"&&rateChanged&&<div className="sm:col-span-3"><FormInput label="Note on the negotiated rate (optional)" value={draft.overrideReason} onChange={(e)=>setDraft({...draft,overrideReason:e.target.value})} placeholder="e.g. regular customer, 3-day package"/></div>}
+      {draft.fulfillmentType==="fleet"&&rateChanged&&<div className="flex flex-col gap-2 sm:col-span-3 sm:flex-row sm:items-end"><button type="button" onClick={()=>setDraft({...draft,dailyRate:baseRate??0,rateTouched:false})} className="h-10 shrink-0 rounded-[9px] border border-[#D0D5DD] px-3 text-sm font-semibold text-[#344054] hover:bg-[#F8FAFC]">Use saved price {formatPkr(baseRate??0)}</button><div className="flex-1"><FormInput label="Note on the negotiated rate (optional)" value={draft.overrideReason} onChange={(e)=>setDraft({...draft,overrideReason:e.target.value})} placeholder="e.g. regular customer, 3-day package"/></div></div>}
       <section className="rounded-xl border border-[#E4E7EC] p-3 sm:col-span-3" aria-label="Trip charges">
         <div className="flex flex-wrap items-center justify-between gap-2"><div><h3 className="text-sm font-bold text-[#1D2939]">Trip charges <span className="font-normal text-[#667085]">(optional)</span></h3><p className="text-xs text-[#667085]">Toll tax, fuel, driver expense or parking billed to the customer. Editable after booking too.</p></div><Button type="button" size="sm" variant="secondary" onClick={()=>setCharges([...charges,{kind:withDriver?"toll":"other",description:"",amount:0}])}><Plus size={15}/>Add charge</Button></div>
         {charges.length>0&&<div className="mt-3 space-y-2">{charges.map((charge,index)=><div key={index} className="grid gap-2 rounded-lg bg-[#F8FAFC] p-2 sm:grid-cols-[150px_1fr_140px_auto] sm:items-end">

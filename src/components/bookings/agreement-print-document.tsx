@@ -18,7 +18,9 @@ export function AgreementPrintDocument({data}:{data:RentalAgreementPrintData}){
       </div>
       <div className="mt-4 border-t-[3px] pt-3" style={{borderColor:config.accentColor}}><div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3"><h2 className="text-left text-xl font-bold" style={{color:config.accentColor}}>{showEnglish?config.titleEn:""}</h2><strong className="text-xs text-[#344054]">Booking #{data.bookingNumber}</strong><h2 lang="ur" dir="rtl" className="text-right text-xl font-bold" style={{color:config.accentColor}}>{showUrdu?config.titleUr:""}</h2></div></div>
     </header>
-    <main className={compact?"mt-3 space-y-3":"mt-4 space-y-4"}>{data.sections.map(section=><AgreementSection key={section.id} section={section} data={data}/>)}</main>
+    <main className={compact?"mt-3 space-y-3":"mt-4 space-y-4"}>{data.sections.map((section,index)=>config.pageLayout==="two_page"&&section.id==="terms"
+      ?<div key={`terms-${index}`} style={{breakBefore:"page"}} className="pt-2"><AgreementSection section={section} data={data}/></div>
+      :<AgreementSection key={`${section.id}-${index}`} section={section} data={data}/>)}</main>
     {data.attachments.map(group=><section key={group.title} className="agreement-annexure mt-6 break-before-page" style={{breakBefore:"page"}}>
       <div className="flex items-end justify-between border-b pb-1" style={{borderColor:`${config.accentColor}55`}}><h3 className="text-sm font-bold uppercase" style={{color:config.accentColor}}>{group.title}</h3><span className="text-[10px] text-[#667085]">Annexure · Booking #{data.bookingNumber}</span></div>
       <div className="mt-3 grid grid-cols-2 gap-4">{group.images.map(image=><figure key={image.url} className="break-inside-avoid"><div className="relative aspect-[1.58] overflow-hidden rounded-md bg-[#F8FAFC]"><Image unoptimized src={image.url} alt={image.label} fill className="object-contain"/></div><figcaption className="mt-1 text-center text-[10px] font-semibold text-[#344054]">{image.label}</figcaption></figure>)}</div>
