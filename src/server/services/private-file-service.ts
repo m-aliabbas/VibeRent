@@ -17,7 +17,7 @@ export type PrivateFileDto = {
   originalName: string;
   mimeType: string;
   size: number;
-  classification: "vehicle_photo" | "vehicle_document" | "customer_cnic_front" | "customer_cnic_back" | "customer_license_front" | "customer_license_back" | "guarantor_cnic_front" | "guarantor_cnic_back" | "guarantor_license_front" | "guarantor_license_back" | "agreement_terms_image" | "notification_document";
+  classification: "vehicle_photo" | "vehicle_document" | "customer_cnic_front" | "customer_cnic_back" | "customer_license_front" | "customer_license_back" | "guarantor_cnic_front" | "guarantor_cnic_back" | "guarantor_license_front" | "guarantor_license_back" | "customer_selfie" | "guarantor_selfie" | "agreement_terms_image" | "notification_document";
   createdAt: string;
   downloadUrl: string;
 };

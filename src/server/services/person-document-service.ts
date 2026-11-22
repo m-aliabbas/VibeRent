@@ -10,20 +10,20 @@ import { DomainError } from "@/server/domain/errors";
 import { getPrivateFileRoot } from "@/server/desktop/runtime-paths";
 
 /**
- * Identity document images. Customers and guarantors keep CNIC and driving-license sides, vehicle
+ * Identity document images. Customers and guarantors keep CNIC and driving-license sides and a selfie, vehicle
  * owners keep their CNIC, and vehicles keep the registration card and the registered owner's CNIC.
  * Each side is one slot: a new upload replaces the previous image (kept as `replaced` for history),
  * and staff can remove a slot.
  */
-export const personDocumentSlots = ["cnic_front", "cnic_back", "license_front", "license_back", "registration_front", "registration_back", "owner_cnic_front", "owner_cnic_back"] as const;
+export const personDocumentSlots = ["cnic_front", "cnic_back", "license_front", "license_back", "registration_front", "registration_back", "owner_cnic_front", "owner_cnic_back", "selfie"] as const;
 export type PersonDocumentSlot = (typeof personDocumentSlots)[number];
 /** `customer_draft` holds images picked while a new customer is being created (id `cnd_<uuid>`). */
 export type PersonDocumentOwner = "customer" | "customer_draft" | "guarantor" | "owner" | "vehicle";
 
 export const slotsForOwner: Record<PersonDocumentOwner, readonly PersonDocumentSlot[]> = {
-  customer: ["cnic_front", "cnic_back", "license_front", "license_back"],
-  customer_draft: ["cnic_front", "cnic_back", "license_front", "license_back"],
-  guarantor: ["cnic_front", "cnic_back", "license_front", "license_back"],
+  customer: ["cnic_front", "cnic_back", "license_front", "license_back", "selfie"],
+  customer_draft: ["cnic_front", "cnic_back", "license_front", "license_back", "selfie"],
+  guarantor: ["cnic_front", "cnic_back", "license_front", "license_back", "selfie"],
   owner: ["cnic_front", "cnic_back"],
   vehicle: ["registration_front", "registration_back", "owner_cnic_front", "owner_cnic_back"],
 };
@@ -129,5 +129,5 @@ export async function removePersonDocument(context: RequestContext, owner: Perso
 export async function attachCustomerDocumentDraft(context: RequestContext, draftId: string, customerId: string, now: string) {
   if (!/^cnd_[0-9a-f-]{36}$/.test(draftId)) throw new DomainError("VALIDATION_FAILED", "The customer document session is invalid.", 400);
   await execute(`UPDATE private_files SET entity_type='customer',entity_id=?,updated_at=?
-    WHERE agency_id=? AND entity_type='customer_draft' AND entity_id=? AND classification IN ('customer_license_front','customer_license_back') AND status='ready'`, [customerId, now, context.agencyId, draftId]);
+    WHERE agency_id=? AND entity_type='customer_draft' AND entity_id=? AND classification IN ('customer_license_front','customer_license_back','customer_selfie') AND status='ready'`, [customerId, now, context.agencyId, draftId]);
 }

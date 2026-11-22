@@ -81,7 +81,7 @@ export function GuarantorProfile({ guarantor }: { guarantor: GuarantorDetailDto 
         </dl>
         <p className="mt-4 text-xs text-[#667085]">Edit these details from the Guarantors list.</p>
       </DetailPanel>
-      <DetailPanel title="CNIC &amp; driving license images"><PersonDocuments owner="guarantor" ownerId={guarantor.id} /></DetailPanel>
+      <DetailPanel title="CNIC, driving license &amp; selfie"><PersonDocuments owner="guarantor" ownerId={guarantor.id} /></DetailPanel>
     </div>
     <DetailPanel title={`Customers backed (${guarantor.customers.length})`} action={<Button size="sm" variant="secondary" onClick={() => picking ? setPicking(false) : void startPicking()}><Link2 size={15} />{picking ? "Close" : "Link customer"}</Button>}>
       {picking && <div className="mb-4 rounded-[10px] border border-[#B2DDFF] bg-[#F5FAFF] p-3">

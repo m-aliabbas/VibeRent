@@ -2,18 +2,19 @@
 
 import Image from "next/image";
 import { useEffect, useState } from "react";
-import { Camera, IdCard, Trash2 } from "lucide-react";
+import { Camera, IdCard, Trash2, UserRound } from "lucide-react";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import type { PersonDocumentOwner, PersonDocumentSlot, PersonDocumentsDto } from "@/server/services/person-document-service";
 
 const labels: Record<PersonDocumentSlot, string> = {
   cnic_front: "CNIC front", cnic_back: "CNIC back", license_front: "License front", license_back: "License back",
   registration_front: "Registration card front", registration_back: "Registration card back", owner_cnic_front: "Owner CNIC front", owner_cnic_back: "Owner CNIC back",
+  selfie: "Selfie",
 };
 const ownerSlots: Record<PersonDocumentOwner, PersonDocumentSlot[]> = {
-  customer: ["cnic_front", "cnic_back", "license_front", "license_back"],
-  customer_draft: ["cnic_front", "cnic_back", "license_front", "license_back"],
-  guarantor: ["cnic_front", "cnic_back", "license_front", "license_back"],
+  customer: ["cnic_front", "cnic_back", "license_front", "license_back", "selfie"],
+  customer_draft: ["cnic_front", "cnic_back", "license_front", "license_back", "selfie"],
+  guarantor: ["cnic_front", "cnic_back", "license_front", "license_back", "selfie"],
   owner: ["cnic_front", "cnic_back"],
   vehicle: ["registration_front", "registration_back", "owner_cnic_front", "owner_cnic_back"],
 };
@@ -21,7 +22,7 @@ const ownerSlots: Record<PersonDocumentOwner, PersonDocumentSlot[]> = {
 type Envelope = { data?: PersonDocumentsDto; error?: { message: string } };
 
 /**
- * CNIC and driving-license images (front and back) of a customer or guarantor. Every slot is
+ * CNIC and driving-license images (front and back) and a selfie of a customer or guarantor. Every slot is
  * optional; a new image replaces that side. `readOnly` shows the images without upload or remove.
  */
 export function PersonDocuments({ owner, ownerId, readOnly = false, compact = false, only, onChange }: { owner: PersonDocumentOwner; ownerId: string; readOnly?: boolean; compact?: boolean; only?: PersonDocumentSlot[]; onChange?: (value: PersonDocumentsDto) => void }) {
@@ -68,30 +69,31 @@ export function PersonDocuments({ owner, ownerId, readOnly = false, compact = fa
     finally { setBusy(undefined); setRemoving(undefined); }
   }
 
+  const shown = ownerSlots[owner].filter(slot => !only || only.includes(slot));
   const saved = message.endsWith("saved.") || message === "Image removed.";
   return <div>
     {message && <p role="status" className={`mb-3 rounded-lg p-2.5 text-sm ${saved ? "bg-[#ECFDF3] text-[#067647]" : "bg-[#FEF3F2] text-[#B42318]"}`}>{message}</p>}
-    <div className={`grid gap-3 ${ownerSlots[owner].length === 2 ? "grid-cols-2" : compact ? "grid-cols-2 sm:grid-cols-4" : "grid-cols-2 lg:grid-cols-4"}`}>
-      {ownerSlots[owner].filter(slot => !only || only.includes(slot)).map(slot => ({ slot, label: labels[slot] })).map(({ slot, label }) => {
+    <div className={`grid gap-3 ${shown.length <= 3 ? "grid-cols-2 sm:grid-cols-3" : shown.length >= 5 ? "grid-cols-2 sm:grid-cols-3 lg:grid-cols-5" : compact ? "grid-cols-2 sm:grid-cols-4" : "grid-cols-2 lg:grid-cols-4"}`}>
+      {shown.map(slot => ({ slot, label: labels[slot] })).map(({ slot, label }) => {
         const document = value?.documents[slot];
         return <figure key={slot} className="min-w-0">
           <figcaption className="mb-1.5 text-xs font-semibold text-[#475467]">{label}</figcaption>
           {document
             ? <a href={document.url} target="_blank" rel="noreferrer" className="group relative block aspect-[1.58] overflow-hidden rounded-[10px] border border-[#EAECF0] bg-[#F2F4F7]" aria-label={`Open ${label}`}>
-              <Image src={document.url} alt={label} fill unoptimized className="object-cover transition group-hover:scale-[1.02]" />
+              <Image src={document.url} alt={label} fill unoptimized className={`${slot === "selfie" ? "object-contain" : "object-cover"} transition group-hover:scale-[1.02]`} />
             </a>
-            : <div className="grid aspect-[1.58] place-items-center rounded-[10px] border border-dashed border-[#D0D5DD] bg-[#F8FAFC] text-[#98A2B3]">{loading ? <span className="text-xs">Loading…</span> : <IdCard size={22} aria-label="No image" />}</div>}
+            : <div className="grid aspect-[1.58] place-items-center rounded-[10px] border border-dashed border-[#D0D5DD] bg-[#F8FAFC] text-[#98A2B3]">{loading ? <span className="text-xs">Loading…</span> : slot === "selfie" ? <UserRound size={22} aria-label="No selfie" /> : <IdCard size={22} aria-label="No image" />}</div>}
           {!readOnly && <div className="mt-1.5 flex gap-1.5">
             <label className={`inline-flex h-9 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-[9px] border border-[#D0D5DD] bg-white px-2 text-xs font-semibold text-[#344054] hover:bg-[#F8FAFC] ${busy || loading ? "pointer-events-none opacity-50" : ""}`}>
               <Camera size={14} />{busy === slot ? "Saving…" : document ? "Replace" : "Add"}
-              <input type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" disabled={Boolean(busy) || loading} onChange={event => { void upload(slot, event.target.files?.[0]); event.target.value = ""; }} />
+              <input type="file" accept="image/jpeg,image/png,image/webp" capture={slot === "selfie" ? "user" : undefined} className="sr-only" disabled={Boolean(busy) || loading} onChange={event => { void upload(slot, event.target.files?.[0]); event.target.value = ""; }} />
             </label>
             {document && <button type="button" disabled={Boolean(busy)} onClick={() => setRemoving({ slot, fileId: document.id })} className="grid h-9 w-9 place-items-center rounded-[9px] border border-[#D0D5DD] bg-white text-[#B42318] hover:bg-[#FEF3F2] disabled:opacity-50" aria-label={`Remove ${label}`}><Trash2 size={14} /></button>}
           </div>}
         </figure>;
       })}
     </div>
-    {!readOnly && <p className="mt-2 text-xs text-[#667085]">Optional · JPG, PNG or WebP up to 10 MB · on a phone, Add opens the camera or gallery.</p>}
+    {!readOnly && <p className="mt-2 text-xs text-[#667085]">Optional · JPG, PNG or WebP up to 10 MB · on a phone, Add opens the camera or gallery (the selfie opens the front camera).</p>}
     <ConfirmDialog open={Boolean(removing)} onOpenChange={next => !next && setRemoving(undefined)} title="Remove this image?" description="The image is removed from this record. You can add a new one at any time." onConfirm={() => void remove()} pending={Boolean(busy)} confirmLabel="Remove image" pendingLabel="Removing…" />
   </div>;
 }

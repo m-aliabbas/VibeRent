@@ -75,3 +75,28 @@ export async function extractStoredLicense(front: StoredImage | undefined, back:
     return { status: "failed", result: null };
   }
 }
+
+type UploadedImage = { bytes: Uint8Array; mimeType: CnicImageMimeType };
+
+/**
+ * Reads a licence straight from uploaded images (no draft): the front alone is enough, the back adds
+ * categories and address. Throws `not_configured` / `failed` as the status for the route to map.
+ */
+export async function extractLicenseFromUploads(front: UploadedImage | undefined, back: UploadedImage | undefined): Promise<{ status: CnicOcrStatus; result: LicenseOcrResult | null }> {
+  if (!front && !back) return { status: "waiting_for_pair", result: null };
+  try {
+    const apiKey = await resolveOpenAiApiKey();
+    if (!apiKey) return { status: "not_configured", result: null };
+    const toUrl = async (item: UploadedImage) => {
+      if (!item.bytes.byteLength || item.bytes.byteLength > MAX_CNIC_IMAGE_BYTES) throw new Error("Invalid licence image.");
+      const oriented = await orientCnicImageForOcr({ imageBytes: item.bytes, mimeType: item.mimeType });
+      return `data:${oriented.mimeType};base64,${Buffer.from(oriented.imageBytes).toString("base64")}`;
+    };
+    const primary = front ?? back!;
+    const [frontUrl, backUrl] = await Promise.all([toUrl(primary), front && back ? toUrl(back) : Promise.resolve(undefined)]);
+    const gateway = new OpenAiCnicOcrGateway(new OpenAI({ apiKey }));
+    return { status: "complete", result: parseLicenseOcrResult(await gateway.extractLicense({ front: frontUrl, back: backUrl })) };
+  } catch {
+    return { status: "failed", result: null };
+  }
+}

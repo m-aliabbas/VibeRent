@@ -245,3 +245,49 @@ export async function uploadBookingLicense(context: RequestContext, draftId: str
   await execute(`UPDATE private_files SET ocr_status=?,ocr_result=?,updated_at=? WHERE agency_id=? AND entity_type='booking_draft' AND entity_id=? AND classification IN (?,?) AND status='ready'`,[extraction.status,extraction.result?JSON.stringify(extraction.result):null,new Date().toISOString(),context.agencyId,draftId,licenseClassification(purpose,"front"),licenseClassification(purpose,"back")]);
   return buildLicenseIntake(context.agencyId,draftId,purpose);
 }
+
+// ─── Selfie intake ─────────────────────────────────────────────────────────
+// A photo of the renter or guarantor taken during a booking (classification `<purpose>_selfie`).
+// It lives on the draft and moves onto the customer or guarantor when the booking is confirmed.
+
+export type BookingSelfieDto = { bookingDraftId: string; purpose: BookingCnicPurpose; selfie: BookingCnicFileDto | null };
+
+async function buildSelfie(agencyId: string, draftId: string, purpose: BookingCnicPurpose): Promise<BookingSelfieDto> {
+  const row = await queryOne<FileRow>(`SELECT id,storage_key AS storageKey,original_name AS originalName,mime_type AS mimeType,size,classification,ocr_status AS ocrStatus,ocr_result AS ocrResult,created_at AS createdAt
+    FROM private_files WHERE agency_id=? AND entity_type='booking_draft' AND entity_id=? AND classification=? AND status='ready'
+    ORDER BY created_at DESC LIMIT 1`,[agencyId,draftId,`${purpose}_selfie`]);
+  const selfie = fileDto(row,"front");
+  return { bookingDraftId:draftId, purpose, selfie: selfie ? { ...selfie, ocrStatus:"complete" } : null };
+}
+
+export async function getBookingSelfie(context: RequestContext, draftId: string, purpose: BookingCnicPurpose = "customer") {
+  requireRole(context,["agency_owner","fleet_manager","rental_agent"]);
+  await getDraft(context.agencyId,draftId);
+  return buildSelfie(context.agencyId,draftId,purpose);
+}
+
+export async function uploadBookingSelfie(context: RequestContext, draftId: string, file: File, purpose: BookingCnicPurpose = "customer"): Promise<BookingSelfieDto> {
+  requireRole(context,["agency_owner","fleet_manager","rental_agent"]);
+  if(purpose!=="customer"&&purpose!=="guarantor")throw new DomainError("VALIDATION_FAILED","Choose the customer or guarantor selfie.",400);
+  await getDraft(context.agencyId,draftId);
+  if (!["image/jpeg","image/png","image/webp"].includes(file.type)) throw new DomainError("VALIDATION_FAILED","Use a JPG, PNG or WebP image.",415,{image:"Unsupported image type."});
+  if (!file.size || file.size > MAX_CNIC_IMAGE_BYTES) throw new DomainError("VALIDATION_FAILED","The image must be 10 MiB or smaller.",413,{image:"Choose a smaller image."});
+  const id=`file_${randomUUID()}`;
+  const storageKey=`${context.agencyId}/booking-drafts/${draftId}/${purpose}-selfie/${randomUUID()}`;
+  const absolutePath=path.join(storageRoot,storageKey);
+  await mkdir(path.dirname(absolutePath),{recursive:true,mode:0o700});
+  await writeFile(`${absolutePath}.uploading`,Buffer.from(await file.arrayBuffer()),{flag:"wx",mode:0o600});
+  await rename(`${absolutePath}.uploading`,absolutePath);
+  const now=new Date().toISOString();
+  try {
+    await inTransaction(async ()=>{
+      await execute(`UPDATE private_files SET status='replaced',updated_at=? WHERE agency_id=? AND entity_type='booking_draft' AND entity_id=? AND classification=? AND status='ready'`,[now,context.agencyId,draftId,`${purpose}_selfie`]);
+      await execute(`INSERT INTO private_files (id,agency_id,entity_type,entity_id,storage_key,original_name,mime_type,size,classification,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,'ready',?,?)`,[id,context.agencyId,"booking_draft",draftId,storageKey,safeName(file.name||"selfie.jpg"),file.type,file.size,`${purpose}_selfie`,now,now]);
+      await execute(`INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)`,[randomUUID(),context.agencyId,context.userId,"booking.selfie_received","booking_draft",draftId,JSON.stringify({fileId:id,purpose}),now]);
+    },{immediate:true});
+  } catch(error) {
+    await unlink(absolutePath).catch(()=>undefined);
+    throw error;
+  }
+  return buildSelfie(context.agencyId,draftId,purpose);
+}

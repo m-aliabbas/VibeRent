@@ -290,8 +290,8 @@ export async function listAvailableVehicles(context: RequestContext, pickupAt: s
   if (!Number.isFinite(pickup) || !Number.isFinite(returned) || returned <= pickup) {
     throw new DomainError("VALIDATION_FAILED", "Enter a valid pickup and return interval.", 400, { returnAt: "Return must be after pickup." });
   }
-  return queryAll(`
-    SELECT v.id, v.plate, v.make, v.model, v.year, v.category, v.daily_rate AS dailyRate,
+  const vehicles = await queryAll<{ id: string } & Record<string, unknown>>(`
+    SELECT v.id, v.plate, v.make, v.model, v.year, v.category, v.daily_rate AS dailyRate, v.with_driver_rate AS withDriverRate,
       b.id AS branchId, b.name AS branch, b.city, v.updated_at AS updatedAt
     FROM vehicles v
     JOIN branches b ON b.id=v.branch_id AND b.agency_id=v.agency_id
@@ -300,4 +300,7 @@ export async function listAvailableVehicles(context: RequestContext, pickupAt: s
       AND NOT EXISTS (SELECT 1 FROM availability_blocks ab WHERE ab.agency_id=v.agency_id AND ab.vehicle_id=v.id AND ab.archived_at IS NULL AND ab.start_at < ? AND ab.end_at > ?)
     ORDER BY b.city, v.daily_rate, v.plate
   `,[context.agencyId, new Date(returned).toISOString(), new Date(pickup).toISOString(), new Date(returned).toISOString(), new Date(pickup).toISOString()]);
+  // Saved prices per "going to" city, so a booking can start from the city's price (mobile and web).
+  const rules = await queryAll<{ vehicleId: string; destinationCity: string; dailyRate: number; perKmRate: number; minimumDays: number }>(`SELECT vehicle_id AS vehicleId, destination_city AS destinationCity, daily_rate AS dailyRate, per_km_rate AS perKmRate, minimum_days AS minimumDays FROM vehicle_rate_rules WHERE agency_id=? AND active=1 ORDER BY destination_city`,[context.agencyId]);
+  return vehicles.map(vehicle => ({ ...vehicle, withDriverRate: vehicle.withDriverRate ?? vehicle.dailyRate, rateRules: rules.filter(rule => rule.vehicleId === vehicle.id).map(rule => ({ destinationCity: rule.destinationCity, dailyRate: rule.dailyRate, perKmRate: rule.perKmRate, minimumDays: rule.minimumDays })) }));
 }

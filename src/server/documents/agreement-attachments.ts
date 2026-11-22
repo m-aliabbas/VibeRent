@@ -19,6 +19,7 @@ const idSlots = (prefix: string, who: string) => [
   { classification: `${prefix}_cnic_back`, label: `${who} CNIC back` },
   { classification: `${prefix}_license_front`, label: `${who} licence front` },
   { classification: `${prefix}_license_back`, label: `${who} licence back` },
+  { classification: `${prefix}_selfie`, label: `${who} photo` },
 ];
 
 async function loadSource(agencyId: string, source: Source, withBytes: boolean): Promise<AttachmentImage[]> {
@@ -54,7 +55,7 @@ async function toPdfImage(storageKey: string) {
 }
 
 /**
- * Images attached to a rental agreement: page 2 holds the renter's and guarantor's CNIC and licence,
+ * Images attached to a rental agreement: page 2 holds the renter's and guarantor's CNIC, licence and selfie,
  * page 3 the vehicle photos, registration card and registered owner's CNIC.
  */
 export async function loadAgreementAttachments(agencyId: string, ids: { customerId: string | null; guarantorId: string | null; vehicleId: string | null; ownerId: string | null }, options: { idDocuments: boolean; vehicleImages: boolean; withBytes: boolean }) {
