@@ -10,6 +10,35 @@ export const MAX_CNIC_IMAGE_BYTES = 10 * 1024 * 1024;
 
 export interface CnicOcrGateway {
   extract(images: { front: string; back: string; backAddressDetail?: string }): Promise<string>;
+  /** Optional address-only re-read, used when the first pass returns no address. */
+  extractAddress?(images: { back: string; backAddressDetail?: string }): Promise<string>;
+}
+
+/** 13-digit CNIC as 12345-1234567-1, or null when the digits do not form a CNIC. */
+export function normalizeCnicNumber(value: string | null): string | null {
+  if (!value) return null;
+  const digits = value.replace(/\D/g, "");
+  return digits.length === 13 ? `${digits.slice(0, 5)}-${digits.slice(5, 12)}-${digits.slice(12)}` : null;
+}
+
+/** Dates as DD.MM.YYYY regardless of the separator the model used; unknown shapes are kept as printed. */
+export function normalizeOcrDate(value: string | null): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  const dmy = trimmed.match(/^(\d{1,2})[./\- ](\d{1,2})[./\- ](\d{4})$/);
+  if (dmy) return `${dmy[1].padStart(2, "0")}.${dmy[2].padStart(2, "0")}.${dmy[3]}`;
+  const ymd = trimmed.match(/^(\d{4})[./\-](\d{1,2})[./\-](\d{1,2})$/);
+  if (ymd) return `${ymd[3].padStart(2, "0")}.${ymd[2].padStart(2, "0")}.${ymd[1]}`;
+  const months = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"];
+  const named = trimmed.match(/^(\d{1,2})[\s\-./]*([A-Za-z]{3})[A-Za-z]*[\s\-./,]*(\d{4})$/);
+  if (named && months.includes(named[2].toLowerCase())) return `${named[1].padStart(2, "0")}.${String(months.indexOf(named[2].toLowerCase()) + 1).padStart(2, "0")}.${named[3]}`;
+  return trimmed;
+}
+
+function cleanAddress(value: string | null) {
+  if (!value) return null;
+  const cleaned = value.replace(/\s*\n\s*/g, ", ").replace(/\s{2,}/g, " ").replace(/(,\s*){2,}/g, ", ").replace(/^[,\s]+|[,\s]+$/g, "");
+  return cleaned.length >= 4 ? cleaned : null;
 }
 
 function sharpFormatMimeType(format: string | undefined, fallback: CnicImageMimeType): CnicImageMimeType {
@@ -138,6 +167,11 @@ export function parseCnicOcrResult(outputText: string): CnicOcrResult {
   };
 }
 
+/** Tidies model output: canonical CNIC, DD.MM.YYYY dates and a single-line address. */
+export function normalizeCnicOcrResult(result: CnicOcrResult): CnicOcrResult {
+  return { ...result, cnic_no: normalizeCnicNumber(result.cnic_no), dob: normalizeOcrDate(result.dob), expiry: normalizeOcrDate(result.expiry), address: cleanAddress(result.address) };
+}
+
 export function formatCnicOcrText(result: CnicOcrResult): string {
   return [
     `name: ${result.name ?? ""}`,
@@ -172,10 +206,17 @@ export class CnicOcrService {
     const backAddressDetail = await createBackAddressDetail(back);
     const dataUrl = (image: CnicOcrInput["front"]) =>
       `data:${image.mimeType};base64,${Buffer.from(image.imageBytes).toString("base64")}`;
-    return parseCnicOcrResult(await this.gateway.extract({
+    const result = normalizeCnicOcrResult(parseCnicOcrResult(await this.gateway.extract({
       front: dataUrl(front),
       back: dataUrl(back),
       ...(backAddressDetail ? { backAddressDetail: dataUrl(backAddressDetail) } : {}),
-    }));
+    })));
+    if (!result.address && this.gateway.extractAddress) {
+      try {
+        const parsed = JSON.parse(await this.gateway.extractAddress({ back: dataUrl(back), ...(backAddressDetail ? { backAddressDetail: dataUrl(backAddressDetail) } : {}) })) as { address?: unknown };
+        result.address = cleanAddress(typeof parsed.address === "string" ? parsed.address : null);
+      } catch { /* The first-pass fields are still useful without an address. */ }
+    }
+    return result;
   }
 }

@@ -13,8 +13,19 @@ import { DomainError } from "@/server/domain/errors";
 import { wrapRtlText } from "@/server/documents/rtl-text";
 import { readPrivateFile } from "@/server/services/private-file-service";
 import { readImageDimensions } from "@/server/files/image-dimensions";
+import { loadAgreementAttachments, type AgreementAttachmentGroup } from "@/server/documents/agreement-attachments";
+import { bookingActorId, documentBrandingUrls, loadDocumentBranding, type DocumentBranding } from "@/server/services/branding-service";
 
 type AgreementRow = {
+  bookingId: string;
+  customerId: string;
+  guarantorId: string | null;
+  vehicleId: string | null;
+  ownerId: string | null;
+  extras: number;
+  tripCharges: number;
+  discount: number;
+  vehicleValue: number | null;
   publicNumber: number | null;
   pickupAt: string;
   returnAt: string;
@@ -65,6 +76,9 @@ export type RentalAgreementPrintData = {
   guarantor: AgreementPrintField[] | null;
   termsText: string;
   termsImageUrl: string | null;
+  signatureUrl: string | null;
+  stampUrl: string | null;
+  attachments: Array<{ title: string; images: Array<{ label: string; url: string }> }>;
 };
 const pageWidth = 595.28;
 const contentWidth = 507;
@@ -74,6 +88,10 @@ const minimumTermsImageHeight = 110;
 export async function createRentalAgreementPdf(context: RequestContext, bookingId: string): Promise<{ bytes: Buffer; fileName: string; customerPhone: string }> {
   const timeZone = await getAgencyTimeZone(context.agencyId);
   const {row,config,termsImage}=await loadAgreementSource(context,bookingId);
+  const [branding, attachments] = await Promise.all([
+    config.showSignatureStamp ? loadDocumentBranding(context.agencyId, await bookingActorId(context.agencyId, bookingId)) : Promise.resolve({} as DocumentBranding),
+    loadAgreementAttachments(context.agencyId, { customerId: row.renterSkipped ? null : row.customerId, guarantorId: row.guarantorId, vehicleId: row.vehicleId, ownerId: row.ownerId }, { idDocuments: config.attachIdDocuments, vehicleImages: config.attachVehicleImages, withBytes: true }),
+  ]);
   documentTimeZone = timeZone;
   const doc = new PDFDocument({ size: "A4", margin: 44, bufferPages: true, info: { Title: `${config.titleEn} #${row.publicNumber ?? bookingId}`, Author: row.agency } });
   const fonts = registerFonts(doc);
@@ -86,9 +104,11 @@ export async function createRentalAgreementPdf(context: RequestContext, bookingI
   const sections = config.sections.filter(item => item.enabled);
   for (const [index, section] of sections.entries()) {
     const remainingHeight = sections.slice(index + 1).reduce((total, item) => total + estimatedRenderedSectionHeight(item.id, compactImageLayout, hasGuarantor(row)), 0);
-    renderSection(doc, fonts, row, config, section.id, section.titleEn, section.titleUr, termsImage, remainingHeight, compactImageLayout);
+    renderSection(doc, fonts, row, config, section.id, section.titleEn, section.titleUr, termsImage, remainingHeight, compactImageLayout, branding);
     if (section.id === "renter" && hasGuarantor(row)) renderGuarantorSection(doc, fonts, row, config, compactImageLayout);
   }
+  for (const group of attachments.identity) renderAttachmentPage(doc, fonts, config, row, group);
+  for (const group of attachments.vehicle) renderAttachmentPage(doc, fonts, config, row, group);
   renderFooter(doc, fonts, config);
   doc.end();
   return { bytes: await completed, fileName: `rental-agreement-${row.publicNumber ?? bookingId}.pdf`, customerPhone: row.customerPhone };
@@ -97,6 +117,10 @@ export async function createRentalAgreementPdf(context: RequestContext, bookingI
 export async function getRentalAgreementPrintData(context:RequestContext,bookingId:string):Promise<RentalAgreementPrintData>{
   const timeZone=await getAgencyTimeZone(context.agencyId);
   const {row,config,termsImageId}=await loadAgreementSource(context,bookingId);
+  const [brandingUrls, attachments] = await Promise.all([
+    config.showSignatureStamp ? documentBrandingUrls(context.agencyId, await bookingActorId(context.agencyId, bookingId)) : Promise.resolve({ signatureUrl: null, stampUrl: null }),
+    loadAgreementAttachments(context.agencyId, { customerId: row.renterSkipped ? null : row.customerId, guarantorId: row.guarantorId, vehicleId: row.vehicleId, ownerId: row.ownerId }, { idDocuments: config.attachIdDocuments, vehicleImages: config.attachVehicleImages, withBytes: false }),
+  ]);
   documentTimeZone=timeZone;
   const sections=config.sections.filter(section=>section.enabled).map(section=>({
     id:section.id,
@@ -112,12 +136,17 @@ export async function getRentalAgreementPrintData(context:RequestContext,booking
     guarantor:hasGuarantor(row)?guarantorFields({name:row.guarantorName!,parentage:row.guarantorParentage??"",cnic:row.guarantorCnic??"",phone:row.guarantorPhone??"",address:row.guarantorAddress??"",carAmount:row.guarantorCarAmount??0}).map(item=>({labelEn:item.en,labelUr:item.ur,value:item.value})):null,
     termsText:termsImageId?"":resolveTermsSnapshot(row.terms,config),
     termsImageUrl:termsImageId?`/api/v1/files/${termsImageId}`:null,
+    signatureUrl:brandingUrls.signatureUrl,
+    stampUrl:brandingUrls.stampUrl,
+    attachments:[...attachments.identity,...attachments.vehicle].map(group=>({title:group.title,images:group.images.map(image=>({label:image.label,url:`/api/v1/files/${image.fileId}`}))})),
   };
 }
 
 async function loadAgreementSource(context:RequestContext,bookingId:string){
   const row = await queryOne<AgreementRow>(`
-    SELECT b.public_number AS publicNumber,b.pickup_at AS pickupAt,b.return_at AS returnAt,
+    SELECT b.id AS bookingId,b.customer_id AS customerId,b.guarantor_id AS guarantorId,b.vehicle_id AS vehicleId,v.owner_id AS ownerId,
+      b.extras,b.trip_charges AS tripCharges,b.discount,v.vehicle_value AS vehicleValue,
+      b.public_number AS publicNumber,b.pickup_at AS pickupAt,b.return_at AS returnAt,
       b.daily_rate AS dailyRate,b.total_amount AS totalAmount,b.deposit_required AS depositRequired,
       b.destination_city AS destinationCity,b.rental_mode AS rentalMode,b.renter_skipped AS renterSkipped,
       b.guarantor_name AS guarantorName,b.guarantor_parentage AS guarantorParentage,b.guarantor_cnic AS guarantorCnic,
@@ -172,7 +201,7 @@ function renderHeader(doc: PDFKit.PDFDocument, fonts: PdfFonts, row: AgreementRo
   doc.y = compactImageLayout ? 154 : 168;
 }
 
-function renderSection(doc: PDFKit.PDFDocument, fonts: PdfFonts, row: AgreementRow, config: AgreementDesignConfig, id: AgreementSectionId, titleEn: string, titleUr: string, termsImage?: Buffer, remainingHeight = 0, compactImageLayout = false) {
+function renderSection(doc: PDFKit.PDFDocument, fonts: PdfFonts, row: AgreementRow, config: AgreementDesignConfig, id: AgreementSectionId, titleEn: string, titleUr: string, termsImage?: Buffer, remainingHeight = 0, compactImageLayout = false, branding: DocumentBranding = {}) {
   const sectionHeaderHeight = compactImageLayout ? 17 : 20;
   const estimated = id === "terms" && termsImage
     ? sectionHeaderHeight + minimumTermsImageHeight + 9 + remainingHeight
@@ -188,7 +217,7 @@ function renderSection(doc: PDFKit.PDFDocument, fonts: PdfFonts, row: AgreementR
   doc.moveTo(44, y + 16).lineTo(551, y + 16).strokeColor(`${config.accentColor}55`).lineWidth(0.6).stroke();
   doc.y = y + sectionHeaderHeight;
   if (id === "terms") return termsImage ? renderTermsImage(doc, termsImage, remainingHeight) : renderTerms(doc, fonts, terms, config);
-  if (id === "signatures") return renderSignatures(doc, fonts, config, compactImageLayout);
+  if (id === "signatures") return renderSignatures(doc, fonts, config, compactImageLayout, branding);
   const fields = detailFields(id, row);
   const columns = 3;
   const gap = 8;
@@ -273,24 +302,30 @@ function renderGuarantorSection(doc: PDFKit.PDFDocument, fonts: PdfFonts, row:Ag
   doc.y = baseY + Math.ceil(fields.length / columns) * rowHeight + (compactImageLayout ? 3 : 5);
 }
 
-function renderSignatures(doc: PDFKit.PDFDocument, fonts: PdfFonts, config: AgreementDesignConfig, compactImageLayout: boolean) {
+function renderSignatures(doc: PDFKit.PDFDocument, fonts: PdfFonts, config: AgreementDesignConfig, compactImageLayout: boolean, branding: DocumentBranding = {}) {
   const labels = [
     config.signatures.customer && ["Customer / Renter", "کرایہ دار"],
     config.signatures.representative && ["Agency representative", "ادارے کا نمائندہ"],
     config.signatures.witness && ["Witness", "گواہ"],
   ].filter(Boolean) as string[][];
+  const imageLift = branding.signature || branding.stamp ? 6 : 0;
   const gap = 18;
   const width = (contentWidth - gap * Math.max(0, labels.length - 1)) / Math.max(1, labels.length);
   const baseY = doc.y;
   labels.forEach(([en, ur], index) => {
     const x = 44 + index * (width + gap);
-    const lineY = baseY + (compactImageLayout ? 27 : 35);
+    const lineY = baseY + (compactImageLayout ? 27 : 35) + imageLift;
+    if (en === "Agency representative") {
+      // Signature sits on the line; the stamp overlaps its right end like a hand-stamped document.
+      if (branding.stamp) { try { doc.image(branding.stamp, x + width - 58, lineY - 50, { fit: [58, 58] }); } catch { /* unreadable stamp */ } }
+      if (branding.signature) { try { doc.image(branding.signature, x + 2, lineY - 34, { fit: [Math.min(110, width - 60), 32] }); } catch { /* unreadable signature */ } }
+    }
     doc.moveTo(x, lineY).lineTo(x + width, lineY).strokeColor("#98A2B3").lineWidth(0.7).stroke();
-    if(config.language==="ur")urduText(doc,fonts,ur,x,baseY+(compactImageLayout ? 30 : 38),width,8,"#475467",0);
-    else doc.font(fonts.regular).fontSize(8).fillColor("#475467").text(en, x, baseY + (compactImageLayout ? 32 : 40), { width, lineBreak:false });
-    doc.fontSize(7).fillColor("#98A2B3").text("Date: __________", x, baseY + (compactImageLayout ? 46 : 54), { width, lineBreak:false });
+    if(config.language==="ur")urduText(doc,fonts,ur,x,lineY+3,width,8,"#475467",0);
+    else doc.font(fonts.regular).fontSize(8).fillColor("#475467").text(en === "Agency representative" && branding.signerName ? `${en} · ${branding.signerName}` : en, x, lineY + 5, { width, lineBreak:false });
+    doc.fontSize(7).fillColor("#98A2B3").text("Date: __________", x, lineY + 19, { width, lineBreak:false });
   });
-  doc.y = baseY + (compactImageLayout ? 55 : 68);
+  doc.y = baseY + (compactImageLayout ? 55 : 68) + imageLift;
 }
 
 function renderFooter(doc: PDFKit.PDFDocument, fonts: PdfFonts, config: AgreementDesignConfig) {
@@ -307,10 +342,41 @@ function detailFields(id: Exclude<AgreementSectionId, "terms" | "signatures">, r
   const map = {
     rental: [field("Pickup", "روانگی", date(row.pickupAt)), field("Return", "واپسی", date(row.returnAt)), field("Destination", "منزل", row.destinationCity), field("Rental type", "کرایہ کی قسم", row.rentalMode === "with_driver" ? "With driver" : "Self drive")],
     renter: row.renterSkipped ? [field("Renter", "کرایہ دار", "With-driver guest details not recorded")] : [field("Name", "نام", row.customer), field("Father name", "والد کا نام", row.customerFatherName || "Not recorded"), field("CNIC", "شناختی کارڈ", formatCnic(row.customerCnic)), field("Phone", "فون", row.customerPhone)],
-    vehicle: [field("Vehicle", "گاڑی", row.vehicle), field("Registration", "رجسٹریشن", row.plate), field("Initial odometer", "ابتدائی اوڈومیٹر", row.initialOdometer === null ? "Not recorded" : `${row.initialOdometer.toLocaleString("en-PK")} km`), field("Chassis number", "چیسز نمبر", row.chassisNumber || "Not recorded"), field("Engine number", "انجن نمبر", row.engineNumber || "Not recorded")],
-    charges: [field("Daily rate", "یومیہ کرایہ", money(row.dailyRate)), field("Deposit", "ضمانت", money(row.depositRequired)), field("Rental total", "کل رقم", money(row.totalAmount)), field("Currency", "کرنسی", "PKR")],
+    vehicle: [field("Vehicle", "گاڑی", row.vehicle), field("Registration", "رجسٹریشن", row.plate), field("Initial odometer", "ابتدائی اوڈومیٹر", row.initialOdometer === null ? "Not recorded" : `${row.initialOdometer.toLocaleString("en-PK")} km`), field("Chassis number", "چیسز نمبر", row.chassisNumber || "Not recorded"), field("Engine number", "انجن نمبر", row.engineNumber || "Not recorded"), ...(row.vehicleValue ? [field("Vehicle value", "گاڑی کی مالیت", money(row.vehicleValue))] : [])],
+    charges: [
+      field("Daily rate", "یومیہ کرایہ", row.dailyRate ? money(row.dailyRate) : "To be agreed"),
+      ...(row.tripCharges ? [field("Trip charges (toll, fuel, driver)", "ٹول، ایندھن، ڈرائیور", money(row.tripCharges))] : []),
+      ...(row.extras ? [field("Extras", "اضافی", money(row.extras))] : []),
+      ...(row.discount ? [field("Discount", "رعایت", money(row.discount))] : []),
+      field("Deposit", "ضمانت", money(row.depositRequired)),
+      field("Rental total", "کل رقم", money(row.totalAmount)),
+    ],
   };
   return map[id];
+}
+
+/** Annexure page: a titled grid of document images (two per row, ID-card proportions). */
+function renderAttachmentPage(doc: PDFKit.PDFDocument, fonts: PdfFonts, config: AgreementDesignConfig, row: AgreementRow, group: AgreementAttachmentGroup) {
+  doc.addPage();
+  if (config.showPageBorder) doc.rect(24, 24, pageWidth - 48, 793.89).lineWidth(1.5).strokeColor(config.accentColor).stroke();
+  doc.font(fonts.bold).fontSize(12).fillColor(config.accentColor).text(group.title.toUpperCase(), 44, 44, { width: 380 });
+  doc.font(fonts.regular).fontSize(8.5).fillColor("#667085").text(`Annexure to agreement · Booking #${row.publicNumber ?? "—"}`, 330, 46, { width: 221, align: "right" });
+  doc.moveTo(44, 64).lineTo(551, 64).strokeColor(`${config.accentColor}55`).lineWidth(0.8).stroke();
+  const gap = 14;
+  const cellWidth = (contentWidth - gap) / 2;
+  // Fit every image on one page: two per row, rows share the page height.
+  const rows = Math.max(1, Math.ceil(group.images.length / 2));
+  const cellHeight = Math.min(300, Math.floor((pageContentBottom - 76 - rows * 22) / rows));
+  let y = 76;
+  group.images.forEach((image, index) => {
+    const column = index % 2;
+    if (column === 0 && index > 0) y += cellHeight + 22;
+    if (y + cellHeight > pageContentBottom) { doc.addPage(); y = 48; }
+    const x = 44 + column * (cellWidth + gap);
+    doc.roundedRect(x, y, cellWidth, cellHeight, 6).fillColor("#F8FAFC").fill();
+    if (image.bytes) { try { doc.image(image.bytes, x + 6, y + 6, { fit: [cellWidth - 12, cellHeight - 12], align: "center", valign: "center" }); } catch { /* unreadable image */ } }
+    doc.font(fonts.bold).fontSize(8).fillColor("#344054").text(image.label, x, y + cellHeight + 5, { width: cellWidth, align: "center", lineBreak: false });
+  });
 }
 
 function ensureSpace(doc: PDFKit.PDFDocument, height: number, config: AgreementDesignConfig) {

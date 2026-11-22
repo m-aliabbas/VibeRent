@@ -12,6 +12,7 @@ import { SUPPORTED_CNIC_IMAGE_MIME_TYPES, type CnicImageMimeType, type CnicOcrRe
 import type { RequestContext } from "@/server/context/request-context";
 import { DomainError } from "@/server/domain/errors";
 import { getPrivateFileRoot } from "@/server/desktop/runtime-paths";
+import { extractStoredLicense, parseStoredLicenseResult, type LicenseOcrResult } from "@/server/cnic-ocr/license-ocr";
 
 export type CnicSide = "front" | "back";
 export type BookingCnicPurpose = "customer" | "guarantor";
@@ -179,4 +180,68 @@ export async function clearBookingDraft(context: RequestContext, draftId: string
 
 export function findActiveDraftByNumber(agencyId: string, publicNumber: number) {
   return queryOne<{id:string}>(`SELECT id FROM booking_drafts WHERE agency_id=? AND public_number=? AND status='active' AND expires_at>? LIMIT 1`,[agencyId,publicNumber,new Date().toISOString()]);
+}
+
+// ─── Driving licence intake ────────────────────────────────────────────────
+// Licence images picked during a booking live on the draft (classification `<purpose>_license_<side>`)
+// and are read by OCR as soon as the front (or back) arrives. Confirming the booking moves them onto
+// the customer or guarantor, like the CNIC images.
+
+export type BookingLicenseIntakeDto = {
+  bookingDraftId: string;
+  front: BookingCnicFileDto | null;
+  back: BookingCnicFileDto | null;
+  extracted: LicenseOcrResult;
+};
+
+function licenseClassification(purpose: BookingCnicPurpose, side: CnicSide) { return `${purpose}_license_${side}`; }
+
+function latestLicenseSide(agencyId: string, draftId: string, side: CnicSide, purpose: BookingCnicPurpose): Promise<FileRow | undefined> {
+  return queryOne<FileRow>(`SELECT id,storage_key AS storageKey,original_name AS originalName,mime_type AS mimeType,size,classification,ocr_status AS ocrStatus,ocr_result AS ocrResult,created_at AS createdAt
+    FROM private_files WHERE agency_id=? AND entity_type='booking_draft' AND entity_id=? AND classification=? AND status='ready'
+    ORDER BY created_at DESC LIMIT 1`,[agencyId,draftId,licenseClassification(purpose,side)]);
+}
+
+async function buildLicenseIntake(agencyId: string, draftId: string, purpose: BookingCnicPurpose): Promise<BookingLicenseIntakeDto> {
+  const [front,back]=await Promise.all([latestLicenseSide(agencyId,draftId,"front",purpose),latestLicenseSide(agencyId,draftId,"back",purpose)]);
+  return { bookingDraftId:draftId, front:fileDto(front,"front"), back:fileDto(back,"back"), extracted:parseStoredLicenseResult(front?.ocrResult??back?.ocrResult??null) };
+}
+
+export async function getBookingLicenseIntake(context: RequestContext, draftId: string, purpose: BookingCnicPurpose = "customer") {
+  requireRole(context,["agency_owner","fleet_manager","rental_agent"]);
+  await getDraft(context.agencyId,draftId);
+  return buildLicenseIntake(context.agencyId,draftId,purpose);
+}
+
+export async function uploadBookingLicense(context: RequestContext, draftId: string, side: CnicSide, file: File, purpose: BookingCnicPurpose = "customer"): Promise<BookingLicenseIntakeDto> {
+  requireRole(context,["agency_owner","fleet_manager","rental_agent"]);
+  if(side!=="front"&&side!=="back")throw new DomainError("VALIDATION_FAILED","Choose the front or back licence side.",400);
+  if(purpose!=="customer"&&purpose!=="guarantor")throw new DomainError("VALIDATION_FAILED","Choose the customer or guarantor licence.",400);
+  await getDraft(context.agencyId,draftId);
+  if (!imageTypes.includes(file.type)) throw new DomainError("VALIDATION_FAILED","Use a JPEG, PNG, WEBP, or non-animated GIF image.",415,{image:"Unsupported image type."});
+  if (!file.size || file.size > MAX_CNIC_IMAGE_BYTES) throw new DomainError("VALIDATION_FAILED","The image must be 10 MiB or smaller.",413,{image:"Choose a smaller image."});
+  const id=`file_${randomUUID()}`;
+  const storageKey=`${context.agencyId}/booking-drafts/${draftId}/${purpose}-license/${side}-${randomUUID()}`;
+  const absolutePath=path.join(storageRoot,storageKey);
+  await mkdir(path.dirname(absolutePath),{recursive:true,mode:0o700});
+  await writeFile(`${absolutePath}.uploading`,Buffer.from(await file.arrayBuffer()),{flag:"wx",mode:0o600});
+  await rename(`${absolutePath}.uploading`,absolutePath);
+  const now=new Date().toISOString();
+  try {
+    await inTransaction(async ()=>{
+      await execute(`UPDATE private_files SET status='replaced',updated_at=? WHERE agency_id=? AND entity_type='booking_draft' AND entity_id=? AND classification=? AND status='ready'`,[now,context.agencyId,draftId,licenseClassification(purpose,side)]);
+      await execute(`INSERT INTO private_files (id,agency_id,entity_type,entity_id,storage_key,original_name,mime_type,size,classification,status,ocr_status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,'ready','waiting_for_pair',?,?)`,[id,context.agencyId,"booking_draft",draftId,storageKey,safeName(file.name),file.type,file.size,licenseClassification(purpose,side),now,now]);
+      await execute(`INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)`,[randomUUID(),context.agencyId,context.userId,"booking.license_received","booking_draft",draftId,JSON.stringify({fileId:id,side,purpose}),now]);
+    },{immediate:true});
+  } catch(error) {
+    await unlink(absolutePath).catch(()=>undefined);
+    throw error;
+  }
+  const [front,back]=await Promise.all([latestLicenseSide(context.agencyId,draftId,"front",purpose),latestLicenseSide(context.agencyId,draftId,"back",purpose)]);
+  const extraction=await extractStoredLicense(
+    front?{absolutePath:path.join(storageRoot,front.storageKey),mimeType:front.mimeType as CnicImageMimeType}:undefined,
+    back?{absolutePath:path.join(storageRoot,back.storageKey),mimeType:back.mimeType as CnicImageMimeType}:undefined,
+  );
+  await execute(`UPDATE private_files SET ocr_status=?,ocr_result=?,updated_at=? WHERE agency_id=? AND entity_type='booking_draft' AND entity_id=? AND classification IN (?,?) AND status='ready'`,[extraction.status,extraction.result?JSON.stringify(extraction.result):null,new Date().toISOString(),context.agencyId,draftId,licenseClassification(purpose,"front"),licenseClassification(purpose,"back")]);
+  return buildLicenseIntake(context.agencyId,draftId,purpose);
 }

@@ -39,6 +39,8 @@ export type Vehicle = {
   status: VehicleStatus;
   dailyRate: number;
   withDriverRate?: number;
+  /** Market value of the vehicle (PKR), used for guarantor cover and insurance. */
+  vehicleValue?: number;
   color: string;
   transmission: "Automatic" | "Manual";
   fuel: "Petrol" | "Hybrid" | "Diesel";

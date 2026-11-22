@@ -11,6 +11,7 @@ import type { NotificationDeliveryRow } from "@/server/notifications/notificatio
 import { formatPaymentReceiptNumber } from "@/lib/payment-receipt";
 import { getOwner } from "@/server/services/owner-service";
 import { renderQuotationPdf } from "@/server/services/quotation-service";
+import { bookingActorId, loadDocumentBranding } from "@/server/services/branding-service";
 
 /** The content of a delivery, ready for WhatsApp. Rendering runs in the worker, never in a web request. */
 export type RenderedNotification =
@@ -90,7 +91,7 @@ export async function renderBookingDocument(context: RequestContext, bookingId: 
   const row = await bookingNotice(context.agencyId, bookingId);
   if (!row) return null;
   const input = kind === "checkout" ? checkoutNoticeInput(bookingId, row) : kind === "checkin" ? checkinInvoiceInput(bookingId, row) : bookingStatementInput(bookingId, row);
-  const bytes = await createTransactionInvoice({ timeZone: await getAgencyTimeZone(context.agencyId), agency: row.agency, title: input.title, reference: input.reference ?? String(row.publicNumber ?? bookingId), recipient: row.customer, issuedAt: input.issuedAt, lines: input.lines, amountLabel: input.amountLabel, amount: input.amount });
+  const bytes = await createTransactionInvoice({ branding: await loadDocumentBranding(context.agencyId, await bookingActorId(context.agencyId, bookingId)), timeZone: await getAgencyTimeZone(context.agencyId), agency: row.agency, title: input.title, reference: input.reference ?? String(row.publicNumber ?? bookingId), recipient: row.customer, issuedAt: input.issuedAt, lines: input.lines, amountLabel: input.amountLabel, amount: input.amount });
   return { bytes, fileName: input.fileName, caption: input.caption };
 }
 
@@ -130,7 +131,7 @@ async function renderCustomerPayment(agencyId: string, customerId: string, payme
   const account = await customerAccount(agencyId, customerId);
   const balance = account.remaining;
   const bytes = await createTransactionInvoice({
-    timeZone: await getAgencyTimeZone(agencyId), agency: row.agency, title: "Payment receipt", reference: payment.reference || "Customer payment", recipient: row.customer, issuedAt: new Date().toISOString(),
+    branding: await loadDocumentBranding(agencyId), timeZone: await getAgencyTimeZone(agencyId), agency: row.agency, title: "Payment receipt", reference: payment.reference || "Customer payment", recipient: row.customer, issuedAt: new Date().toISOString(),
     lines: [
       { label: "Method", value: payment.method },
       ...(payment.reference ? [{ label: "Reference", value: payment.reference }] : []),
@@ -214,7 +215,7 @@ async function renderBookingPdf(agencyId: string, bookingId: string, build: (row
   if (!row) throw new Error("The booking for this notice could not be found.");
   if (!row.phone?.trim()) return { status: "skipped", reason: "No phone number is available for the customer." };
   const input = build(row);
-  const bytes = await createTransactionInvoice({ timeZone: await getAgencyTimeZone(agencyId), agency: row.agency, title: input.title, reference: input.reference ?? String(row.publicNumber ?? bookingId), recipient: row.customer, issuedAt: input.issuedAt, lines: input.lines, amountLabel: input.amountLabel, amount: input.amount });
+  const bytes = await createTransactionInvoice({ branding: await loadDocumentBranding(agencyId, await bookingActorId(agencyId, bookingId)), timeZone: await getAgencyTimeZone(agencyId), agency: row.agency, title: input.title, reference: input.reference ?? String(row.publicNumber ?? bookingId), recipient: row.customer, issuedAt: input.issuedAt, lines: input.lines, amountLabel: input.amountLabel, amount: input.amount });
   return { status: "ready", phone: row.phone, recipientName: row.customer, document: { bytes, fileName: input.fileName }, caption: input.caption };
 }
 
@@ -260,7 +261,7 @@ async function renderOwnerPayout(context: RequestContext, ownerId: string, payou
   if (!row.phone?.trim()) return { status: "skipped", reason: "The owner has no phone number." };
   // Totals at render time already include this payout.
   const owner = await getOwner(context, ownerId);
-  const bytes = await createTransactionInvoice({ timeZone: await getAgencyTimeZone(agencyId),
+  const bytes = await createTransactionInvoice({ branding: await loadDocumentBranding(agencyId), timeZone: await getAgencyTimeZone(agencyId),
     agency: row.agency, title: "Owner payout receipt", reference: payout.reference, recipient: row.owner, issuedAt: new Date().toISOString(),
     lines: [
       { label: "Statement period", value: `${payout.periodFrom} to ${payout.periodTo}` },

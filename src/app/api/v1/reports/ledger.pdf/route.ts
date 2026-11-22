@@ -1,3 +1,4 @@
+import { loadDocumentBranding } from "@/server/services/branding-service";
 import { buildLedgerEntries, filterLedgerEntries, ledgerOpeningResult } from "@/lib/reports/ledger";
 import type { LedgerEntryType, LedgerScope } from "@/lib/reports/ledger";
 import { getWebRequestContext } from "@/server/auth/session";
@@ -30,7 +31,7 @@ export async function GET(request:Request){
     const openingResult=entry==="all"?ledgerOpeningResult(data.ledgerEntries,filters):0;
     const accountLabel=`${expenseHead?`${expenseHead} expenses`:entryLabel(entry)} - ${labelForScope(scope,data)}`;
     const periodLabel=`${displayDate(from)} - ${displayDate(to)}`;
-    const bytes=await createLedgerReportPdf({agencyName:data.agencyName,agencyAddress:data.agencyContact.address,agencyPhone:data.agencyContact.phone,from,to,periodLabel,city,ownership,accountLabel,entries,openingResult,ownerView:scope.type==="owner"});
+    const bytes=await createLedgerReportPdf({agencyName:data.agencyName,agencyAddress:data.agencyContact.address,agencyPhone:data.agencyContact.phone,from,to,periodLabel,city,ownership,accountLabel,entries,openingResult,ownerView:scope.type==="owner",branding:await loadDocumentBranding(context.agencyId,context.userId)});
     const fileName=`viberent-${slug(accountLabel)}-${from}-to-${to}.pdf`;
     return new Response(new Uint8Array(bytes),{headers:{"content-type":"application/pdf","content-disposition":`attachment; filename="${fileName}"`,"cache-control":"private, no-store"}});
   }catch(error){

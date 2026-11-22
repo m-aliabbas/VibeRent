@@ -1,4 +1,5 @@
 import "server-only";
+import { loadDocumentBranding } from "@/server/services/branding-service";
 
 import { randomUUID } from "node:crypto";
 import { execute, inTransaction, queryAll, queryOne } from "@/db/query";
@@ -190,6 +191,7 @@ export async function renderQuotationPdf(context: RequestContext, id: string) {
   const when = (value: string) => formatInZone(value, { day: "2-digit", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" }, timeZone);
   const day = (value: string) => new Intl.DateTimeFormat("en-PK", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" }).format(new Date(`${value}T00:00:00Z`));
   const bytes = await createTransactionInvoice({
+    branding: await loadDocumentBranding(context.agencyId, context.userId),
     timeZone, agency: agency?.name ?? "VibeRent", title: "Quotation", reference: quote.reference, recipient: quote.customerName, issuedAt: quote.updatedAt,
     lines: [
       { label: "Vehicle", value: quote.vehicleLabel },

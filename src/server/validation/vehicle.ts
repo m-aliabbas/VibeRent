@@ -21,6 +21,7 @@ export function parseVehicleInput(value: unknown): Vehicle {
   if (!Number.isInteger(input.year) || input.year! < 2000 || input.year! > 2035) errors.year = "Enter a valid model year.";
   if (!Number.isInteger(input.dailyRate) || input.dailyRate! < 1000) errors.dailyRate = "Daily rate must be at least PKR 1,000.";
   if (!Number.isInteger(input.withDriverRate) || input.withDriverRate! < input.dailyRate!) errors.withDriverRate = "With-driver rate must be at least the self-drive rate.";
+  if (input.vehicleValue !== undefined && input.vehicleValue !== null && (!Number.isSafeInteger(input.vehicleValue) || input.vehicleValue < 0)) errors.vehicleValue = "Enter the vehicle value as a whole PKR amount.";
   if (!categories.includes(input.category ?? "")) errors.category = "Choose a valid category.";
   if (!input.city?.trim()) errors.city = "City is required.";
   if (!statuses.includes(input.status ?? "")) errors.status = "Choose a valid status.";
@@ -44,5 +45,6 @@ export function parseVehicleInput(value: unknown): Vehicle {
     make: input.make!.trim(),
     model: input.model!.trim(),
     color: input.color?.trim() || "Not specified",
+    vehicleValue: input.vehicleValue && input.vehicleValue > 0 ? input.vehicleValue : undefined,
   } as Vehicle;
 }

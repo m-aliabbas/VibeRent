@@ -20,6 +20,7 @@ import { formatPhone, formatPkr } from "@/lib/utils";
 import { downloadFromUrl } from "@/lib/download";
 import { parseTermsImageSnapshot } from "@/lib/agreement-config";
 import { BookingFinance } from "@/components/bookings/booking-finance";
+import { EditPriceDialog, TripChargesPanel } from "@/components/bookings/booking-pricing";
 import { PersonDocuments } from "@/components/shared/person-documents";
 import { ExtensionDialog, ReturnDialog } from "@/components/bookings/rental-operation-dialogs";
 import type { BookingListItem } from "@/server/repositories/contracts";
@@ -31,13 +32,14 @@ export function BookingDetail({initial,vehicles}:{initial:BookingListItem;vehicl
   const [notice,setNotice]=useState("");
   const [sendingAgreement,setSendingAgreement]=useState(false);
   const [downloadingAgreement,setDownloadingAgreement]=useState(false);
-  const [mode,setMode]=useState<"amend"|"cancel"|"delete"|"erroneous"|"checkout"|"extend"|"return"|"terms"|"source-payout"|"edit-amounts">();
+  const [mode,setMode]=useState<"amend"|"cancel"|"delete"|"erroneous"|"checkout"|"extend"|"return"|"terms"|"source-payout"|"edit-amounts"|"edit-price">();
   const total=booking.totalAmount;
   const balance=total-booking.paid;
   const financePurpose=["Cancelled","No Show"].includes(booking.status)?"settlement" as const:"default" as const;
   useEffect(()=>{let active=true;const action=new URLSearchParams(window.location.search).get("action");queueMicrotask(()=>{if(!active)return;if(action==="delete"&&["Confirmed","Cancelled","No Show"].includes(booking.status))setMode("delete");if(action==="cancel"&&["Confirmed","Checked Out"].includes(booking.status))setMode("cancel");if(action==="checkout"&&booking.status==="Confirmed")setMode("checkout");if(action==="return"&&booking.status==="Checked Out")setMode("return")});return()=>{active=false}},[booking.status]);
   const reference=booking.publicNumber?`#${booking.publicNumber}`:booking.id.startsWith("BKG-")?booking.id:"";
   async function downloadAgreement(){setDownloadingAgreement(true);try{const result=await downloadFromUrl(`/api/v1/bookings/${booking.id}/agreement`,`rental-agreement-${booking.id}.pdf`);setNotice(result.path?`PDF saved to ${result.path}`:"PDF downloaded.")}catch(error){setNotice(error instanceof Error?error.message:"The PDF could not be downloaded.")}finally{setDownloadingAgreement(false)}}
+  async function downloadInvoice(kind:"invoice"|"supplier-invoice"){try{const result=await downloadFromUrl(`/api/v1/bookings/${booking.id}/documents/${kind}`,`${kind}-${booking.publicNumber??booking.id}.pdf`);setNotice(result.path?`PDF saved to ${result.path}`:"Invoice downloaded.")}catch(error){setNotice(error instanceof Error?error.message:"The invoice could not be downloaded.")}}
   async function sendAgreement(){setSendingAgreement(true);const result=await sendBookingAgreementAction(booking.id);setSendingAgreement(false);setNotice(result.ok?result.data.message:result.error.message)}
   function rebook(){const from=zonedNow();from.setDate(from.getDate()+1);from.setHours(9,0,0,0);const to=new Date(from);to.setDate(to.getDate()+Math.max(1,booking.days));const local=toWallInput;sessionStorage.removeItem("viberent-booking-reference");sessionStorage.setItem("viberent-booking-draft",JSON.stringify({bookingMode:"reservation",fulfillmentType:booking.fulfillmentType,customerId:booking.customerId,vehicleId:booking.fulfillmentType==="fleet"?booking.vehicleId:"",city:booking.destinationCity,from:local(from),to:local(to),rentalMode:booking.rentalMode??"self_drive",driverId:booking.driverId??"",dailyRate:booking.dailyRate,estimatedKm:booking.estimatedKm,extras:0,discount:0,depositRequired:booking.deposit,source:"rebooking",notes:`Rebooked from ${booking.id}`}));router.push("/bookings/new")}
   return <div className="space-y-6">
@@ -54,6 +56,8 @@ export function BookingDetail({initial,vehicles}:{initial:BookingListItem;vehicl
           {label:downloadingAgreement?"Saving PDF…":"Download PDF",icon:<FileText size={15}/>,disabled:downloadingAgreement,onSelect:()=>void downloadAgreement()},
           {label:sendingAgreement?"Sending…":"Send PDF on WhatsApp",icon:<MessageCircle size={15}/>,disabled:sendingAgreement,onSelect:()=>void sendAgreement()},
           ...(["Confirmed","Checked Out"].includes(booking.status)?[{label:"Rental terms",icon:<FileText size={15}/>,onSelect:()=>setMode("terms")}]:[]),
+          {label:"Customer invoice (PDF)",icon:<FileText size={15}/>,onSelect:()=>void downloadInvoice("invoice"),separatorBefore:true},
+          ...(booking.fulfillmentType==="external"?[{label:"Supplier invoice (PDF)",icon:<FileText size={15}/>,onSelect:()=>void downloadInvoice("supplier-invoice")}]:[]),
         ]}/>
         {["Completed","Cancelled","No Show"].includes(booking.status)&&<Button variant="secondary" shortcut="r" onClick={rebook}><Repeat2 size={16}/>Rebook</Button>}
         {booking.status==="Confirmed"&&booking.fulfillmentType==="fleet"&&<Button variant="secondary" shortcut="e" onClick={()=>setMode("amend")}><Pencil size={16}/>Amend</Button>}
@@ -69,12 +73,12 @@ export function BookingDetail({initial,vehicles}:{initial:BookingListItem;vehicl
       </div>
     </section>
     <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">{[["Booking total",formatPkr(total)],["Paid",formatPkr(booking.paid)],balance<0?["Customer credit",formatPkr(-balance)]:["Balance due",formatPkr(balance)],["Deposit",formatPkr(booking.deposit)]].map(([label,value])=><div key={label} className="rounded-xl border border-[#E8ECF2] bg-white p-4"><p className="text-xs font-semibold text-[#475467]">{label}</p><p className={`mt-1 text-lg font-bold tabular-nums ${label==="Balance due"&&balance>0?"text-[#B54708]":""}`}>{value}</p></div>)}</section>
-    <div className="flex flex-wrap justify-end gap-2">{financePurpose==="default"&&<Button size="sm" variant="secondary" onClick={()=>setMode("edit-amounts")}><Pencil size={15}/>Edit amounts</Button>}<BookingFinance bookingId={booking.id} customer={booking.customer} balance={balance} depositHeld={booking.depositHeld ?? 0} depositRequired={booking.deposit} transactions={booking.transactions ?? []} purpose={financePurpose} onChanged={(updated,message)=>{setBooking(updated);setNotice(message)}}/></div>
-    {booking.rentalMode==="with_driver"&&financePurpose==="default"&&<WithDriverExtras booking={booking} onChanged={updated=>{setBooking(updated);setNotice("Booking extra added. You can record a payment above.")}}/>}
+    <div className="flex flex-wrap justify-end gap-2">{financePurpose==="default"&&<Button size="sm" variant="secondary" onClick={()=>setMode("edit-price")}><Pencil size={15}/>Edit price</Button>}{financePurpose==="default"&&<Button size="sm" variant="ghost" onClick={()=>setMode("edit-amounts")}>Correct totals</Button>}<BookingFinance bookingId={booking.id} customer={booking.customer} balance={balance} depositHeld={booking.depositHeld ?? 0} depositRequired={booking.deposit} transactions={booking.transactions ?? []} purpose={financePurpose} onChanged={(updated,message)=>{setBooking(updated);setNotice(message)}}/></div>
+    {financePurpose==="default"&&<TripChargesPanel booking={booking} onChanged={(updated,message)=>{setBooking(updated);setNotice(message)}}/>}
     {booking.status==="Confirmed"&&booking.paid<booking.deposit&&<p role="status" className="flex items-center gap-2 rounded-lg border border-[#FEDF89] bg-[#FFFAEB] px-3 py-2 text-sm text-[#93370D]"><CreditCard size={16}/>Deposit not covered yet: {formatPkr(Math.max(0,booking.deposit-booking.paid))} still to collect before handover.</p>}
     <DetailPanel title="Details"><dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm md:grid-cols-4">
       <Fact label="Pickup" value={formatDate(booking.pickupAt)}/><Fact label="Return" value={formatDate(booking.returnAt)}/><Fact label="Route" value={`${booking.city} → ${booking.destinationCity}`}/><Fact label="Rental type" value={booking.rentalMode==="with_driver"?"With driver":"Self drive"}/>
-      <Fact label="Daily rate" value={formatPkr(booking.dailyRate)}/>{booking.mileageRate?<Fact label="Mileage" value={`${formatPkr(booking.mileageRate)}/km · ${booking.estimatedKm} km est.`}/>:null}<Fact label="Odometer out" value={inspectionValue(booking,"checkout")}/><Fact label="Odometer in" value={inspectionValue(booking,"checkin")}/>
+      <Fact label="Daily rate" value={booking.dailyRate?formatPkr(booking.dailyRate):"To be agreed"}/>{booking.discount?<Fact label="Discount" value={formatPkr(booking.discount)}/>:null}{booking.tripCharges?<Fact label="Trip charges" value={formatPkr(booking.tripCharges)}/>:null}{booking.mileageRate?<Fact label="Mileage" value={`${formatPkr(booking.mileageRate)}/km · ${booking.estimatedKm} km est.`}/>:null}<Fact label="Odometer out" value={inspectionValue(booking,"checkout")}/><Fact label="Odometer in" value={inspectionValue(booking,"checkin")}/>
       <Fact label="Phone" value={booking.renterSkipped?"Not recorded":formatPhone(booking.customerPhone)||"Not recorded"}/><Fact label="CNIC" value={booking.renterSkipped?"Not recorded":formatCnic(booking.customerCnic)}/>{booking.notes?<div className="col-span-2"><Fact label="Notes" value={booking.notes}/></div>:null}
     </dl></DetailPanel>
     {!booking.renterSkipped&&<DetailPanel title="Customer CNIC &amp; driving license" action={<Link href={`/customers/${booking.customerId}`} className="text-sm font-semibold text-[#006FE6]">Customer profile</Link>}><PersonDocuments owner="customer" ownerId={booking.customerId} compact/></DetailPanel>}
@@ -82,6 +86,7 @@ export function BookingDetail({initial,vehicles}:{initial:BookingListItem;vehicl
     {booking.guarantor&&<DetailPanel title="Guarantor information"><dl className="grid gap-4 text-sm sm:grid-cols-2 lg:grid-cols-3"><Fact label="Name" value={booking.guarantor.name}/><Fact label="Parentage" value={booking.guarantor.parentage||"Not provided"}/><Fact label="CNIC" value={booking.guarantor.cnic?formatCnic(booking.guarantor.cnic):"Not provided"}/><Fact label="Phone" value={booking.guarantor.phone||"Not provided"}/><Fact label="Address" value={booking.guarantor.address||"Not provided"}/><Fact label="Amount of car" value={booking.guarantor.carAmount?formatPkr(booking.guarantor.carAmount):"Not provided"}/></dl>{booking.guarantor.id?<div className="mt-4 border-t border-[#EAECF0] pt-4"><div className="mb-2 flex items-center justify-between gap-2"><h3 className="text-sm font-bold">Guarantor CNIC &amp; driving license</h3><Link href={`/guarantors/${booking.guarantor.id}`} className="text-sm font-semibold text-[#006FE6]">Guarantor profile</Link></div><PersonDocuments owner="guarantor" ownerId={booking.guarantor.id} compact/></div>:null}</DetailPanel>}
     <DetailPanel title="Activity"><Timeline items={[{id:"1",title:`Booking ${booking.status.toLowerCase()}`,detail:`${booking.customer} · ${formatPkr(total)}`,time:"Latest",icon:<CheckCircle2 size={16}/>},{id:"2",title:"Availability reserved",detail:`${booking.plate} assigned`,time:"At confirmation",icon:<Car size={16}/>} ]}/></DetailPanel>
     {mode==="amend"&&<AmendDialog booking={booking} vehicles={vehicles} onClose={()=>setMode(undefined)} onSave={next=>{setBooking(next);setMode(undefined);setNotice("Booking amended and availability atomically rechecked.")}}/>}
+    {mode==="edit-price"&&<EditPriceDialog booking={booking} onClose={()=>setMode(undefined)} onSave={next=>{setBooking(next);setMode(undefined);setNotice("Price updated. The booking total was recalculated.")}}/>}
     {mode==="edit-amounts"&&<EditAmountsDialog booking={booking} onClose={()=>setMode(undefined)} onSave={next=>{setBooking(next);setMode(undefined);setNotice("Booking amounts updated. Corrections were added to the ledger.")}}/>}
     {mode==="cancel"&&<CancelBookingDialog booking={booking} onClose={()=>setMode(undefined)} onSave={next=>{setBooking(next);setMode(undefined);setNotice(booking.status==="Checked Out"?"Rental cancelled and the vehicle released. Review and refund or reverse any posted finance.":"Booking cancelled. Review and reverse or refund any posted finance before deleting it.")}}/>}
     {mode==="erroneous"&&<ErroneousBookingDialog booking={booking} onClose={()=>setMode(undefined)} onDone={()=>{router.push("/bookings");router.refresh()}}/>}
@@ -92,24 +97,6 @@ export function BookingDetail({initial,vehicles}:{initial:BookingListItem;vehicl
     {mode==="source-payout"&&<SourcePayoutDialog booking={booking} onClose={()=>setMode(undefined)} onSave={next=>{setBooking(next);setMode(undefined);setNotice("Source payment posted to the rental ledger.")}}/>}
     {mode==="delete"&&<DeleteBookingDialog booking={booking} onClose={()=>setMode(undefined)} onChanged={(updated,message)=>{setBooking(updated);setNotice(message)}} onDeleted={()=>{router.push("/bookings");router.refresh()}}/>}
   </div>;
-}
-
-function WithDriverExtras({booking,onChanged}:{booking:BookingListItem;onChanged:(updated:BookingListItem)=>void}){
-  const [amount,setAmount]=useState("");
-  const [description,setDescription]=useState("");
-  const [pending,setPending]=useState(false);
-  const [error,setError]=useState("");
-  const value=Number(amount);
-  const valid=amount.trim()!==""&&Number.isSafeInteger(value)&&value>0&&description.trim().length>=5;
-  async function add(){
-    if(!valid||pending)return;
-    setPending(true);setError("");
-    const result=await editBookingAmountsAction(booking.id,{total:booking.totalAmount+value,paid:booking.paid,reason:`Booking extra: ${description.trim()}`,version:booking.version});
-    setPending(false);
-    if(!result.ok){setError(result.error.message);return}
-    setAmount("");setDescription("");onChanged(result.data);
-  }
-  return <section className="rounded-xl border border-[#E8ECF2] bg-white p-4 sm:p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="font-bold">Booking extras</h2><p className="mt-1 text-xs text-[#667085]">Add a with-driver charge to this booking, then use Record payment above to collect it.</p></div><span className="rounded-lg bg-[#F8FAFC] px-3 py-2 text-sm font-semibold">Extras {formatPkr(booking.extras)}</span></div><div className="mt-4 grid gap-3 sm:grid-cols-[180px_1fr_auto] sm:items-end"><FormInput label="Extra amount (PKR)" type="number" min={1} step={1} value={amount} onChange={event=>setAmount(event.target.value)} placeholder="0"/><FormInput label="What is this extra for?" value={description} onChange={event=>setDescription(event.target.value)} placeholder="e.g. additional driver hours"/><Button disabled={!valid||pending} onClick={()=>void add()}>{pending?"Adding…":"Add extra"}</Button></div>{error&&<p role="alert" className="mt-3 text-sm text-[#B42318]">{error}</p>}</section>;
 }
 
 function EditAmountsDialog({booking,onClose,onSave}:{booking:BookingListItem;onClose:()=>void;onSave:(next:BookingListItem)=>void}) {

@@ -19,11 +19,12 @@ type LedgerPdfInput = {
   entries: LedgerEntry[];
   openingResult?: number;
   ownerView: boolean;
+  branding?: import("@/server/services/branding-service").DocumentBranding;
 };
 
 /** Owner and agency ledgers in the same statement design as the customer and driver PDFs. */
 export async function createLedgerReportPdf(input: LedgerPdfInput): Promise<Buffer> {
-  const base = { agency: input.agencyName, address: input.agencyAddress, phone: input.agencyPhone };
+  const base = { agency: input.agencyName, address: input.agencyAddress, phone: input.agencyPhone, branding: input.branding };
   return input.ownerView ? createStatementPdf({ ...base, ...ownerStatement(input) }) : createStatementPdf({ ...base, ...agencyStatement(input) });
 }
 

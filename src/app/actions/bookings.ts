@@ -18,8 +18,11 @@ import {
   recordBookingDeposit,
   recordBookingPayment,
   recordSourcePayout,
+  removeBookingCharge,
   reverseBookingTransaction,
+  saveBookingCharge,
   startBooking,
+  updateBookingPricing,
 } from "@/server/services/booking-service";
 import { revalidatePath } from "next/cache";
 import { clearBookingDraft } from "@/server/services/booking-cnic-service";
@@ -229,4 +232,21 @@ export async function reverseBookingTransactionAction(bookingId: string, input: 
     const issue = asDomainError(error);
     return { ok: false as const, error: { code: issue.code, message: issue.message, fieldErrors: issue.fieldErrors ?? {} } };
   }
+}
+
+function bookingFailure(error:unknown){const issue=asDomainError(error);return {ok:false as const,error:{code:issue.code,message:issue.message,fieldErrors:issue.fieldErrors??{}}};}
+function revalidateBooking(bookingId:string){revalidatePath("/bookings");revalidatePath(`/bookings/${bookingId}`);revalidatePath("/");revalidatePath("/reports");revalidatePath("/customers");revalidatePath("/owners");}
+
+/** Negotiated price change before or after booking: daily rent, extras, discount, deposit. */
+export async function updateBookingPricingAction(bookingId:string,input:{dailyRate?:number;extras?:number;discount?:number;depositRequired?:number;reason?:string;version?:number}){
+  try{const data=await updateBookingPricing(await getWebRequestContext(),bookingId,input);revalidateBooking(bookingId);return {ok:true as const,data};}catch(error){return bookingFailure(error);}
+}
+
+/** Adds (no id) or edits a toll / fuel / driver / parking / other trip charge. */
+export async function saveBookingChargeAction(bookingId:string,input:{id?:string;kind:string;description:string;amount:number}){
+  try{const data=await saveBookingCharge(await getWebRequestContext(),bookingId,input);revalidateBooking(bookingId);return {ok:true as const,data};}catch(error){return bookingFailure(error);}
+}
+
+export async function removeBookingChargeAction(bookingId:string,chargeId:string){
+  try{const data=await removeBookingCharge(await getWebRequestContext(),bookingId,chargeId);revalidateBooking(bookingId);return {ok:true as const,data};}catch(error){return bookingFailure(error);}
 }

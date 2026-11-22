@@ -97,7 +97,7 @@ async function movements(agencyId: string, kind: "pickup" | "return") {
 
 async function owners(agencyId: string) {
   const rows = await queryAll<{ id: string; name: string; status: string; vehicles: number; payable: number }>(`SELECT o.id,o.name,o.status,count(DISTINCT v.id) AS vehicles,
-    coalesce(sum(CASE WHEN b.status='completed' THEN CASE WHEN a.share_basis='percentage' THEN round(b.total_amount*coalesce(a.owner_share_percent,0)/100.0) ELSE coalesce(a.owner_share_amount,0) END ELSE 0 END),0)
+    coalesce(sum(CASE WHEN b.status='completed' THEN CASE WHEN a.share_basis='percentage' THEN round((b.total_amount-b.trip_charges)*coalesce(a.owner_share_percent,0)/100.0) ELSE coalesce(a.owner_share_amount,0) END ELSE 0 END),0)
     - coalesce((SELECT sum(e.amount) FROM expenses e WHERE e.agency_id=o.agency_id AND e.owner_id=o.id AND e.status='approved'),0)
     - coalesce((SELECT sum(p.amount) FROM owner_payouts p WHERE p.agency_id=o.agency_id AND p.owner_id=o.id AND p.status='posted'),0) AS payable
     FROM owners o LEFT JOIN vehicles v ON v.agency_id=o.agency_id AND v.owner_id=o.id AND v.archived_at IS NULL LEFT JOIN management_agreements a ON a.id=v.agreement_id AND a.agency_id=v.agency_id LEFT JOIN bookings b ON b.agency_id=v.agency_id AND b.vehicle_id=v.id WHERE o.agency_id=? GROUP BY o.id ORDER BY o.name LIMIT 20`,[agencyId]);

@@ -35,6 +35,7 @@ const tables: TableSpec[] = [
   { name: "booking_drafts", tenantColumn: "agency_id", conflictKey: "id" },
   { name: "bookings", tenantColumn: "agency_id", conflictKey: "id" },
   { name: "customer_guarantors", tenantColumn: "agency_id", conflictKey: "id" },
+  { name: "booking_charges", tenantColumn: "agency_id", conflictKey: "id" },
   { name: "quotation_number_counters", tenantColumn: "agency_id", conflictKey: "agency_id" },
   { name: "quotations", tenantColumn: "agency_id", conflictKey: "id" },
   { name: "availability_blocks", tenantColumn: "agency_id", conflictKey: "id" },

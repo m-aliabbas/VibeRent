@@ -35,12 +35,28 @@ export type ConfirmBookingInput = {
   dailyRateOverride?: number;
   overrideReason?: string;
   startImmediately?: boolean;
+  /** Toll tax, fuel, driver allowance and similar trip costs billed to the customer. */
+  tripCharges?: TripChargeInput[];
   checkoutInspection?: {
     odometer: number;
     fuelLevel: string;
     conditionNotes: string;
   };
 };
+
+export const tripChargeKinds = ["toll", "fuel", "driver", "parking", "other"] as const;
+export type TripChargeKind = (typeof tripChargeKinds)[number];
+export type TripChargeInput = { kind: TripChargeKind; description: string; amount: number };
+
+export function parseTripCharge(value: unknown, errors: Record<string, string>, key = "tripCharge"): TripChargeInput | undefined {
+  const input = value as Partial<TripChargeInput> | null;
+  if (!input || typeof input !== "object") { errors[key] = "Enter a valid trip charge."; return undefined; }
+  const kind = tripChargeKinds.includes(input.kind as TripChargeKind) ? input.kind as TripChargeKind : undefined;
+  if (!kind) errors[`${key}.kind`] = "Choose toll, fuel, driver, parking or other.";
+  if (!Number.isSafeInteger(input.amount) || (input.amount ?? 0) <= 0) errors[`${key}.amount`] = "Enter a positive whole PKR amount.";
+  const description = typeof input.description === "string" ? input.description.trim().slice(0, 160) : "";
+  return kind ? { kind, description, amount: input.amount ?? 0 } : undefined;
+}
 
 export type GuarantorInput = {
   /** Saved guarantor to link; the server verifies it belongs to the agency. */
@@ -51,6 +67,9 @@ export type GuarantorInput = {
   phone: string;
   address: string;
   carAmount: number;
+  licenseNumber?: string;
+  /** YYYY-MM-DD */
+  licenseExpiresAt?: string;
 };
 
 function normalizeCnic(value: string) { return value.replace(/\D/g, ""); }
@@ -71,8 +90,10 @@ function parseGuarantor(value: unknown, errors: Record<string, string>): Guarant
   if (phone && !/^(?:92|0)?3\d{9}$/.test(phone)) errors["guarantor.phone"] = "Enter a valid Pakistani mobile number.";
   if (address && address.length < 5) errors["guarantor.address"] = "Enter at least 5 address characters.";
   if (input.carAmount !== undefined && (!Number.isInteger(input.carAmount) || input.carAmount < 0)) errors["guarantor.carAmount"] = "Enter a non-negative whole PKR amount.";
+  const licenseNumber = typeof input.licenseNumber === "string" ? input.licenseNumber.trim().toUpperCase().slice(0, 40) : "";
+  const licenseExpiresAt = typeof input.licenseExpiresAt === "string" && /^\d{4}-\d{2}-\d{2}$/.test(input.licenseExpiresAt) ? input.licenseExpiresAt : undefined;
   const id = typeof input.id === "string" && input.id.trim() && input.id.trim().length <= 80 ? input.id.trim() : undefined;
-  return { ...(id ? { id } : {}), name, parentage, cnic, phone, address, carAmount: input.carAmount ?? 0 };
+  return { ...(id ? { id } : {}), name, parentage, cnic, phone, address, carAmount: input.carAmount ?? 0, ...(licenseNumber ? { licenseNumber } : {}), ...(licenseExpiresAt ? { licenseExpiresAt } : {}) };
 }
 
 /** Stored when the agent skips the optional fuel reading (the column is NOT NULL). */
@@ -110,9 +131,14 @@ export function parseConfirmBookingInput(value: unknown): ConfirmBookingInput {
     if (input[key] !== undefined && input[key] !== null && (!Number.isInteger(input[key]) || input[key]! < 0)) errors[key] = "Enter a non-negative whole PKR amount.";
   }
   if (input.estimatedKm !== undefined && (!Number.isInteger(input.estimatedKm) || input.estimatedKm < 0)) errors.estimatedKm = "Estimated mileage must be zero or more.";
-  if (input.dailyRateOverride !== undefined && (!Number.isInteger(input.dailyRateOverride) || input.dailyRateOverride < 1000)) errors.dailyRateOverride = "Enter a valid override rate.";
-  if(fulfillmentType==="external"&&input.dailyRateOverride===undefined)errors.dailyRateOverride="Enter the customer daily rate.";
-  if (fulfillmentType==="fleet"&&input.dailyRateOverride !== undefined && !input.overrideReason?.trim()) errors.overrideReason = "Explain why the destination rate is being changed.";
+  // The rent is negotiable: it may be left at 0 (agreed later) and changed after booking.
+  if (input.dailyRateOverride !== undefined && (!Number.isInteger(input.dailyRateOverride) || input.dailyRateOverride < 0)) errors.dailyRateOverride = "Enter a valid daily rate, or 0 to agree it later.";
+  const tripCharges: TripChargeInput[] = [];
+  if (input.tripCharges !== undefined && !Array.isArray(input.tripCharges)) errors.tripCharges = "Enter valid trip charges.";
+  for (const [index, item] of (Array.isArray(input.tripCharges) ? input.tripCharges : []).slice(0, 30).entries()) {
+    const charge = parseTripCharge(item, errors, `tripCharges.${index}`);
+    if (charge) tripCharges.push(charge);
+  }
   const startImmediately = Boolean(input.startImmediately);
   const checkoutInspection = input.checkoutInspection;
   if (startImmediately) {
@@ -124,6 +150,7 @@ export function parseConfirmBookingInput(value: unknown): ConfirmBookingInput {
     bookingDraftId: input.bookingDraftId?.trim() || undefined, quotationId: typeof input.quotationId === "string" && input.quotationId.trim() ? input.quotationId.trim() : undefined, vehicleId: input.vehicleId?.trim() || undefined, fulfillmentType, external:fulfillmentType==="external"&&external?{supplierName:external.supplierName.trim(),supplierPhone:external.supplierPhone.trim(),vehicleMake:external.vehicleMake.trim(),vehicleModel:external.vehicleModel.trim(),vehicleYear:external.vehicleYear,vehiclePlate:external.vehiclePlate.trim().toUpperCase(),vehicleColor:external.vehicleColor?.trim()||undefined,pricingMode:external.pricingMode,supplierSharePercent:external.supplierSharePercent,supplierFixedCost:external.supplierFixedCost}:undefined, customerId: input.customerId?.trim() || "", rentalMode, driverId:input.driverId?.trim()||undefined, renterSkipped:Boolean(input.renterSkipped), guarantor, destinationCity: input.destinationCity?.trim() || "Local", pickupAt: new Date(pickup).toISOString(), returnAt: new Date(returned).toISOString(),
     extras: input.extras ?? 0, discount: input.discount ?? 0, depositRequired: input.depositRequired ?? 0, source: input.source?.trim() || "counter", notes: input.notes?.trim() || undefined, estimatedKm: input.estimatedKm ?? 0, dailyRateOverride: input.dailyRateOverride, overrideReason: input.overrideReason?.trim() || undefined,
     startImmediately,
+    tripCharges,
     checkoutInspection:startImmediately&&checkoutInspection?{odometer:checkoutInspection.odometer,fuelLevel:checkoutInspection.fuelLevel?.trim()||NOT_RECORDED_FUEL,conditionNotes:checkoutInspection.conditionNotes?.trim()??""}:undefined,
   };
 }

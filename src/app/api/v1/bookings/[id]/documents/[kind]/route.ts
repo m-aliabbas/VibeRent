@@ -2,15 +2,17 @@ import { getApiRequestContext } from "@/server/auth/session";
 import { apiFailure } from "@/server/api/response";
 import { DomainError } from "@/server/domain/errors";
 import { createRentalAgreementPdf } from "@/server/documents/rental-agreement";
+import { createBookingInvoicePdf } from "@/server/documents/booking-invoice";
 import { renderBookingDocument, type BookingDocumentKind } from "@/server/services/notification-delivery-service";
 
 export const runtime = "nodejs";
 
-const kinds = ["agreement", "checkout", "checkin", "statement"] as const;
+const kinds = ["agreement", "checkout", "checkin", "statement", "invoice", "supplier-invoice"] as const;
 
 /**
  * WhatsApp-free document download for the mobile app: the PDF the server would otherwise send on
- * WhatsApp (agreement, checkout receipt, final invoice, payment statement). The phone shares it
+ * WhatsApp (agreement, checkout receipt, final invoice, payment statement), plus the itemised
+ * customer invoice (`invoice`) and the supplier invoice for sourced cars (`supplier-invoice`). The phone shares it
  * through its own WhatsApp or saves it. `X-Share-Caption` carries a ready-made message caption.
  */
 export async function GET(request: Request, route: { params: Promise<{ id: string; kind: string }> }) {
@@ -23,6 +25,8 @@ export async function GET(request: Request, route: { params: Promise<{ id: strin
     if (kind === "agreement") {
       const agreement = await createRentalAgreementPdf(context, id);
       document = { bytes: agreement.bytes, fileName: agreement.fileName, caption: "Rental agreement" };
+    } else if (kind === "invoice" || kind === "supplier-invoice") {
+      document = await createBookingInvoicePdf(context, id, kind === "invoice" ? "customer" : "supplier");
     } else {
       const rendered = await renderBookingDocument(context, id, kind as BookingDocumentKind);
       if (!rendered) throw new DomainError("NOT_FOUND", "Booking not found.", 404);

@@ -167,6 +167,7 @@ export async function readPrivateFile(context: RequestContext, id: string) {
   if (row.entityType === "customer") await assertCustomer(context, row.entityId);
   if (row.entityType === "booking") await assertBooking(context, row.entityId);
   if (row.entityType === "guarantor") await assertGuarantor(context, row.entityId);
+  if (row.entityType === "owner" && !await queryOne(`SELECT id FROM owners WHERE agency_id=? AND id=? LIMIT 1`,[context.agencyId, row.entityId])) throw new DomainError("NOT_FOUND", "File not found.", 404);
   if (row.entityType === "agency" && row.entityId !== context.agencyId) throw new DomainError("NOT_FOUND", "File not found.", 404);
   const absolutePath = path.resolve(storageRoot, row.storageKey);
   if (!absolutePath.startsWith(`${storageRoot}${path.sep}`)) throw new DomainError("INTERNAL_ERROR", "File storage path is invalid.", 500);

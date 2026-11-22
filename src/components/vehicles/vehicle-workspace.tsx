@@ -44,6 +44,7 @@ import { useHotkey } from "@/lib/hotkeys";
 import type React from "react";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
+import { PersonDocuments } from "@/components/shared/person-documents";
 import { InlineError } from "@/components/shared/inline-error";
 import { LoadingState } from "@/components/shared/loading-state";
 import { Toast } from "@/components/shared/toast";
@@ -335,6 +336,7 @@ export function VehicleWorkspace({ vehicleId, canDeleteHistory }: { vehicleId: s
               <dl className="grid grid-cols-2 gap-x-5 gap-y-5 sm:grid-cols-3">
                 {[
                   ["Daily rate", formatPkr(vehicle.dailyRate)],
+                  ["Vehicle value", vehicle.vehicleValue ? formatPkr(vehicle.vehicleValue) : "Not set"],
                   ["Ownership", vehicle.ownership],
                   ["Owner", vehicle.owner || "Agency owned"],
                   ["Transmission", vehicle.transmission],
@@ -676,6 +678,7 @@ function VehicleAttachments({vehicle}:{vehicle:Vehicle}) {
       {loading?<LoadingState rows={3}/>:documents.length?<div className="space-y-3">{documents.map(file=><button type="button" disabled={Boolean(downloading)} onClick={()=>void download(file)} key={file.id} className="flex w-full items-center gap-3 rounded-[10px] border border-[#EAECF0] p-4 text-left hover:border-[#84CAFF] hover:bg-[#FAFCFF] disabled:opacity-60"><span className="grid h-10 w-10 place-items-center rounded-lg bg-[#EFF8FF] text-[#006FE6]"><FileText size={19}/></span><span className="min-w-0 flex-1"><strong className="block truncate text-sm">{file.originalName}</strong><span className="mt-1 block text-xs text-[#667085]">{file.mimeType} · {(file.size/1024).toFixed(0)} KB · {new Intl.DateTimeFormat("en-PK",{dateStyle:"medium"}).format(new Date(file.createdAt))}</span></span><StatusBadge status={downloading===file.id?"Saving":"Ready"}/></button>)}</div>:<div className="rounded-[10px] border border-dashed p-8 text-center text-sm text-[#667085]"><FileText className="mx-auto mb-2"/>No documents uploaded yet.</div>}
       <p className="mt-4 text-xs leading-5 text-[#667085]">Attachments are stored outside SQLite, remain private to the signed-in agency, and download through an authorized route.</p>
     </Panel>
+    <div className="xl:col-span-2"><Panel title="Registration card & owner CNIC"><PersonDocuments owner="vehicle" ownerId={vehicle.id}/></Panel></div>
     <ConfirmDialog open={Boolean(removing)} onOpenChange={next=>!next&&setRemoving(undefined)} title={`Remove ${removing?.originalName??"file"}?`} description="The file is removed from this vehicle's media. You can upload it again later." onConfirm={()=>void removeFile()} pending={removePending} confirmLabel="Remove" pendingLabel="Removing…"/>
   </div>;
 }

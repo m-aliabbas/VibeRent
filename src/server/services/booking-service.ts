@@ -15,6 +15,8 @@ import {
   parseRecordDepositInput,
   parseRecordPaymentInput,
   parseReverseTransactionInput,
+  parseTripCharge,
+  type TripChargeKind,
 } from "@/server/validation/booking";
 import { parseCheckInRentalInput, parseRentalInspectionInput, type CheckInRentalInput } from "@/server/validation/rental-operation";
 import { calculateEarlyReturn, calculateLateReturn, formatLateReturnDuration } from "@/lib/rental-time";
@@ -34,7 +36,7 @@ type BookingRow = {
   fulfillment_type:"fleet"|"external";external_supplier_name:string|null;external_supplier_phone:string|null;external_vehicle_make:string|null;external_vehicle_model:string|null;external_vehicle_year:number|null;external_vehicle_plate:string|null;supplier_pricing_mode:"percentage"|"fixed"|null;supplier_share_percent:number|null;supplier_fixed_cost:number|null;supplier_payable:number|null;
   rental_mode:"self_drive"|"with_driver";renter_skipped:number;driver_id:string|null;driver:string|null;
   guarantor_name:string|null;guarantor_parentage:string|null;guarantor_cnic:string|null;guarantor_phone:string|null;guarantor_address:string|null;guarantor_car_amount:number|null;
-  destination_city: string; pickup_at: string; return_at: string; daily_rate: number; pricing_mode:string; estimated_km:number; mileage_rate:number; rate_override_reason:string|null; terms_snapshot:string; extras: number; discount: number; total_amount: number; deposit_required: number; paid: number; deposit_held: number; payment_state:string; supplier_paid:number; status: string; source: string; notes: string | null; version:number;
+  destination_city: string; pickup_at: string; return_at: string; daily_rate: number; pricing_mode:string; estimated_km:number; mileage_rate:number; rate_override_reason:string|null; terms_snapshot:string; extras: number; trip_charges: number; discount: number; total_amount: number; deposit_required: number; paid: number; deposit_held: number; payment_state:string; supplier_paid:number; status: string; source: string; notes: string | null; version:number;
 };
 
 const displayStatus: Record<string, BookingListItem["status"]> = { draft: "Draft", confirmed: "Confirmed", checked_out: "Checked Out", completed: "Completed", cancelled: "Cancelled", no_show: "No Show" };
@@ -106,6 +108,7 @@ export async function listBookings(context: RequestContext): Promise<BookingList
       totalAmount: row.total_amount,
       days,
       extras: row.extras,
+      tripCharges: row.trip_charges ?? 0,
       discount: row.discount,
       tax: 0,
       deposit: row.deposit_required,
@@ -210,7 +213,8 @@ export async function getBooking(context: RequestContext, id: string) {
     id:renter.guarantorId,name:renter.guarantorName,parentage:renter.guarantorParentage??"",cnic:renter.guarantorCnic??"",phone:renter.guarantorPhone??"",address:renter.guarantorAddress??"",carAmount:Number(renter.guarantorCarAmount??0),
   }:undefined;
   const lastVehicleOdometer=booking.fulfillmentType==="fleet"?await getLastVehicleOdometer(context.agencyId,booking.vehicleId):undefined;
-  return { ...booking, customerCnic:renter?.customerCnic, customerPhone:renter?.customerPhone, guarantor, inspections, transactions, sourcePayouts, lastVehicleOdometer };
+  const charges=await listBookingCharges(context.agencyId,id);
+  return { ...booking, charges, customerCnic:renter?.customerCnic, customerPhone:renter?.customerPhone, guarantor, inspections, transactions, sourcePayouts, lastVehicleOdometer };
 }
 
 export async function listAvailabilityBlocks(context: RequestContext): Promise<AvailabilityBlockDto[]> {
@@ -256,8 +260,8 @@ async function transitionRental(context: RequestContext, bookingId: string, kind
   const zonedInput = await withAgencyInstants(context.agencyId, rawInput, ["returnedAt"]);
   const input = kind === "checkin" ? parseCheckInRentalInput(zonedInput) : parseRentalInspectionInput(zonedInput);
   return inTransaction(async () => {
-    const booking = await queryOne<{ id: string; vehicleId: string|null; customerId: string; status: string; version: number; totalAmount: number; pickupAt:string; returnAt:string; dailyRate:number; mileageRate:number; estimatedKm:number; extras:number; discount:number; paid: number; fulfillmentType:"fleet"|"external"; supplierPricingMode:"percentage"|"fixed"|null; supplierSharePercent:number|null; supplierFixedCost:number|null; supplierPayable:number|null }>(`SELECT bk.id, bk.vehicle_id AS vehicleId, bk.customer_id AS customerId, bk.status, bk.version, bk.total_amount AS totalAmount,
-      bk.pickup_at AS pickupAt,bk.return_at AS returnAt,bk.daily_rate AS dailyRate,bk.mileage_rate AS mileageRate,bk.estimated_km AS estimatedKm,bk.extras,bk.discount,bk.fulfillment_type AS fulfillmentType,bk.supplier_fixed_cost AS supplierFixedCost,bk.supplier_pricing_mode AS supplierPricingMode,bk.supplier_share_percent AS supplierSharePercent,bk.supplier_payable AS supplierPayable,
+    const booking = await queryOne<{ id: string; vehicleId: string|null; customerId: string; status: string; version: number; totalAmount: number; pickupAt:string; returnAt:string; dailyRate:number; mileageRate:number; estimatedKm:number; extras:number; tripCharges:number; discount:number; paid: number; fulfillmentType:"fleet"|"external"; supplierPricingMode:"percentage"|"fixed"|null; supplierSharePercent:number|null; supplierFixedCost:number|null; supplierPayable:number|null }>(`SELECT bk.id, bk.vehicle_id AS vehicleId, bk.customer_id AS customerId, bk.status, bk.version, bk.total_amount AS totalAmount,
+      bk.pickup_at AS pickupAt,bk.return_at AS returnAt,bk.daily_rate AS dailyRate,bk.mileage_rate AS mileageRate,bk.estimated_km AS estimatedKm,bk.extras,bk.trip_charges AS tripCharges,bk.discount,bk.fulfillment_type AS fulfillmentType,bk.supplier_fixed_cost AS supplierFixedCost,bk.supplier_pricing_mode AS supplierPricingMode,bk.supplier_share_percent AS supplierSharePercent,bk.supplier_payable AS supplierPayable,
       coalesce((SELECT sum(CASE WHEN lower(ft.kind) IN ('refund','reversal','payment_adjustment_decrease') THEN -ft.amount ELSE ft.amount END) FROM financial_transactions ft WHERE ft.agency_id=bk.agency_id AND ft.booking_id=bk.id AND ft.status='posted' AND lower(ft.kind) IN ('payment','late_return_charge','deposit_applied','payment_adjustment_increase','payment_adjustment_decrease','reversal','refund')),0) AS paid
       FROM bookings bk WHERE bk.agency_id=? AND bk.id=? LIMIT 1 /*postgres:for-update*/`,[context.agencyId, bookingId]);
     if (!booking) throw new DomainError("NOT_FOUND", "Booking not found.", 404);
@@ -283,11 +287,11 @@ async function transitionRental(context: RequestContext, bookingId: string, kind
       if(booking.vehicleId)await execute(`UPDATE vehicles SET status='booked', version=version+1, updated_at=? WHERE agency_id=? AND id=?`,[now, context.agencyId, booking.vehicleId]);
     } else {
       const lateDuration=calculateLateReturn(booking.returnAt,returnedAt);
-      const earlyReturn=calculateEarlyReturn({...booking,returnedAt});
+      const earlyReturn=calculateEarlyReturn({...booking,extras:booking.extras+booking.tripCharges,returnedAt});
       if(earlyReturn.early){
         const nextSupplierPayable=booking.fulfillmentType==="external"
           ? booking.supplierPricingMode==="percentage"
-            ? Math.round(earlyReturn.totalAmount*(booking.supplierSharePercent??83)/100)
+            ? Math.round(Math.max(0,earlyReturn.totalAmount-booking.tripCharges)*(booking.supplierSharePercent??83)/100)
             : Math.min(booking.supplierFixedCost??0,earlyReturn.totalAmount)
           : booking.supplierPayable;
         await execute(`UPDATE bookings SET return_at=?,total_amount=?,supplier_payable=? WHERE agency_id=? AND id=?`,[returnedAt,earlyReturn.totalAmount,nextSupplierPayable,context.agencyId,bookingId]);
@@ -367,13 +371,15 @@ export async function confirmBooking(context: RequestContext, rawInput: unknown)
     const days = Math.max(1, Math.ceil((Date.parse(input.returnAt) - Date.parse(input.pickupAt)) / 86_400_000));
     const rule = input.fulfillmentType==="fleet"?await queryOne<{dailyRate:number;perKmRate:number;minimumDays:number}>(`SELECT daily_rate AS dailyRate,per_km_rate AS perKmRate,minimum_days AS minimumDays FROM vehicle_rate_rules WHERE agency_id=? AND vehicle_id=? AND active=1 AND lower(destination_city)=lower(?) LIMIT 1`,[context.agencyId,input.vehicleId,input.destinationCity]):undefined;
     if (rule && days < rule.minimumDays) throw new DomainError("VALIDATION_FAILED", `This destination requires at least ${rule.minimumDays} rental days.`, 400, { returnAt: `Choose at least ${rule.minimumDays} days.` });
-    const dailyRate = input.dailyRateOverride ?? (input.rentalMode==="with_driver"?(vehicle!.with_driver_rate??vehicle!.daily_rate):rule?.dailyRate??vehicle!.daily_rate);
+    const dailyRate = input.dailyRateOverride ?? (input.fulfillmentType==="external"?0:input.rentalMode==="with_driver"?(vehicle!.with_driver_rate??vehicle!.daily_rate):rule?.dailyRate??vehicle!.daily_rate);
     const mileageRate = rule?.perKmRate ?? 0;
     const pricingMode = input.dailyRateOverride !== undefined ? "manual_override" : rule ? (mileageRate > 0 ? "destination_plus_mileage" : "destination_fixed") : "vehicle_default";
     const subtotal = dailyRate * days + mileageRate * input.estimatedKm;
-    if (input.discount > subtotal + input.extras) throw new DomainError("VALIDATION_FAILED", "Discount cannot exceed the booking subtotal.", 400, { discount: "Reduce the discount." });
-    const totalAmount = subtotal + input.extras - input.discount;
-    const supplierPayable=input.fulfillmentType==="external"?(input.external!.pricingMode==="percentage"?Math.round(totalAmount*(input.external!.supplierSharePercent??83)/100):(input.external!.supplierFixedCost??0)):null;
+    const tripCharges = (input.tripCharges ?? []).reduce((sum, item) => sum + item.amount, 0);
+    if (input.discount > subtotal + input.extras + tripCharges) throw new DomainError("VALIDATION_FAILED", "Discount cannot exceed the booking subtotal.", 400, { discount: "Reduce the discount." });
+    const totalAmount = subtotal + input.extras + tripCharges - input.discount;
+    // A supplier's percentage applies to the rent, not to pass-through trip costs.
+    const supplierPayable=input.fulfillmentType==="external"?(input.external!.pricingMode==="percentage"?Math.round(Math.max(0,totalAmount-tripCharges)*(input.external!.supplierSharePercent??83)/100):(input.external!.supplierFixedCost??0)):null;
     if(supplierPayable!==null&&supplierPayable>totalAmount)throw new DomainError("VALIDATION_FAILED","Supplier cost cannot exceed the customer total.",400,{"external.supplierFixedCost":"Reduce the supplier cost or increase the customer price."});
     const id = `BKG-${randomUUID().slice(0, 8).toUpperCase()}`;
     const now = new Date().toISOString();
@@ -382,12 +388,12 @@ export async function confirmBooking(context: RequestContext, rawInput: unknown)
       id,agency_id,public_number,branch_id,vehicle_id,customer_id,driver_id,rental_mode,renter_skipped,fulfillment_type,external_supplier_name,external_supplier_phone,external_vehicle_make,external_vehicle_model,external_vehicle_year,external_vehicle_plate,external_vehicle_color,supplier_pricing_mode,supplier_share_percent,supplier_fixed_cost,supplier_payable,
       guarantor_name,guarantor_parentage,guarantor_cnic,guarantor_phone,guarantor_address,guarantor_car_amount,
       destination_city,pickup_at,return_at,status,daily_rate,pricing_mode,estimated_km,mileage_rate,rate_override_reason,
-      terms_snapshot,extras,discount,total_amount,deposit_required,source,notes,created_at,updated_at
+      terms_snapshot,extras,trip_charges,discount,total_amount,deposit_required,source,notes,created_at,updated_at
     ) VALUES (
       @id,@agencyId,@publicNumber,@branchId,@vehicleId,@customerId,@driverId,@rentalMode,@renterSkipped,@fulfillmentType,@externalSupplierName,@externalSupplierPhone,@externalVehicleMake,@externalVehicleModel,@externalVehicleYear,@externalVehiclePlate,@externalVehicleColor,@supplierPricingMode,@supplierSharePercent,@supplierFixedCost,@supplierPayable,
       @guarantorName,@guarantorParentage,@guarantorCnic,@guarantorPhone,@guarantorAddress,@guarantorCarAmount,
       @destinationCity,@pickupAt,@returnAt,'confirmed',@dailyRate,@pricingMode,@estimatedKm,@mileageRate,@rateOverrideReason,
-      @termsSnapshot,@extras,@discount,@totalAmount,@depositRequired,@source,@notes,@createdAt,@updatedAt
+      @termsSnapshot,@extras,@tripCharges,@discount,@totalAmount,@depositRequired,@source,@notes,@createdAt,@updatedAt
     )`,{
       id,agencyId:context.agencyId,publicNumber:bookingDraft.publicNumber,branchId:vehicle?.branch_id??externalBranch!.id,vehicleId:input.vehicleId??null,customerId,
       driverId:input.driverId??null,rentalMode:input.rentalMode,renterSkipped:input.renterSkipped?1:0,
@@ -395,9 +401,12 @@ export async function confirmBooking(context: RequestContext, rawInput: unknown)
       guarantorName:input.guarantor?.name??null,guarantorParentage:input.guarantor?.parentage??null,guarantorCnic:input.guarantor?.cnic??null,
       guarantorPhone:input.guarantor?.phone??null,guarantorAddress:input.guarantor?.address??null,guarantorCarAmount:input.guarantor?.carAmount??null,
       destinationCity:input.destinationCity,pickupAt:input.pickupAt,returnAt:input.returnAt,dailyRate,pricingMode,estimatedKm:input.estimatedKm,
-      mileageRate,rateOverrideReason:input.overrideReason??null,termsSnapshot,extras:input.extras,discount:input.discount,totalAmount,
+      mileageRate,rateOverrideReason:input.overrideReason??null,termsSnapshot,extras:input.extras,tripCharges,discount:input.discount,totalAmount,
       depositRequired:input.depositRequired,source:input.source,notes:input.notes??null,createdAt:now,updatedAt:now,
     });
+    for (const charge of input.tripCharges ?? []) {
+      await execute(`INSERT INTO booking_charges (id,agency_id,booking_id,kind,description,amount,actor_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,[`chg_${randomUUID()}`,context.agencyId,id,charge.kind,charge.description,charge.amount,context.userId,now,now]);
+    }
     if(input.startImmediately&&input.checkoutInspection){
       await execute(`INSERT INTO rental_inspections (id,agency_id,booking_id,kind,odometer,fuel_level,condition_notes,actor_id,occurred_at,created_at,updated_at) VALUES (?,?,?,'checkout',?,?,?,?,?,?,?)`,[randomUUID(),context.agencyId,id,input.checkoutInspection.odometer,input.checkoutInspection.fuelLevel,input.checkoutInspection.conditionNotes,context.userId,now,now,now]);
       await execute(`UPDATE bookings SET status='checked_out',checked_out_at=?,version=version+1,updated_at=? WHERE agency_id=? AND id=?`,[now,now,context.agencyId,id]);
@@ -406,15 +415,17 @@ export async function confirmBooking(context: RequestContext, rawInput: unknown)
     }
     await execute("UPDATE booking_drafts SET status='consumed',consumed_at=?,updated_at=? WHERE agency_id=? AND id=? AND status='active'",[now, now, context.agencyId, bookingDraft.id]);
     if(input.quotationId)await linkQuotationBooking(context,input.quotationId,id,now);
-    await execute(`UPDATE private_files SET entity_type='customer',entity_id=?,updated_at=? WHERE agency_id=? AND entity_type='booking_draft' AND entity_id=? AND classification IN ('customer_cnic_front','customer_cnic_back') AND status='ready'`,[customerId,now,context.agencyId,bookingDraft.id]);
+    // Draft ID images replace the same slots on the customer, so the newest scan is the one shown and attached to agreements.
+    await execute(`UPDATE private_files SET status='replaced',updated_at=? WHERE agency_id=? AND entity_type='customer' AND entity_id=? AND status='ready' AND classification IN (SELECT classification FROM private_files WHERE agency_id=? AND entity_type='booking_draft' AND entity_id=? AND status='ready' AND classification IN ('customer_cnic_front','customer_cnic_back','customer_license_front','customer_license_back'))`,[now,context.agencyId,customerId,context.agencyId,bookingDraft.id]);
+    await execute(`UPDATE private_files SET entity_type='customer',entity_id=?,updated_at=? WHERE agency_id=? AND entity_type='booking_draft' AND entity_id=? AND classification IN ('customer_cnic_front','customer_cnic_back','customer_license_front','customer_license_back') AND status='ready'`,[customerId,now,context.agencyId,bookingDraft.id]);
     if(input.guarantor){
       // The booking's guarantor becomes (or reuses) a saved guarantor linked to the customer; their CNIC images follow them.
       const guarantorId=await resolveBookingGuarantor(context,input.guarantor,input.rentalMode==="with_driver"&&input.renterSkipped?null:customerId,now);
       await execute("UPDATE bookings SET guarantor_id=? WHERE agency_id=? AND id=?",[guarantorId,context.agencyId,id]);
-      await execute(`UPDATE private_files SET status='replaced',updated_at=? WHERE agency_id=? AND entity_type='guarantor' AND entity_id=? AND classification IN (SELECT classification FROM private_files WHERE agency_id=? AND entity_type='booking_draft' AND entity_id=? AND classification IN ('guarantor_cnic_front','guarantor_cnic_back') AND status='ready') AND status='ready'`,[now,context.agencyId,guarantorId,context.agencyId,bookingDraft.id]);
-      await execute(`UPDATE private_files SET entity_type='guarantor',entity_id=?,updated_at=? WHERE agency_id=? AND entity_type='booking_draft' AND entity_id=? AND classification IN ('guarantor_cnic_front','guarantor_cnic_back') AND status='ready'`,[guarantorId,now,context.agencyId,bookingDraft.id]);
+      await execute(`UPDATE private_files SET status='replaced',updated_at=? WHERE agency_id=? AND entity_type='guarantor' AND entity_id=? AND classification IN (SELECT classification FROM private_files WHERE agency_id=? AND entity_type='booking_draft' AND entity_id=? AND classification IN ('guarantor_cnic_front','guarantor_cnic_back','guarantor_license_front','guarantor_license_back') AND status='ready') AND status='ready'`,[now,context.agencyId,guarantorId,context.agencyId,bookingDraft.id]);
+      await execute(`UPDATE private_files SET entity_type='guarantor',entity_id=?,updated_at=? WHERE agency_id=? AND entity_type='booking_draft' AND entity_id=? AND classification IN ('guarantor_cnic_front','guarantor_cnic_back','guarantor_license_front','guarantor_license_back') AND status='ready'`,[guarantorId,now,context.agencyId,bookingDraft.id]);
     }else{
-      await execute(`UPDATE private_files SET status='replaced',updated_at=? WHERE agency_id=? AND entity_type='booking_draft' AND entity_id=? AND classification IN ('guarantor_cnic_front','guarantor_cnic_back') AND status='ready'`,[now,context.agencyId,bookingDraft.id]);
+      await execute(`UPDATE private_files SET status='replaced',updated_at=? WHERE agency_id=? AND entity_type='booking_draft' AND entity_id=? AND classification IN ('guarantor_cnic_front','guarantor_cnic_back','guarantor_license_front','guarantor_license_back') AND status='ready'`,[now,context.agencyId,bookingDraft.id]);
     }
     await execute(`INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)`,[randomUUID(), context.agencyId, context.userId, "booking.confirmed", "booking", id, JSON.stringify({ vehicleId: input.vehicleId, fulfillmentType:input.fulfillmentType, supplierPayable, destinationCity:input.destinationCity, pickupAt: input.pickupAt, returnAt: input.returnAt, dailyRate, mileageRate, totalAmount, pricingMode, guarantorRecorded:Boolean(input.guarantor) }), now]);
     return { id, publicNumber: bookingDraft.publicNumber, status: input.startImmediately ? "checked_out" as const : "confirmed" as const, dailyRate, mileageRate, totalAmount, currency: "PKR" as const };
@@ -428,7 +439,7 @@ export async function amendBooking(context:RequestContext, bookingId:string, raw
   if(!input.vehicleId||!input.destinationCity?.trim()||!Number.isFinite(pickup)||!Number.isFinite(returned)||returned<=pickup) throw new DomainError("VALIDATION_FAILED","Review the amended vehicle, destination, and dates.",400);
   const destinationCity=input.destinationCity.trim();
   return inTransaction(async ()=>{
-    const booking=await queryOne<{id:string;status:string;version:number;extras:number;discount:number}>("SELECT id,status,version,extras,discount FROM bookings WHERE agency_id=? AND id=?",[context.agencyId,bookingId]);
+    const booking=await queryOne<{id:string;status:string;version:number;extras:number;tripCharges:number;discount:number;dailyRate:number;pricingMode:string;estimatedKm:number}>("SELECT id,status,version,extras,trip_charges AS tripCharges,discount,daily_rate AS dailyRate,pricing_mode AS pricingMode,estimated_km AS estimatedKm FROM bookings WHERE agency_id=? AND id=?",[context.agencyId,bookingId]);
     if(!booking) throw new DomainError("NOT_FOUND","Booking not found.",404);
     if(booking.status!=="confirmed") throw new DomainError("INVALID_STATUS_TRANSITION","Only confirmed bookings can be amended.",409);
     if(input.version!==undefined&&input.version!==booking.version) throw new DomainError("VERSION_CONFLICT","The booking changed since it was loaded.",409);
@@ -439,9 +450,11 @@ export async function amendBooking(context:RequestContext, bookingId:string, raw
     const rule=await queryOne<{dailyRate:number;perKmRate:number;minimumDays:number}>("SELECT daily_rate AS dailyRate,per_km_rate AS perKmRate,minimum_days AS minimumDays FROM vehicle_rate_rules WHERE agency_id=? AND vehicle_id=? AND active=1 AND lower(destination_city)=lower(?) LIMIT 1",[context.agencyId,input.vehicleId,destinationCity]);
     const days=Math.max(1,Math.ceil((returned-pickup)/86_400_000));
     if(rule&&days<rule.minimumDays) throw new DomainError("VALIDATION_FAILED",`This destination requires at least ${rule.minimumDays} days.`,400);
-    const rate=rule?.dailyRate??vehicle.dailyRate;const mileage=rule?.perKmRate??0;const total=rate*days+booking.extras-booking.discount;
+    // A negotiated (manual) rate survives an amendment; otherwise the vehicle/destination rate applies.
+    const negotiated=booking.pricingMode==="manual_override";
+    const rate=negotiated?booking.dailyRate:rule?.dailyRate??vehicle.dailyRate;const mileage=rule?.perKmRate??0;const total=Math.max(0,rate*days+mileage*booking.estimatedKm+booking.extras+booking.tripCharges-booking.discount);
     const now=new Date().toISOString();
-    await execute("UPDATE bookings SET branch_id=?,vehicle_id=?,destination_city=?,pickup_at=?,return_at=?,daily_rate=?,pricing_mode=?,mileage_rate=?,total_amount=?,version=version+1,updated_at=? WHERE agency_id=? AND id=?",[vehicle.branchId,input.vehicleId,destinationCity,new Date(pickup).toISOString(),new Date(returned).toISOString(),rate,rule?(mileage?"destination_plus_mileage":"destination_fixed"):"vehicle_default",mileage,total,now,context.agencyId,bookingId]);
+    await execute("UPDATE bookings SET branch_id=?,vehicle_id=?,destination_city=?,pickup_at=?,return_at=?,daily_rate=?,pricing_mode=?,mileage_rate=?,total_amount=?,version=version+1,updated_at=? WHERE agency_id=? AND id=?",[vehicle.branchId,input.vehicleId,destinationCity,new Date(pickup).toISOString(),new Date(returned).toISOString(),rate,negotiated?"manual_override":rule?(mileage?"destination_plus_mileage":"destination_fixed"):"vehicle_default",mileage,total,now,context.agencyId,bookingId]);
     await execute("INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)",[randomUUID(),context.agencyId,context.userId,"booking.amended","booking",bookingId,JSON.stringify({vehicleId:input.vehicleId,destinationCity:input.destinationCity,pickupAt:input.pickupAt,returnAt:input.returnAt}),now]);
     return getBooking(context,bookingId);
   },{immediate:true});
@@ -453,7 +466,7 @@ export async function extendRental(context:RequestContext, bookingId:string, raw
   const returned=typeof input.returnAt==="string"?Date.parse(input.returnAt):Number.NaN;
   if(!Number.isFinite(returned))throw new DomainError("VALIDATION_FAILED","Enter a valid new return time.",400,{returnAt:"Choose a valid date and time."});
   return inTransaction(async ()=>{
-    const booking=await queryOne<{id:string;vehicleId:string|null;fulfillmentType:"fleet"|"external";pickupAt:string;returnAt:string;status:string;dailyRate:number;estimatedKm:number;mileageRate:number;extras:number;discount:number;version:number;supplierPricingMode:"percentage"|"fixed"|null;supplierSharePercent:number|null;supplierFixedCost:number|null}>(`SELECT id,vehicle_id AS vehicleId,fulfillment_type AS fulfillmentType,pickup_at AS pickupAt,return_at AS returnAt,status,daily_rate AS dailyRate,estimated_km AS estimatedKm,mileage_rate AS mileageRate,extras,discount,version,
+    const booking=await queryOne<{id:string;vehicleId:string|null;fulfillmentType:"fleet"|"external";pickupAt:string;returnAt:string;status:string;dailyRate:number;estimatedKm:number;mileageRate:number;extras:number;tripCharges:number;discount:number;version:number;supplierPricingMode:"percentage"|"fixed"|null;supplierSharePercent:number|null;supplierFixedCost:number|null}>(`SELECT id,vehicle_id AS vehicleId,fulfillment_type AS fulfillmentType,pickup_at AS pickupAt,return_at AS returnAt,status,daily_rate AS dailyRate,estimated_km AS estimatedKm,mileage_rate AS mileageRate,extras,trip_charges AS tripCharges,discount,version,
         supplier_pricing_mode AS supplierPricingMode,supplier_share_percent AS supplierSharePercent,supplier_fixed_cost AS supplierFixedCost
       FROM bookings WHERE agency_id=? AND id=? AND archived_at IS NULL LIMIT 1`,[context.agencyId,bookingId]);
     if(!booking)throw new DomainError("NOT_FOUND","Booking not found.",404);
@@ -470,10 +483,10 @@ export async function extendRental(context:RequestContext, bookingId:string, raw
     const newDays=Math.max(1,Math.ceil((returned-Date.parse(booking.pickupAt))/86_400_000));
     const addedDays=Math.max(0,newDays-oldDays);
     const extensionCharge=addedDays*booking.dailyRate;
-    const totalAmount=booking.dailyRate*newDays+booking.mileageRate*booking.estimatedKm+booking.extras-booking.discount;
+    const totalAmount=booking.dailyRate*newDays+booking.mileageRate*booking.estimatedKm+booking.extras+booking.tripCharges-booking.discount;
     const supplierPayable=booking.fulfillmentType==="external"
       ? booking.supplierPricingMode==="percentage"
-        ? Math.round(totalAmount*(booking.supplierSharePercent??83)/100)
+        ? Math.round(Math.max(0,totalAmount-booking.tripCharges)*(booking.supplierSharePercent??83)/100)
         : booking.supplierFixedCost??0
       : null;
     if(supplierPayable!==null&&supplierPayable>totalAmount)throw new DomainError("VALIDATION_FAILED","Supplier cost cannot exceed the customer total.",400,{returnAt:"Increase the rental total or correct the supplier agreement."});
@@ -933,4 +946,115 @@ export async function reverseBookingTransaction(context: RequestContext, booking
 
     return getBooking(context, bookingId);
   },{immediate:true});
+}
+
+// ─── Negotiated pricing and trip charges ────────────────────────────────────
+
+export type BookingChargeDto = { id: string; kind: TripChargeKind; description: string; amount: number; createdAt: string };
+
+export function listBookingCharges(agencyId: string, bookingId: string) {
+  return queryAll<BookingChargeDto>(`SELECT id,kind,description,amount,created_at AS createdAt FROM booking_charges WHERE agency_id=? AND booking_id=? ORDER BY created_at`,[agencyId,bookingId]);
+}
+
+type PricingRow = { id:string; status:string; version:number; pickupAt:string; returnAt:string; dailyRate:number; mileageRate:number; estimatedKm:number; extras:number; tripCharges:number; discount:number; depositRequired:number; totalAmount:number; fulfillmentType:"fleet"|"external"; supplierPricingMode:"percentage"|"fixed"|null; supplierSharePercent:number|null; supplierFixedCost:number|null };
+
+async function loadPricingRow(context: RequestContext, bookingId: string) {
+  const row = await queryOne<PricingRow>(`SELECT id,status,version,pickup_at AS pickupAt,return_at AS returnAt,daily_rate AS dailyRate,mileage_rate AS mileageRate,estimated_km AS estimatedKm,extras,trip_charges AS tripCharges,discount,deposit_required AS depositRequired,total_amount AS totalAmount,
+    fulfillment_type AS fulfillmentType,supplier_pricing_mode AS supplierPricingMode,supplier_share_percent AS supplierSharePercent,supplier_fixed_cost AS supplierFixedCost
+    FROM bookings WHERE agency_id=? AND id=? AND archived_at IS NULL LIMIT 1 /*postgres:for-update*/`,[context.agencyId,bookingId]);
+  if (!row) throw new DomainError("NOT_FOUND","Booking not found.",404);
+  if (["draft","cancelled","no_show"].includes(row.status)) throw new DomainError("INVALID_STATUS_TRANSITION","This booking's price can no longer be changed.",409);
+  return row;
+}
+
+/** Rent + mileage + extras + trip charges - discount, and the supplier share on the rent part. */
+function priceBooking(row: PricingRow) {
+  const days = Math.max(1, Math.ceil((Date.parse(row.returnAt) - Date.parse(row.pickupAt)) / 86_400_000));
+  const totalAmount = row.dailyRate * days + row.mileageRate * row.estimatedKm + row.extras + row.tripCharges - row.discount;
+  const supplierPayable = row.fulfillmentType === "external"
+    ? row.supplierPricingMode === "percentage" ? Math.round(Math.max(0, totalAmount - row.tripCharges) * (row.supplierSharePercent ?? 83) / 100) : row.supplierFixedCost ?? 0
+    : null;
+  return { days, totalAmount, supplierPayable };
+}
+
+async function auditBooking(context: RequestContext, action: string, bookingId: string, metadata: Record<string, unknown>, now: string) {
+  await execute(`INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)`,[randomUUID(),context.agencyId,context.userId,action,"booking",bookingId,JSON.stringify(metadata),now]);
+}
+
+async function applyPrice(context: RequestContext, row: PricingRow, now: string) {
+  const { totalAmount, supplierPayable } = priceBooking(row);
+  if (totalAmount < 0) throw new DomainError("VALIDATION_FAILED","The discount is larger than the booking amount.",400,{discount:"Reduce the discount."});
+  if (supplierPayable !== null && supplierPayable > totalAmount) throw new DomainError("VALIDATION_FAILED","Supplier cost cannot exceed the customer total.",400,{dailyRate:"Increase the customer price or correct the supplier terms."});
+  await execute(`UPDATE bookings SET daily_rate=?,extras=?,trip_charges=?,discount=?,deposit_required=?,total_amount=?,supplier_payable=coalesce(?,supplier_payable),version=version+1,updated_at=? WHERE agency_id=? AND id=?`,
+    [row.dailyRate,row.extras,row.tripCharges,row.discount,row.depositRequired,totalAmount,supplierPayable,now,context.agencyId,row.id]);
+  return totalAmount;
+}
+
+/**
+ * Changes the negotiated price of a booking before or after handover: daily rent, extras, discount and
+ * deposit. The total is recalculated on the server and the change is kept in the audit trail.
+ */
+export async function updateBookingPricing(context: RequestContext, bookingId: string, rawInput: unknown) {
+  requireRole(context, ["agency_owner", "fleet_manager", "rental_agent", "accountant"]);
+  const input = rawInput as { dailyRate?: unknown; extras?: unknown; discount?: unknown; depositRequired?: unknown; reason?: unknown; version?: unknown } | null;
+  const errors: Record<string, string> = {};
+  for (const key of ["dailyRate", "extras", "discount", "depositRequired"] as const) {
+    const value = input?.[key];
+    if (value !== undefined && (!Number.isSafeInteger(value) || (value as number) < 0)) errors[key] = "Enter a non-negative whole PKR amount.";
+  }
+  if (!input || typeof input !== "object" || Object.keys(errors).length) throw new DomainError("VALIDATION_FAILED","Review the price details.",400,errors);
+  return inTransaction(async () => {
+    const row = await loadPricingRow(context, bookingId);
+    if (typeof input.version === "number" && input.version !== row.version) throw new DomainError("VERSION_CONFLICT","The booking changed since it was loaded. Reload it and try again.",409);
+    const before = { dailyRate: row.dailyRate, extras: row.extras, discount: row.discount, depositRequired: row.depositRequired, totalAmount: row.totalAmount };
+    const next: PricingRow = { ...row,
+      dailyRate: (input.dailyRate as number | undefined) ?? row.dailyRate,
+      extras: (input.extras as number | undefined) ?? row.extras,
+      discount: (input.discount as number | undefined) ?? row.discount,
+      depositRequired: (input.depositRequired as number | undefined) ?? row.depositRequired,
+    };
+    const now = new Date().toISOString();
+    const reason = typeof input.reason === "string" ? input.reason.trim().slice(0, 200) : "";
+    if (next.dailyRate !== row.dailyRate) await execute("UPDATE bookings SET pricing_mode='manual_override',rate_override_reason=? WHERE agency_id=? AND id=?",[reason || "Negotiated rate",context.agencyId,bookingId]);
+    const totalAmount = await applyPrice(context, next, now);
+    await auditBooking(context, "booking.pricing_updated", bookingId, { before, after: { dailyRate: next.dailyRate, extras: next.extras, discount: next.discount, depositRequired: next.depositRequired, totalAmount }, reason: reason || null }, now);
+    return getBooking(context, bookingId);
+  }, { immediate: true });
+}
+
+/** Adds or edits one trip charge (toll, fuel, driver, parking, other) and re-prices the booking. */
+export async function saveBookingCharge(context: RequestContext, bookingId: string, rawInput: unknown) {
+  requireRole(context, ["agency_owner", "fleet_manager", "rental_agent", "accountant"]);
+  const errors: Record<string, string> = {};
+  const charge = parseTripCharge(rawInput, errors, "charge");
+  if (!charge || Object.keys(errors).length) throw new DomainError("VALIDATION_FAILED","Review the trip charge.",400,errors);
+  const chargeId = typeof (rawInput as { id?: unknown })?.id === "string" ? (rawInput as { id: string }).id : "";
+  return inTransaction(async () => {
+    const row = await loadPricingRow(context, bookingId);
+    const now = new Date().toISOString();
+    if (chargeId) {
+      const result = await execute(`UPDATE booking_charges SET kind=?,description=?,amount=?,updated_at=? WHERE agency_id=? AND booking_id=? AND id=?`,[charge.kind,charge.description,charge.amount,now,context.agencyId,bookingId,chargeId]);
+      if (!result.changes) throw new DomainError("NOT_FOUND","Trip charge not found.",404);
+    } else {
+      await execute(`INSERT INTO booking_charges (id,agency_id,booking_id,kind,description,amount,actor_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,[`chg_${randomUUID()}`,context.agencyId,bookingId,charge.kind,charge.description,charge.amount,context.userId,now,now]);
+    }
+    const sum = await queryOne<{ total: number }>(`SELECT coalesce(sum(amount),0) AS total FROM booking_charges WHERE agency_id=? AND booking_id=?`,[context.agencyId,bookingId]);
+    await applyPrice(context, { ...row, tripCharges: Number(sum?.total ?? 0) }, now);
+    await auditBooking(context, chargeId ? "booking.trip_charge_updated" : "booking.trip_charge_added", bookingId, { chargeId: chargeId || null, ...charge }, now);
+    return getBooking(context, bookingId);
+  }, { immediate: true });
+}
+
+export async function removeBookingCharge(context: RequestContext, bookingId: string, chargeId: string) {
+  requireRole(context, ["agency_owner", "fleet_manager", "rental_agent", "accountant"]);
+  return inTransaction(async () => {
+    const row = await loadPricingRow(context, bookingId);
+    const existing = await queryOne<BookingChargeDto>(`SELECT id,kind,description,amount,created_at AS createdAt FROM booking_charges WHERE agency_id=? AND booking_id=? AND id=?`,[context.agencyId,bookingId,chargeId]);
+    if (!existing) throw new DomainError("NOT_FOUND","Trip charge not found.",404);
+    const now = new Date().toISOString();
+    await execute(`DELETE FROM booking_charges WHERE agency_id=? AND booking_id=? AND id=?`,[context.agencyId,bookingId,chargeId]);
+    await applyPrice(context, { ...row, tripCharges: Math.max(0, row.tripCharges - existing.amount) }, now);
+    await auditBooking(context, "booking.trip_charge_removed", bookingId, { ...existing }, now);
+    return getBooking(context, bookingId);
+  }, { immediate: true });
 }

@@ -1,5 +1,6 @@
 import "server-only";
 import PDFDocument from "pdfkit";
+import { drawSignatureBlock, type DocumentBranding } from "@/server/services/branding-service";
 import type { AccountExpense, AccountSummary } from "@/lib/reports/account-summary";
 
 export type Column = { label: string; width: number; align?: "left" | "right" };
@@ -26,6 +27,8 @@ export type StatementInput = {
   band: BandCell[];
   bandNote?: string;
   sections: StatementSection[];
+  /** Signature and business stamp printed after the last table. */
+  branding?: DocumentBranding;
 };
 
 const LEFT = 42;
@@ -51,6 +54,10 @@ export async function createStatementPdf(input: StatementInput) {
   for (const item of input.sections) {
     section(doc, input, item);
     table(doc, input, item);
+  }
+  if (input.branding && (input.branding.signature || input.branding.stamp)) {
+    if (doc.y + 90 > BOTTOM) { doc.addPage(); doc.y = 60; }
+    drawSignatureBlock(doc, input.branding, LEFT + WIDTH - 230, doc.y + 18, { width: 230 });
   }
 
   const range = doc.bufferedPageRange();

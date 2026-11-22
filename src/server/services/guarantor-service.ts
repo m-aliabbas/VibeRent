@@ -7,7 +7,7 @@ import { DomainError } from "@/server/domain/errors";
 import { normalizePakistanPhone } from "@/server/whatsapp/pakistan-phone";
 import type { GuarantorInput } from "@/server/validation/booking";
 
-export type GuarantorDto = GuarantorInput & {
+export type GuarantorDto = Omit<GuarantorInput, "licenseNumber" | "licenseExpiresAt"> & {
   id: string;
   licenseNumber: string;
   licenseExpiresAt: string | null;
@@ -218,7 +218,22 @@ export async function resolveBookingGuarantor(context: RequestContext, guarantor
       [id, context.agencyId, guarantor.name, guarantor.parentage, guarantor.cnic || null, guarantor.phone, guarantor.address, guarantor.carAmount ?? 0, now, now]);
     await audit(context, "guarantor.created", id, { name: guarantor.name, source: "booking" }, now);
   }
+  // Licence details captured on the booking (often by OCR) fill or refresh the saved guarantor.
+  if (guarantor.licenseNumber || guarantor.licenseExpiresAt) await execute("UPDATE guarantors SET license_number=coalesce(?,license_number),license_expires_at=coalesce(?,license_expires_at),updated_at=? WHERE agency_id=? AND id=?", [guarantor.licenseNumber || null, guarantor.licenseExpiresAt || null, now, context.agencyId, id]);
   // A skipped (with-driver guest) renter is not a real customer, so it gets no saved link.
   if (customerId && await insertLink(context, customerId, id, now)) await audit(context, "guarantor.customer_linked", id, { customerId, source: "booking" }, now);
   return id;
+}
+
+/**
+ * The guarantor to pre-select when this customer is picked for a new booking: the guarantor of their
+ * latest booking, otherwise the most recently linked one. Staff can remove or change it.
+ */
+export async function defaultGuarantorForCustomer(context: RequestContext, customerId: string): Promise<GuarantorDto | null> {
+  requireRole(context, ["agency_owner", "fleet_manager", "rental_agent"]);
+  const row = await queryOne<{ id: string }>(`SELECT g.id FROM guarantors g WHERE g.agency_id=? AND g.archived_at IS NULL AND g.id = coalesce(
+      (SELECT bk.guarantor_id FROM bookings bk WHERE bk.agency_id=? AND bk.customer_id=? AND bk.guarantor_id IS NOT NULL AND bk.archived_at IS NULL ORDER BY bk.created_at DESC LIMIT 1),
+      (SELECT cg.guarantor_id FROM customer_guarantors cg WHERE cg.agency_id=? AND cg.customer_id=? ORDER BY cg.created_at DESC LIMIT 1)) LIMIT 1`,
+    [context.agencyId, context.agencyId, customerId, context.agencyId, customerId]);
+  return row ? (await readGuarantor(context.agencyId, row.id)) ?? null : null;
 }

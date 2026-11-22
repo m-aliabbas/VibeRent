@@ -134,7 +134,7 @@ test("rejects malformed or unexpected model output", async () => {
   );
 });
 
-test("OpenAI gateway uses GPT-4o vision, strict output, and disables storage", async () => {
+test("OpenAI gateway uses the primary vision model, strict output, and disables storage", async () => {
   let request: Record<string, unknown> | undefined;
   const client = {
     responses: {
@@ -151,7 +151,7 @@ test("OpenAI gateway uses GPT-4o vision, strict output, and disables storage", a
   });
 
   assert.equal(output, JSON.stringify(fictionalResult));
-  assert.equal(request?.model, "gpt-4o");
+  assert.equal(request?.model, "gpt-5.4");
   assert.equal(request?.store, false);
   assert.equal(
     (request?.text as { format: { type: string; strict: boolean } }).format.type,
@@ -172,6 +172,16 @@ test("OpenAI gateway uses GPT-4o vision, strict output, and disables storage", a
     image_url: "data:image/jpeg;base64,BAUG",
     detail: "high",
   });
-  assert.match(String(request?.instructions), /Transliterate name and address/);
-  assert.match(String(request?.instructions), /holder address is commonly printed there/);
+  assert.match(String(request?.instructions), /Transliterate names and addresses/);
+  assert.match(String(request?.instructions), /present address is printed there/);
+});
+
+test("normalizes CNIC numbers and OCR dates", async () => {
+  const { normalizeCnicNumber, normalizeOcrDate } = await import("../src/server/cnic-ocr/cnic-ocr-service");
+  assert.equal(normalizeCnicNumber("3520212345671"), "35202-1234567-1");
+  assert.equal(normalizeCnicNumber("35202 1234567 1"), "35202-1234567-1");
+  assert.equal(normalizeCnicNumber("12345"), null);
+  assert.equal(normalizeOcrDate("1/2/2030"), "01.02.2030");
+  assert.equal(normalizeOcrDate("2030-02-01"), "01.02.2030");
+  assert.equal(normalizeOcrDate("05 Mar 2031"), "05.03.2031");
 });

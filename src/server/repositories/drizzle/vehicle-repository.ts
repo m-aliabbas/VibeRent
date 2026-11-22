@@ -23,6 +23,7 @@ type VehicleRow = {
   ownership: string;
   daily_rate: number;
   with_driver_rate: number | null;
+  vehicle_value: number | null;
   city: string;
   owner_id: string | null;
   owner_name: string | null;
@@ -100,6 +101,7 @@ function mapVehicle(row: VehicleRow): Vehicle {
     status: row.archived_at ? "Archived" : mapVehicleStatus(row.status),
     dailyRate: row.daily_rate,
     withDriverRate: row.with_driver_rate ?? row.daily_rate,
+    vehicleValue: row.vehicle_value ?? undefined,
     color: row.color,
     transmission: title(row.transmission) as Vehicle["transmission"],
     fuel: title(row.fuel) as Vehicle["fuel"],
@@ -161,11 +163,11 @@ export class DatabaseVehicleRepository implements VehicleRepository {
       }
 
       const id = existing?.id ?? `veh_${randomUUID()}`;
-      const values = [branch.id, ownerId, agreementId, input.plate, input.chassisNumber!, input.engineNumber!, input.make, input.model, input.year, input.category.toLowerCase(), input.color, input.transmission.toLowerCase(), input.fuel.toLowerCase(), input.status.toLowerCase().replaceAll(" ", "_"), input.ownership === "Managed" ? "managed" : "owned", input.dailyRate, input.withDriverRate!, input.status === "Archived" ? now : null, now];
+      const values = [branch.id, ownerId, agreementId, input.plate, input.chassisNumber!, input.engineNumber!, input.make, input.model, input.year, input.category.toLowerCase(), input.color, input.transmission.toLowerCase(), input.fuel.toLowerCase(), input.status.toLowerCase().replaceAll(" ", "_"), input.ownership === "Managed" ? "managed" : "owned", input.dailyRate, input.withDriverRate!, input.vehicleValue ?? null, input.status === "Archived" ? now : null, now];
       if (existing) {
-        await execute(`UPDATE vehicles SET branch_id=?, owner_id=?, agreement_id=?, plate=?, chassis_number=?, engine_number=?, make=?, model=?, year=?, category=?, color=?, transmission=?, fuel=?, status=?, ownership=?, daily_rate=?, with_driver_rate=?, archived_at=?, updated_at=?, version=version+1 WHERE agency_id=? AND id=?`,[...values, agencyId, id]);
+        await execute(`UPDATE vehicles SET branch_id=?, owner_id=?, agreement_id=?, plate=?, chassis_number=?, engine_number=?, make=?, model=?, year=?, category=?, color=?, transmission=?, fuel=?, status=?, ownership=?, daily_rate=?, with_driver_rate=?, vehicle_value=?, archived_at=?, updated_at=?, version=version+1 WHERE agency_id=? AND id=?`,[...values, agencyId, id]);
       } else {
-        await execute(`INSERT INTO vehicles (id, agency_id, branch_id, owner_id, agreement_id, plate, chassis_number, engine_number, make, model, year, category, color, transmission, fuel, status, ownership, daily_rate, with_driver_rate, version, archived_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,[id, agencyId, ...values.slice(0, -1), now, now]);
+        await execute(`INSERT INTO vehicles (id, agency_id, branch_id, owner_id, agreement_id, plate, chassis_number, engine_number, make, model, year, category, color, transmission, fuel, status, ownership, daily_rate, with_driver_rate, vehicle_value, version, archived_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,[id, agencyId, ...values.slice(0, -1), now, now]);
       }
       await execute("DELETE FROM vehicle_rate_rules WHERE agency_id=? AND vehicle_id=?",[agencyId, id]);
       for (const rule of input.rateRules ?? []) {

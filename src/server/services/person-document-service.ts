@@ -10,28 +10,39 @@ import { DomainError } from "@/server/domain/errors";
 import { getPrivateFileRoot } from "@/server/desktop/runtime-paths";
 
 /**
- * CNIC and driving-license images for customers and guarantors. Each side is one slot: a new upload
- * replaces the previous image (kept as `replaced` for history), and staff can remove a slot.
+ * Identity document images. Customers and guarantors keep CNIC and driving-license sides, vehicle
+ * owners keep their CNIC, and vehicles keep the registration card and the registered owner's CNIC.
+ * Each side is one slot: a new upload replaces the previous image (kept as `replaced` for history),
+ * and staff can remove a slot.
  */
-export const personDocumentSlots = ["cnic_front", "cnic_back", "license_front", "license_back"] as const;
+export const personDocumentSlots = ["cnic_front", "cnic_back", "license_front", "license_back", "registration_front", "registration_back", "owner_cnic_front", "owner_cnic_back"] as const;
 export type PersonDocumentSlot = (typeof personDocumentSlots)[number];
 /** `customer_draft` holds images picked while a new customer is being created (id `cnd_<uuid>`). */
-export type PersonDocumentOwner = "customer" | "customer_draft" | "guarantor";
+export type PersonDocumentOwner = "customer" | "customer_draft" | "guarantor" | "owner" | "vehicle";
+
+export const slotsForOwner: Record<PersonDocumentOwner, readonly PersonDocumentSlot[]> = {
+  customer: ["cnic_front", "cnic_back", "license_front", "license_back"],
+  customer_draft: ["cnic_front", "cnic_back", "license_front", "license_back"],
+  guarantor: ["cnic_front", "cnic_back", "license_front", "license_back"],
+  owner: ["cnic_front", "cnic_back"],
+  vehicle: ["registration_front", "registration_back", "owner_cnic_front", "owner_cnic_back"],
+};
 
 export type PersonDocumentDto = { id: string; slot: PersonDocumentSlot; originalName: string; mimeType: string; size: number; createdAt: string; url: string };
-export type PersonDocumentsDto = { owner: PersonDocumentOwner; ownerId: string; documents: Record<PersonDocumentSlot, PersonDocumentDto | null> };
+export type PersonDocumentsDto = { owner: PersonDocumentOwner; ownerId: string; documents: Partial<Record<PersonDocumentSlot, PersonDocumentDto | null>> };
 
 const MAX_BYTES = 10 * 1024 * 1024;
 const MIME_TYPES = ["image/jpeg", "image/png", "image/webp"];
 const storageRoot = getPrivateFileRoot();
 
-const prefix = (owner: PersonDocumentOwner) => owner === "guarantor" ? "guarantor" : "customer";
+const prefix = (owner: PersonDocumentOwner) => owner === "customer_draft" ? "customer" : owner;
 const classification = (owner: PersonDocumentOwner, slot: PersonDocumentSlot) => `${prefix(owner)}_${slot}`;
-const classificationsFor = (owner: PersonDocumentOwner) => personDocumentSlots.map(slot => classification(owner, slot));
-const slotOf = (value: string) => personDocumentSlots.find(slot => value.endsWith(`_${slot}`))!;
+const classificationsFor = (owner: PersonDocumentOwner) => slotsForOwner[owner].map(slot => classification(owner, slot));
+const slotOf = (owner: PersonDocumentOwner, value: string) => value.slice(prefix(owner).length + 1) as PersonDocumentSlot;
+const placeholders = (owner: PersonDocumentOwner) => slotsForOwner[owner].map(() => "?").join(",");
 
 export function isPersonDocumentOwner(value: unknown): value is PersonDocumentOwner {
-  return value === "customer" || value === "customer_draft" || value === "guarantor";
+  return value === "customer" || value === "customer_draft" || value === "guarantor" || value === "owner" || value === "vehicle";
 }
 
 export function isPersonDocumentSlot(value: unknown): value is PersonDocumentSlot {
@@ -43,9 +54,9 @@ async function assertOwner(context: RequestContext, owner: PersonDocumentOwner, 
     if (!/^cnd_[0-9a-f-]{36}$/.test(id)) throw new DomainError("VALIDATION_FAILED", "The customer document session is invalid.", 400);
     return;
   }
-  const table = owner === "customer" ? "customers" : "guarantors";
-  const row = await queryOne(`SELECT id FROM ${table} WHERE agency_id=? AND id=? AND archived_at IS NULL LIMIT 1`, [context.agencyId, id]);
-  if (!row) throw new DomainError("NOT_FOUND", owner === "customer" ? "Customer not found." : "Guarantor not found.", 404);
+  const table = { customer: "customers", guarantor: "guarantors", owner: "owners", vehicle: "vehicles" }[owner];
+  const row = await queryOne(`SELECT id FROM ${table} WHERE agency_id=? AND id=?${owner === "owner" ? "" : " AND archived_at IS NULL"} LIMIT 1`, [context.agencyId, id]);
+  if (!row) throw new DomainError("NOT_FOUND", { customer: "Customer not found.", guarantor: "Guarantor not found.", owner: "Owner not found.", vehicle: "Vehicle not found." }[owner], 404);
 }
 
 type Row = { id: string; classification: string; originalName: string; mimeType: string; size: number; createdAt: string };
@@ -54,11 +65,11 @@ type Row = { id: string; classification: string; originalName: string; mimeType:
 export async function readPersonDocuments(agencyId: string, owner: PersonDocumentOwner, id: string): Promise<PersonDocumentsDto> {
   const types = classificationsFor(owner);
   const rows = await queryAll<Row>(`SELECT id,classification,original_name AS originalName,mime_type AS mimeType,size,created_at AS createdAt
-    FROM private_files WHERE agency_id=? AND entity_type=? AND entity_id=? AND status='ready' AND classification IN (?,?,?,?)
+    FROM private_files WHERE agency_id=? AND entity_type=? AND entity_id=? AND status='ready' AND classification IN (${placeholders(owner)})
     ORDER BY created_at DESC`, [agencyId, owner, id, ...types]);
-  const documents = Object.fromEntries(personDocumentSlots.map(slot => [slot, null])) as PersonDocumentsDto["documents"];
+  const documents = Object.fromEntries(slotsForOwner[owner].map(slot => [slot, null])) as PersonDocumentsDto["documents"];
   for (const row of rows) {
-    const slot = slotOf(row.classification);
+    const slot = slotOf(owner, row.classification);
     if (!documents[slot]) documents[slot] = { id: row.id, slot, originalName: row.originalName, mimeType: row.mimeType, size: row.size, createdAt: row.createdAt, url: `/api/v1/files/${row.id}` };
   }
   return { owner, ownerId: id, documents };
@@ -72,8 +83,8 @@ export async function listPersonDocuments(context: RequestContext, owner: Person
 
 export async function uploadPersonDocument(context: RequestContext, owner: PersonDocumentOwner, id: string, slot: PersonDocumentSlot, file: File) {
   requireRole(context, ["agency_owner", "fleet_manager", "rental_agent"]);
-  if (!isPersonDocumentOwner(owner)) throw new DomainError("VALIDATION_FAILED", "Choose a customer or guarantor.", 400);
-  if (!isPersonDocumentSlot(slot)) throw new DomainError("VALIDATION_FAILED", "Choose the CNIC or license side.", 400);
+  if (!isPersonDocumentOwner(owner)) throw new DomainError("VALIDATION_FAILED", "Choose who the document belongs to.", 400);
+  if (!isPersonDocumentSlot(slot) || !slotsForOwner[owner].includes(slot)) throw new DomainError("VALIDATION_FAILED", "Choose a valid document side.", 400);
   await assertOwner(context, owner, id);
   if (!MIME_TYPES.includes(file.type)) throw new DomainError("VALIDATION_FAILED", "Use a JPG, PNG, or WebP image.", 415, { file: "Unsupported image type." });
   if (file.size <= 0 || file.size > MAX_BYTES) throw new DomainError("VALIDATION_FAILED", "The image must be 10 MB or smaller.", 413, { file: "Choose a smaller image." });
@@ -107,7 +118,7 @@ export async function removePersonDocument(context: RequestContext, owner: Perso
   const types = classificationsFor(owner);
   const now = new Date().toISOString();
   await inTransaction(async () => {
-    const result = await execute(`UPDATE private_files SET status='removed',updated_at=? WHERE agency_id=? AND id=? AND entity_type=? AND entity_id=? AND status='ready' AND classification IN (?,?,?,?)`, [now, context.agencyId, fileId, owner, id, ...types]);
+    const result = await execute(`UPDATE private_files SET status='removed',updated_at=? WHERE agency_id=? AND id=? AND entity_type=? AND entity_id=? AND status='ready' AND classification IN (${placeholders(owner)})`, [now, context.agencyId, fileId, owner, id, ...types]);
     if (!result.changes) throw new DomainError("NOT_FOUND", "Document not found.", 404);
     await execute(`INSERT INTO audit_events (id,agency_id,actor_id,action,entity_type,entity_id,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,?)`, [randomUUID(), context.agencyId, context.userId, `${prefix(owner)}.document_removed`, owner, id, JSON.stringify({ fileId }), now]);
   }, { immediate: true });

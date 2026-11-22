@@ -11,6 +11,15 @@ import { FormCombobox } from "@/components/forms/form-combobox";
 import { FormInput, FormSelect } from "@/components/forms/form-controls";
 import type { RepositoryResult } from "@/lib/repositories/repository";
 import type { Vehicle } from "@/types/vehicle";
+import { PersonDocuments } from "@/components/shared/person-documents";
+
+const vehicleDocSlots = [
+  { slot: "registration_front", label: "Registration card front" },
+  { slot: "registration_back", label: "Registration card back" },
+  { slot: "owner_cnic_front", label: "Owner CNIC front" },
+  { slot: "owner_cnic_back", label: "Owner CNIC back" },
+] as const;
+type VehicleDocSlot = (typeof vehicleDocSlots)[number]["slot"];
 
 const blank: Vehicle = {
   id: "",
@@ -59,6 +68,8 @@ export function VehicleDialog({
   // Photos picked while adding a car upload right after the vehicle is created (it needs an id first).
   const [photos, setPhotos] = useState<Array<{ file: File; url: string }>>([]);
   const [photoIssue, setPhotoIssue] = useState("");
+  // Registration card and owner CNIC picked while adding a car; uploaded once the vehicle exists.
+  const [docFiles, setDocFiles] = useState<Partial<Record<VehicleDocSlot, File>>>({});
   const photoUrls = useRef<string[]>([]);
   useEffect(() => () => photoUrls.current.forEach(url => URL.revokeObjectURL(url)), []);
   function addPhotos(files: FileList | null) {
@@ -138,9 +149,16 @@ export function VehicleDialog({
       try { const response = await fetch("/api/v1/files", { method: "POST", body: data }); if (!response.ok) failed += 1; }
       catch { failed += 1; }
     }
+    for (const [slot, file] of vehicle ? [] : Object.entries(docFiles)) {
+      if (!file) continue;
+      const data = new FormData();
+      data.set("owner", "vehicle"); data.set("id", result.data.id); data.set("slot", slot); data.set("file", file);
+      try { const response = await fetch("/api/v1/person-documents", { method: "POST", body: data }); if (!response.ok) failed += 1; }
+      catch { failed += 1; }
+    }
     setSaving(false);
     if (failed) {
-      setPhotoIssue(`${result.data.plate} was added, but ${failed} photo${failed === 1 ? "" : "s"} could not be uploaded. Add ${failed === 1 ? "it" : "them"} from the vehicle's Media tab.`);
+      setPhotoIssue(`${result.data.plate} was added, but ${failed} image${failed === 1 ? "" : "s"} could not be uploaded. Add ${failed === 1 ? "it" : "them"} from the vehicle's Media tab.`);
       return;
     }
     onOpenChange(false);
@@ -448,6 +466,7 @@ export function VehicleDialog({
                 required
               />
               <FormInput label="With-driver rate (PKR)" type="number" min={form.dailyRate} step={500} value={form.withDriverRate||""} placeholder="e.g. 11000" onChange={(e)=>update("withDriverRate",Number(e.target.value))} error={errors.withDriverRate} required />
+              <FormInput label="Vehicle value (PKR)" type="number" min={0} step={50000} value={form.vehicleValue||""} placeholder="e.g. 6500000" hint="Market value — shown to guarantors and on the agreement" onChange={(e)=>update("vehicleValue",Number(e.target.value))} error={errors.vehicleValue} />
               <SegmentedControl
                 label="Transmission"
                 value={form.transmission}
@@ -481,6 +500,17 @@ export function VehicleDialog({
                 <p className="mt-2 text-xs text-[#667085]">{photos.length} of {MAX_PHOTOS} selected{photos.length > 0 && photos.length < 3 ? " · 3 or more gives customers a better view" : ""}</p>
                 {errors.photos && <p role="alert" className="mt-1 text-xs text-[#B42318]">{errors.photos}</p>}
               </section>}
+              <section className="rounded-xl border border-[#E4E7EC] p-4 sm:col-span-2" aria-label="Registration card and owner CNIC">
+                <h3 className="text-sm font-bold text-[#1D2939]">Registration card &amp; owner CNIC <span className="font-normal text-[#667085]">(optional)</span></h3>
+                <p className="mt-1 mb-3 text-xs text-[#475467]">Both sides of the vehicle registration card and of the registered owner&apos;s CNIC. They are attached to rental agreements.</p>
+                {vehicle ? <PersonDocuments owner="vehicle" ownerId={vehicle.id} compact /> : <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">{vehicleDocSlots.map(({ slot, label }) => {
+                  const file = docFiles[slot];
+                  return <label key={slot} className={`flex min-h-24 cursor-pointer flex-col items-center justify-center gap-1 rounded-[10px] border border-dashed p-2 text-center text-xs ${file ? "border-[#ABEFC6] bg-[#ECFDF3] text-[#067647]" : "border-[#D0D5DD] bg-[#F8FAFC] text-[#475467] hover:bg-[#F0F7FF]"}`}>
+                    <Camera size={16} /><span className="font-semibold">{label}</span><span className="max-w-full truncate">{file ? file.name : "Add image"}</span>
+                    <input type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" disabled={saving} onChange={event => { const picked = event.target.files?.[0]; event.target.value = ""; if (picked && picked.size <= 10 * 1024 * 1024) setDocFiles(current => ({ ...current, [slot]: picked })); }} />
+                  </label>;
+                })}</div>}
+              </section>
               {photoIssue && <p role="alert" className="rounded-lg bg-[#FFFAEB] p-3 text-sm font-medium text-[#B54708] sm:col-span-2">{photoIssue}</p>}
               {errors.form && (
                 <p

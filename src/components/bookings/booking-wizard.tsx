@@ -3,16 +3,16 @@
 import { formatInZone, toWallInput, zonedNow, zonedWallTimeToIso } from "@/lib/timezone";
 import Link from "next/link";
 import { useEffect, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
-import { ArrowLeft, CarFront, Check, Loader2, MessageCircle, Pencil, Plus, Search, ShieldAlert, ShieldCheck, X } from "lucide-react";
+import { ArrowLeft, CarFront, Check, Loader2, MessageCircle, Pencil, Plus, Search, ShieldAlert, ShieldCheck, Trash2, X } from "lucide-react";
 
 import { clearBookingAction, confirmBookingAction, startBookingAction } from "@/app/actions/bookings";
 import { listCustomersAction, createCustomerAction, updateCustomerAction } from "@/app/actions/customers";
 import { listVehiclesAction } from "@/app/actions/vehicles";
 import { listBookingsAction } from "@/app/actions/bookings";
 import { createAgencyCityAction, listAgencyCitiesAction } from "@/app/actions/catalogs";
-import { getBookingCnicAction, getGuarantorCnicAction, uploadBookingCnicAction, uploadGuarantorCnicAction } from "@/app/actions/booking-cnic";
+import { getBookingCnicAction, getBookingLicenseAction, getGuarantorCnicAction, uploadBookingCnicAction, uploadBookingLicenseAction, uploadGuarantorCnicAction } from "@/app/actions/booking-cnic";
 import { listDriversAction } from "@/app/actions/drivers";
-import { guarantorFromCustomerAction, listGuarantorsAction, saveGuarantorAction } from "@/app/actions/guarantors";
+import { defaultGuarantorForCustomerAction, guarantorFromCustomerAction, listGuarantorsAction, saveGuarantorAction } from "@/app/actions/guarantors";
 import { PersonDocuments } from "@/components/shared/person-documents";
 import type { GuarantorDto } from "@/server/services/guarantor-service";
 import { ExternalVehiclePicker } from "@/components/bookings/external-vehicle-picker";
@@ -25,7 +25,7 @@ import { Kbd } from "@/components/ui/kbd";
 import { SegmentedControl } from "@/components/forms/segmented-control";
 import { useHotkey } from "@/lib/hotkeys";
 import type React from "react";
-import { cnicExtractionKey, mergeCnicExtraction, type CnicExtractedValues, type CnicIntake } from "@/lib/cnic-intake";
+import { cnicExtractionKey, mergeCnicExtraction, ocrDate, type CnicExtractedValues, type CnicIntake, type CnicIntakeFile } from "@/lib/cnic-intake";
 import { formatPkr } from "@/lib/utils";
 import type { Vehicle } from "@/types/vehicle";
 import type { BookingListItem } from "@/server/repositories/contracts";
@@ -65,6 +65,13 @@ type DriverOption={id:string;name:string;phone:string};
 
 type ConflictInfo = { bookingId: string; reason: string };
 type GuarantorDraft = GuarantorInput;
+type TripChargeKind = "toll" | "fuel" | "driver" | "parking" | "other";
+type TripChargeDraft = { kind: TripChargeKind; description: string; amount: number };
+const tripChargeOptions: Array<{ label: string; value: TripChargeKind }> = [
+  { label: "Toll tax", value: "toll" }, { label: "Fuel", value: "fuel" }, { label: "Driver expense", value: "driver" }, { label: "Parking", value: "parking" }, { label: "Other", value: "other" },
+];
+type LicenseExtracted = { name: string | null; father_name: string | null; cnic_no: string | null; license_no: string | null; dob: string | null; issue_date: string | null; expiry: string | null; address: string | null; categories: string | null };
+type LicenseIntake = { bookingDraftId: string; front: CnicIntakeFile | null; back: CnicIntakeFile | null; extracted: LicenseExtracted };
 
 function isGuarantorComplete(value: GuarantorDraft) {
   const cnic=value.cnic.replace(/\D/g,"");
@@ -94,6 +101,10 @@ type Draft = {
   notes: string;
   estimatedKm: number;
   overrideReason: string;
+  /** Set once staff type a rate, so it is not replaced by the vehicle's default (0 = agree later). */
+  rateTouched?: boolean;
+  /** Toll tax, fuel, driver expense, parking: billed to the customer on top of the rent. */
+  tripCharges: TripChargeDraft[];
   /** Set when the booking starts from a quotation; the quotation is linked on confirm. */
   quotationId?: string;
 };
@@ -127,6 +138,7 @@ function defaultDraft(): Draft {
   notes: "",
   estimatedKm: 0,
   overrideReason: "",
+  tripCharges: [],
   };
 }
 
@@ -243,7 +255,9 @@ export function BookingWizard() {
 
   const vehicle = fleetOptions.find((item) => item.id === draft.vehicleId);
   const days = Math.max(1, Math.ceil((new Date(draft.to).getTime() - new Date(draft.from).getTime()) / 86_400_000));
-  const total = draft.dailyRate * days + (vehicle?.perKmRate??0) * draft.estimatedKm + draft.extras - draft.discount;
+  const tripCharges = draft.tripCharges ?? [];
+  const tripTotal = tripCharges.reduce((sum, item) => sum + (Number.isFinite(item.amount) ? item.amount : 0), 0);
+  const total = draft.dailyRate * days + (vehicle?.perKmRate??0) * draft.estimatedKm + draft.extras + tripTotal - draft.discount;
 
   const eligibleVehicles = fleetOptions
     .map((item) => ({
@@ -255,7 +269,8 @@ export function BookingWizard() {
     Boolean(draft.from && draft.to && new Date(draft.to) > new Date(draft.from) && (draft.rentalMode==="self_drive"||draft.driverId)),
     draft.fulfillmentType==="external"?Boolean(draft.external.supplierName.trim()&&draft.external.supplierPhone.trim()&&draft.external.vehicleMake.trim()&&draft.external.vehicleModel.trim()&&draft.external.vehiclePlate.trim()):Boolean(vehicle && getConflicts(vehicle.id, draft.from, draft.to, bookings).length === 0),
     Boolean((draft.customerId || (draft.rentalMode==="with_driver"&&draft.renterSkipped)) && (!draft.guarantor || isGuarantorComplete(draft.guarantor))),
-    draft.dailyRate > 0 && days >= (vehicle?.minimumDays??1) && draft.discount <= draft.dailyRate * days + draft.extras && (draft.fulfillmentType==="external"||draft.dailyRate === (vehicle?.rate??draft.dailyRate) || Boolean(draft.overrideReason.trim())) && (draft.fulfillmentType==="fleet"||(draft.external.pricingMode==="percentage"?draft.external.supplierSharePercent>=0&&draft.external.supplierSharePercent<=100:draft.external.supplierFixedCost>=0&&draft.external.supplierFixedCost<=total)),
+    // The rent is negotiable and may be agreed later (0); only the discount and trip charges must be sensible.
+    draft.dailyRate >= 0 && days >= (vehicle?.minimumDays??1) && draft.discount <= draft.dailyRate * days + draft.extras + tripTotal && tripCharges.every(item => Number.isSafeInteger(item.amount) && item.amount > 0) && (draft.fulfillmentType==="fleet"||(draft.external.pricingMode==="percentage"?draft.external.supplierSharePercent>=0&&draft.external.supplierSharePercent<=100:draft.external.supplierFixedCost>=0&&draft.external.supplierFixedCost<=total)),
     true,
     draft.bookingMode!=="rent_now"||Boolean(Number.isInteger(draft.checkout.odometer)&&draft.checkout.odometer>=0&&draft.checkout.fuelLevel&&draft.checkout.conditionNotes.trim()),
   ];
@@ -263,7 +278,7 @@ export function BookingWizard() {
     { id: "schedule", title: "When & how", valid: sectionValid[0], missing: "Pickup and return times" + (draft.rentalMode === "with_driver" ? " and driver" : "") },
     { id: "vehicle", title: "Vehicle", valid: sectionValid[1], missing: draft.fulfillmentType === "external" ? "Supplier and car details" : "An available vehicle" },
     { id: "customer", title: "Customer", valid: sectionValid[2], missing: "Customer" },
-    { id: "pricing", title: "Price", valid: sectionValid[3], missing: "Valid price (rate change needs a reason)" },
+    { id: "pricing", title: "Price & trip charges", valid: sectionValid[3], missing: "Valid price (discount and trip charges)" },
     ...(draft.bookingMode === "rent_now" ? [{ id: "handover", title: "Handover", valid: sectionValid[5], missing: "Handover odometer, fuel and condition" }] : []),
   ];
   const missing = sections.filter(section => !section.valid);
@@ -272,10 +287,11 @@ export function BookingWizard() {
 
   // A vehicle chosen elsewhere (vehicle page, rebook) arrives without its rate: fill it once.
   useEffect(() => {
-    if (draft.fulfillmentType === "fleet" && vehicle && draft.dailyRate === 0) {
-      queueMicrotask(() => setDraft(current => current.vehicleId === vehicle.id && current.dailyRate === 0 ? { ...current, dailyRate: vehicle.rate, checkout: { ...current.checkout, odometer: current.checkout.odometer || (vehicle.lastOdometer ?? 0) } } : current));
+    // With-driver trips are priced per trip, so no rate is pre-filled for them.
+    if (draft.fulfillmentType === "fleet" && vehicle && draft.dailyRate === 0 && !draft.rateTouched && draft.rentalMode !== "with_driver") {
+      queueMicrotask(() => setDraft(current => current.vehicleId === vehicle.id && current.dailyRate === 0 && !current.rateTouched ? { ...current, dailyRate: vehicle.rate, checkout: { ...current.checkout, odometer: current.checkout.odometer || (vehicle.lastOdometer ?? 0) } } : current));
     }
-  }, [draft.fulfillmentType, draft.dailyRate, vehicle]);
+  }, [draft.fulfillmentType, draft.dailyRate, draft.rateTouched, draft.rentalMode, vehicle]);
 
   async function confirm() {
     if ((draft.fulfillmentType==="fleet"&&!vehicle) || (!draft.customerId && !draft.renterSkipped) || !bookingReference || submitting) return;
@@ -301,7 +317,8 @@ export function BookingWizard() {
       source: "counter",
       notes: draft.notes,
       estimatedKm: draft.estimatedKm,
-      dailyRateOverride: draft.fulfillmentType==="external"?draft.dailyRate:vehicle && draft.dailyRate !== vehicle.rate ? draft.dailyRate : undefined,
+      dailyRateOverride: draft.fulfillmentType==="external"?draft.dailyRate:vehicle && (draft.dailyRate !== vehicle.rate || draft.rentalMode==="with_driver") ? draft.dailyRate : undefined,
+      tripCharges: tripCharges.filter(item => item.amount > 0),
       overrideReason: draft.overrideReason || undefined,
       startImmediately:draft.bookingMode==="rent_now",
       checkoutInspection:draft.bookingMode==="rent_now"?draft.checkout:undefined,
@@ -381,7 +398,7 @@ export function BookingWizard() {
               {section.id === "schedule" && <ScheduleStep draft={draft} setDraft={setDraft} cities={cities} drivers={drivers} onCityCreated={city=>setSavedCities(current=>[...new Set([...current,city])].sort())} />}
               {section.id === "vehicle" && <VehicleStep draft={draft} setDraft={setDraft} vehicles={eligibleVehicles} conflictMode={conflictMode} clearConflict={() => setConflictMode(false)} />}
               {section.id === "customer" && <CustomerStep draft={draft} setDraft={setDraft} customers={customers} bookingReference={bookingReference} onCustomerCreated={(c) => setCustomers((prev) => [c, ...prev.filter(item=>item.id!==c.id)])} />}
-              {section.id === "pricing" && <PricingStep draft={draft} setDraft={setDraft} days={days} total={total} baseRate={vehicle?.rate} />}
+              {section.id === "pricing" && <PricingStep draft={draft} setDraft={setDraft} days={days} total={total} tripTotal={tripTotal} baseRate={vehicle?.rate} />}
               {section.id === "handover" && <HandoverStep draft={draft} setDraft={setDraft} lastOdometer={draft.fulfillmentType==="fleet"?vehicle?.lastOdometer:undefined}/>}
             </BookingSection>
           ))}
@@ -393,7 +410,7 @@ export function BookingWizard() {
               <SummaryRow label="Dates" value={draft.from && draft.to ? `${formatShort(draft.from)} → ${formatShort(draft.to)}` : undefined} sub={`${days} day${days === 1 ? "" : "s"} · ${draft.rentalMode === "with_driver" ? "with driver" : "self drive"} · ${draft.city || "—"}`} />
               <SummaryRow label="Vehicle" value={draft.fulfillmentType === "external" ? (draft.external.vehiclePlate ? `${draft.external.vehicleMake} ${draft.external.vehicleModel} · ${draft.external.vehiclePlate}` : undefined) : vehicle ? `${vehicle.label} · ${vehicle.plate}` : undefined} />
               <SummaryRow label="Customer" value={selectedCustomer ? selectedCustomer.name : draft.renterSkipped ? "Skipped (with driver)" : undefined} sub={selectedCustomer?.phone} />
-              <SummaryRow label="Rate" value={draft.dailyRate ? `${formatPkr(draft.dailyRate)} × ${days}` : undefined} sub={[draft.extras ? `+ ${formatPkr(draft.extras)} extras` : "", draft.discount ? `− ${formatPkr(draft.discount)} discount` : "", draft.deposit ? `Deposit ${formatPkr(draft.deposit)}` : ""].filter(Boolean).join(" · ") || undefined} />
+              <SummaryRow label="Rate" value={draft.dailyRate ? `${formatPkr(draft.dailyRate)} × ${days}` : vehicle || draft.fulfillmentType === "external" ? "To be agreed (0)" : undefined} sub={[draft.extras ? `+ ${formatPkr(draft.extras)} extras` : "", tripTotal ? `+ ${formatPkr(tripTotal)} trip charges` : "", draft.discount ? `− ${formatPkr(draft.discount)} discount` : "", draft.deposit ? `Deposit ${formatPkr(draft.deposit)}` : ""].filter(Boolean).join(" · ") || undefined} />
             </dl>
             <div className="mt-4 border-t border-[#EAECF0] pt-3">
               <p className="text-xs font-semibold text-[#475467]">Total</p>
@@ -460,7 +477,7 @@ function ScheduleStep({ draft, setDraft, cities, drivers, onCityCreated }: { dra
   return (
     <div className="grid gap-x-4 gap-y-3 sm:grid-cols-2 xl:grid-cols-3">
       <SegmentedControl label="Booking type" value={draft.bookingMode} onChange={value=>{if(value==="rent_now"){const local=toWallInput(zonedNow());setDraft({...draft,bookingMode:"rent_now",from:local})}else setDraft({...draft,bookingMode:"reservation"})}} options={[{label:"Reserve",value:"reservation"},{label:"Rent now",value:"rent_now"}]}/>
-      <SegmentedControl label="Rental type" value={draft.rentalMode} onChange={value=>setDraft({...draft,rentalMode:value,driverId:value==="self_drive"?"":draft.driverId,renterSkipped:value==="self_drive"?false:draft.renterSkipped,vehicleId:"",dailyRate:0})} options={[{label:"Self drive",value:"self_drive"},{label:"With driver",value:"with_driver"}]}/>
+      <SegmentedControl label="Rental type" value={draft.rentalMode} onChange={value=>setDraft({...draft,rentalMode:value,driverId:value==="self_drive"?"":draft.driverId,renterSkipped:value==="self_drive"?false:draft.renterSkipped,vehicleId:"",dailyRate:0,rateTouched:false})} options={[{label:"Self drive",value:"self_drive"},{label:"With driver",value:"with_driver"}]}/>
       {draft.rentalMode==="with_driver"&&<FormCombobox label="Driver" value={draft.driverId} onValueChange={driverId=>setDraft({...draft,driverId})} options={[{label:"Select a driver",value:""},...drivers.map(driver=>({label:`${driver.name} · ${driver.phone}`,value:driver.id}))]} searchPlaceholder="Search driver name or phone…"/>}
       <div>
         <label className="block">
@@ -506,7 +523,7 @@ function VehicleStep({ draft, setDraft, vehicles, conflictMode, clearConflict }:
   const filteredVehicles=term?vehicles.filter(item=>`${item.label} ${item.plate} ${item.city}`.toLocaleLowerCase("en").includes(term)):vehicles;
   const availableVehicles=filteredVehicles.filter(item=>!item.conflicts.length);
   const bookedVehicles=filteredVehicles.filter(item=>item.conflicts.length>0);
-  const pick = (item: EligibleVehicle) => { setDraft({ ...draft, vehicleId: item.id, dailyRate: item.rate, checkout: { ...draft.checkout, odometer: item.lastOdometer ?? 0 } }); clearConflict(); };
+  const pick = (item: EligibleVehicle) => { setDraft({ ...draft, vehicleId: item.id, dailyRate: draft.rentalMode === "with_driver" ? (draft.rateTouched ? draft.dailyRate : 0) : draft.rateTouched ? draft.dailyRate : item.rate, checkout: { ...draft.checkout, odometer: item.lastOdometer ?? 0 } }); clearConflict(); };
   if (draft.fulfillmentType === "external") return (
     <div>
       <button type="button" onClick={() => setDraft({ ...draft, fulfillmentType: "fleet", dailyRate: 0 })} className="mb-3 text-sm font-semibold text-[#0058B8] hover:underline">← Pick from our fleet instead</button>
@@ -535,7 +552,7 @@ function VehicleStep({ draft, setDraft, vehicles, conflictMode, clearConflict }:
                   {selected ? <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-[#006FE6] text-white"><Check size={13} /></span> : <span className="h-5 w-5 shrink-0 rounded-full border border-[#D0D5DD]" />}
                 </span>
                 <span className="mt-0.5 block text-xs text-[#475467]"><span className="font-mono">{item.plate}</span> · {item.city}</span>
-                <span className="mt-2 block text-base font-bold tabular-nums">{formatPkr(item.rate)}<span className="text-xs font-normal text-[#475467]"> /day</span></span>
+                <span className="mt-2 block text-base font-bold tabular-nums">{draft.rentalMode === "with_driver" ? <span className="text-sm font-semibold text-[#475467]">Price per trip</span> : <>{formatPkr(item.rate)}<span className="text-xs font-normal text-[#475467]"> /day</span></>}</span>
               </button>
             );
           })}
@@ -552,6 +569,47 @@ function VehicleStep({ draft, setDraft, vehicles, conflictMode, clearConflict }:
 }
 
 function ExternalVehicleFields({draft,setDraft}:{draft:Draft;setDraft:(value:Draft)=>void}){const update=(values:Partial<Draft["external"]>)=>setDraft({...draft,external:{...draft.external,...values}});return <div className="mt-4 space-y-4"><ExternalVehiclePicker value={draft.external} onSelect={car=>setDraft({...draft,external:{...draft.external,supplierName:car.supplierName,supplierPhone:car.supplierPhone,vehicleMake:car.make,vehicleModel:car.model,vehicleYear:car.year,vehiclePlate:car.plate,vehicleColor:car.color}})}/><div className="rounded-lg border border-[#B2DDFF] bg-[#EFF8FF] p-3 text-sm text-[#175CD3]"><strong>Booking snapshot.</strong> Selecting a saved source car fills these fields. Changes here apply to this booking unless you save the car for reuse.</div><div className="grid gap-4 sm:grid-cols-2"><FormInput label="Supplier / owner name" required value={draft.external.supplierName} onChange={e=>update({supplierName:e.target.value})}/><FormInput label="Supplier phone" required type="tel" value={draft.external.supplierPhone} onChange={e=>update({supplierPhone:e.target.value})}/><FormInput label="Vehicle make" required placeholder="Toyota" value={draft.external.vehicleMake} onChange={e=>update({vehicleMake:e.target.value})}/><FormInput label="Vehicle model" required placeholder="Corolla" value={draft.external.vehicleModel} onChange={e=>update({vehicleModel:e.target.value})}/><FormInput label="Registration number" required placeholder="LEA-4582" value={draft.external.vehiclePlate} onChange={e=>update({vehiclePlate:e.target.value.toUpperCase()})}/><FormInput label="Year" type="number" min={1980} max={new Date().getFullYear()+1} value={draft.external.vehicleYear} onChange={e=>update({vehicleYear:Number(e.target.value)})}/><FormInput label="Colour (optional)" value={draft.external.vehicleColor} onChange={e=>update({vehicleColor:e.target.value})}/></div></div>}
+
+// ─── Driving licence intake (drawer + OCR) ──────────────────────────────────
+
+/** Uploads licence images for this booking draft and reports each new OCR result once. */
+function useLicenseIntake(bookingDraftId: string | undefined, purpose: "customer" | "guarantor", enabled: boolean, onExtracted: (values: LicenseExtracted) => void) {
+  const [intake, setIntake] = useState<LicenseIntake>();
+  const [loading, setLoading] = useState(false);
+  const [uploading, setUploading] = useState<"front" | "back" | null>(null);
+  const [error, setError] = useState("");
+  const lastKey = useRef("");
+  const callback = useRef(onExtracted);
+  useEffect(() => { callback.current = onExtracted; });
+  function accept(next: LicenseIntake) {
+    setIntake(next);
+    const key = JSON.stringify(next.extracted);
+    if (key !== lastKey.current && Object.values(next.extracted).some(Boolean)) { lastKey.current = key; callback.current(next.extracted); }
+  }
+  async function refresh() {
+    if (!bookingDraftId) return;
+    setLoading(true);
+    const result = await getBookingLicenseAction(bookingDraftId, purpose);
+    setLoading(false);
+    if (result.ok) accept(result.data as LicenseIntake); else setError(result.error.message);
+  }
+  useEffect(() => {
+    if (!bookingDraftId || !enabled) return;
+    let active = true;
+    void getBookingLicenseAction(bookingDraftId, purpose).then(result => { if (active && result.ok) accept(result.data as LicenseIntake); });
+    return () => { active = false; };
+  }, [bookingDraftId, purpose, enabled]);
+  async function upload(side: "front" | "back", file: File | undefined) {
+    if (!file || !bookingDraftId || uploading) return;
+    setUploading(side); setError("");
+    const form = new FormData(); form.set("bookingDraftId", bookingDraftId); form.set("side", side); form.set("purpose", purpose); form.set("image", file);
+    const result = await uploadBookingLicenseAction(form);
+    setUploading(null);
+    if (!result.ok) { setError(result.error.message); return; }
+    accept(result.data as LicenseIntake);
+  }
+  return { intake, loading, uploading, error, refresh, upload };
+}
 
 // ─── Customer step ───────────────────────────────────────────────────────────
 
@@ -577,6 +635,17 @@ function CustomerStep({ draft, setDraft, customers, bookingReference, onCustomer
   const [cnicError,setCnicError]=useState("");
   const lastExtraction=useRef<CnicExtractedValues | undefined>(undefined);
   const lastExtractionKey=useRef("");
+  // Licence OCR fills the licence fields and any identity field still empty (manual edits are kept).
+  const license=useLicenseIntake(bookingReference?.id,"customer",showNewForm,values=>setNewForm(current=>({
+    ...current,
+    licenseNumber:values.license_no??current.licenseNumber,
+    licenseExpiresAt:ocrDate(values.expiry)||current.licenseExpiresAt,
+    name:current.name||values.name||"",
+    fatherName:current.fatherName||values.father_name||"",
+    cnic:current.cnic||values.cnic_no||"",
+    dateOfBirth:current.dateOfBirth||ocrDate(values.dob)||"",
+    address:current.address||values.address||"",
+  })));
 
   const selected = customers.find((c) => c.id === draft.customerId);
   const cnicDigits=/^[\d\s-]+$/.test(customerSearch.trim())?customerSearch.replace(/\D/g,""):"";
@@ -680,16 +749,19 @@ function CustomerStep({ draft, setDraft, customers, bookingReference, onCustomer
         />}
         {!selected&&customerSearch.trim()&&<div className="max-h-52 overflow-y-auto rounded-xl border border-[#E4E7EC] bg-white p-1" aria-label="Customer suggestions">{matches.map(customer=><button key={customer.id} type="button" role="option" aria-selected={draft.customerId===customer.id} onClick={()=>{setDraft({...draft,customerId:customer.id});setCustomerSearch("")}} className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm ${draft.customerId===customer.id?"bg-[#EFF8FF] text-[#0058B8]":"hover:bg-[#F8FAFC]"}`}><span><strong>{customer.name}</strong><span className="ml-2 text-xs text-[#667085]">{customer.phone} · {customer.cnic}</span></span><span className="text-xs capitalize">{customer.status}</span></button>)}{!matches.length&&(cnicDigits.length===13?<button type="button" onClick={()=>{setUpdatingCustomer(undefined);setNewForm(current=>({...current,cnic:cnicDigits}));setShowNewForm(true)}} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-semibold text-[#0058B8] hover:bg-[#F8FAFC]"><Plus size={15}/>No match — add new customer with CNIC {cnicDigits.slice(0,5)}-{cnicDigits.slice(5,12)}-{cnicDigits.slice(12)} <kbd className="ml-auto rounded border px-1 text-xs">↵</kbd></button>:<p className="p-3 text-sm text-[#475467]">No customer matches. Type the full 13-digit CNIC to add one.</p>)}</div>}
 
-        {bookingReference&&showNewForm&&!updatingCustomer&&<CnicDocumentDrawer
-          label="Scan CNIC to fill the form"
-          commandHint={{bookingNumber:bookingReference.publicNumber}}
-          intake={cnicIntake}
-          loading={cnicLoading}
-          uploading={cnicUploading}
-          error={cnicError}
-          onRefresh={()=>void refreshCnic()}
-          onUpload={(side,file)=>void uploadCnic(side,file)}
-        />}
+        {bookingReference&&showNewForm&&<div className="flex flex-col gap-2 sm:flex-row">
+          {!updatingCustomer&&<CnicDocumentDrawer
+            label="Scan CNIC to fill the form"
+            commandHint={{bookingNumber:bookingReference.publicNumber}}
+            intake={cnicIntake}
+            loading={cnicLoading}
+            uploading={cnicUploading}
+            error={cnicError}
+            onRefresh={()=>void refreshCnic()}
+            onUpload={(side,file)=>void uploadCnic(side,file)}
+          />}
+          <CnicDocumentDrawer label="Scan driving licence" documentLabel="Licence" backOptional intake={license.intake} loading={license.loading} uploading={license.uploading} error={license.error} onRefresh={()=>void license.refresh()} onUpload={(side,file)=>void license.upload(side,file)}/>
+        </div>}
 
         {/* New customer toggle */}
         {!showNewForm ? (selected ? null :
@@ -750,6 +822,36 @@ function GuarantorSection({draft,setDraft,bookingReference}:{draft:Draft;setDraf
   const lastExtraction=useRef<CnicExtractedValues|undefined>(undefined);
   const lastExtractionKey=useRef("");
   const [customerCandidates,setCustomerCandidates]=useState<Array<{id:string;name:string;phone:string;cnic:string}>>([]);
+  const license=useLicenseIntake(bookingReference?.id,"guarantor",Boolean(guarantor)&&(!savedGuarantorId||editingSaved),values=>setDraft(current=>current.guarantor?{...current,guarantor:{
+    ...current.guarantor,
+    licenseNumber:values.license_no??current.guarantor.licenseNumber,
+    licenseExpiresAt:ocrDate(values.expiry)||current.guarantor.licenseExpiresAt,
+    name:current.guarantor.name||values.name||"",
+    parentage:current.guarantor.parentage||values.father_name||"",
+    cnic:current.guarantor.cnic||values.cnic_no||"",
+    address:current.guarantor.address||values.address||"",
+  }}:current));
+  // Picking an existing customer brings their guarantor along (latest booking's, else latest linked).
+  // Staff can remove it; a removed guarantor is not re-added for the same customer.
+  const autoAppliedFor=useRef<string>("");
+  useEffect(()=>{
+    const customerId=draft.customerId;
+    if(!customerId||autoAppliedFor.current===customerId)return;
+    autoAppliedFor.current=customerId;
+    if(draft.guarantor)return;
+    let active=true;
+    void defaultGuarantorForCustomerAction(customerId).then(result=>{
+      if(!active||!result.ok||!result.data)return;
+      const found=result.data;
+      setSavedGuarantors(current=>[found,...current.filter(item=>item.id!==found.id)]);
+      setSavedGuarantorId(found.id);setEditingSaved(false);
+      setDraft(current=>current.customerId===customerId&&!current.guarantor?{...current,guarantor:{id:found.id,name:found.name,parentage:found.parentage,cnic:found.cnic,phone:found.phone,address:found.address,carAmount:found.carAmount,licenseNumber:found.licenseNumber||undefined,licenseExpiresAt:found.licenseExpiresAt??undefined}}:current);
+      setGuarantorNotice("This customer's usual guarantor was added. Remove or change it if someone else stands guarantee.");
+    });
+    return()=>{active=false};
+    // Runs when the selected customer changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[draft.customerId]);
   useEffect(()=>{let active=true;void listGuarantorsAction().then(result=>{if(active&&result.ok)setSavedGuarantors(result.data)});void listCustomersAction().then(result=>{if(active&&result.ok)setCustomerCandidates(result.data.map(item=>({id:item.id,name:item.name,phone:item.phone,cnic:item.cnic})))});return()=>{active=false}},[]);
   // A customer can stand guarantee for someone else: reuse their saved guarantor record, or create one from their details.
   async function pickCustomer(customerId:string){setSavingGuarantor(true);setGuarantorNotice("");const result=await guarantorFromCustomerAction(customerId);setSavingGuarantor(false);if(!result.ok){setGuarantorNotice(result.error.message);return}setSavedGuarantors(current=>[result.data,...current.filter(item=>item.id!==result.data.id)]);pickSaved(result.data)}
@@ -805,7 +907,7 @@ function GuarantorSection({draft,setDraft,bookingReference}:{draft:Draft;setDraf
     const next=result.data as CnicIntake;setIntake(next);applyExtracted(next);
   }
 
-  function pickSaved(selected:GuarantorDto){setSavedGuarantorId(selected.id);setEditingSaved(false);setGuarantorNotice("");setDraft(current=>({...current,guarantor:{id:selected.id,name:selected.name,parentage:selected.parentage,cnic:selected.cnic,phone:selected.phone,address:selected.address,carAmount:selected.carAmount}}))}
+  function pickSaved(selected:GuarantorDto){setSavedGuarantorId(selected.id);setEditingSaved(false);setGuarantorNotice("");setDraft(current=>({...current,guarantor:{id:selected.id,name:selected.name,parentage:selected.parentage,cnic:selected.cnic,phone:selected.phone,address:selected.address,carAmount:selected.carAmount,licenseNumber:selected.licenseNumber||undefined,licenseExpiresAt:selected.licenseExpiresAt??undefined}}))}
   function startNew(name=""){setSavedGuarantorId(undefined);setEditingSaved(false);setGuarantorNotice("");setDraft(current=>({...current,guarantor:{name,parentage:"",cnic:"",phone:"",address:"",carAmount:0}}))}
   function clearGuarantor(){setSavedGuarantorId(undefined);setEditingSaved(false);setGuarantorQuery("");setDraft(current=>({...current,guarantor:null}))}
 
@@ -848,13 +950,15 @@ function GuarantorSection({draft,setDraft,bookingReference}:{draft:Draft;setDraf
   return <section className="rounded-xl border border-[#B2DDFF] bg-[#F5FAFF] p-4">
     <div className="flex items-start justify-between gap-3"><div><h3 className="text-sm font-bold text-[#1D2939]">{savedGuarantorId?"Edit guarantor details":"New guarantor"}</h3><p className="mt-1 text-xs text-[#667085]">{savedGuarantorId?"Changes apply to this booking. Save them to update the guarantor directory.":"Upload the guarantor CNIC to fill identity fields, then review every value."}</p></div><button type="button" onClick={clearGuarantor} className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-[#667085] hover:bg-white" aria-label="Remove guarantor"><X size={16}/></button></div>
     {savedGuarantors.length>0&&!savedGuarantorId&&<button type="button" onClick={clearGuarantor} className="mt-2 text-xs font-semibold text-[#006FE6] hover:underline">Pick a saved guarantor instead</button>}
-    {bookingReference&&<div className="mt-4"><CnicDocumentDrawer label="Guarantor CNIC" subjectLabel="guarantor" intake={intake} loading={loading} uploading={uploading} error={error} onRefresh={()=>void refresh()} onUpload={(side,file)=>void upload(side,file)}/></div>}
+    {bookingReference&&<div className="mt-4 flex flex-col gap-2 sm:flex-row"><CnicDocumentDrawer label="Guarantor CNIC" subjectLabel="guarantor" intake={intake} loading={loading} uploading={uploading} error={error} onRefresh={()=>void refresh()} onUpload={(side,file)=>void upload(side,file)}/><CnicDocumentDrawer label="Guarantor licence" subjectLabel="guarantor" documentLabel="Licence" backOptional intake={license.intake} loading={license.loading} uploading={license.uploading} error={license.error} onRefresh={()=>void license.refresh()} onUpload={(side,file)=>void license.upload(side,file)}/></div>}
     <div className="mt-4 grid gap-3 sm:grid-cols-2">
       <FormInput label="Name" required value={guarantor.name} onChange={e=>update({name:e.target.value})}/>
       <FormInput label="Parentage" value={guarantor.parentage} onChange={e=>update({parentage:e.target.value})}/>
       <FormInput label="CNIC (optional)" placeholder="35202-1234567-1" value={guarantor.cnic} onChange={e=>update({cnic:e.target.value})}/>
       <FormInput label="Phone" type="tel" placeholder="03001234567" value={guarantor.phone} onChange={e=>update({phone:e.target.value})}/>
       <FormInput label="Amount of car (PKR)" type="number" min={0} value={guarantor.carAmount||""} onChange={e=>update({carAmount:Number(e.target.value)})}/>
+      <FormInput label="Licence number (optional)" value={guarantor.licenseNumber??""} onChange={e=>update({licenseNumber:e.target.value.toUpperCase()})}/>
+      <FormInput label="Licence expiry (optional)" type="date" value={guarantor.licenseExpiresAt??""} onChange={e=>update({licenseExpiresAt:e.target.value||undefined})}/>
       <label className="text-sm font-semibold text-[#344054] sm:col-span-2">Address<textarea className="mt-1.5 min-h-20 w-full rounded-[9px] border border-[#D0D5DD] bg-white px-3 py-2 text-sm font-normal outline-none focus:border-[#006FE6] focus:ring-2 focus:ring-[#006FE6]/10" value={guarantor.address} onChange={e=>update({address:e.target.value})} placeholder="Address printed on CNIC"/></label>
     </div>
     {!isGuarantorComplete(guarantor)&&<p className="mt-3 text-xs text-[#B54708]">Enter a guarantor name. Any other details provided must be valid.</p>}
@@ -867,15 +971,28 @@ function initials(name:string){return name.trim().split(/\s+/).slice(0,2).map(pa
 
 // ─── Pricing step ────────────────────────────────────────────────────────────
 
-function PricingStep({ draft, setDraft, days, total, baseRate }: { draft: Draft; setDraft: (value: Draft) => void; days: number; total: number; baseRate?: number }) {
-  const rateChanged = baseRate !== undefined && draft.dailyRate !== baseRate;
-  const supplierPayable=draft.external.pricingMode==="percentage"?Math.round(total*draft.external.supplierSharePercent/100):draft.external.supplierFixedCost;
+function PricingStep({ draft, setDraft, days, total, tripTotal, baseRate }: { draft: Draft; setDraft: (value: Draft) => void; days: number; total: number; tripTotal: number; baseRate?: number }) {
+  const rateChanged = baseRate !== undefined && draft.dailyRate !== baseRate && draft.rentalMode !== "with_driver";
+  const supplierPayable=draft.external.pricingMode==="percentage"?Math.round(Math.max(0,total-tripTotal)*draft.external.supplierSharePercent/100):draft.external.supplierFixedCost;
+  const charges = draft.tripCharges ?? [];
+  const setCharges = (next: TripChargeDraft[]) => setDraft({ ...draft, tripCharges: next });
+  const withDriver = draft.rentalMode === "with_driver";
   return (
     <div className="grid gap-x-4 gap-y-3 sm:grid-cols-3">
-      <FormInput label="Daily rate (PKR)" type="number" inputMode="numeric" min={1000} value={draft.dailyRate} onChange={(e)=>setDraft({...draft,dailyRate:Number(e.target.value)})} hint={`${days} day${days===1?"":"s"}`} />
+      {withDriver && <p className="rounded-lg border border-[#B2DDFF] bg-[#EFF8FF] p-3 text-xs text-[#175CD3] sm:col-span-3">With-driver trips start with no amount. Enter the agreed rent per day, or leave it at 0 and settle it after the trip. Add toll tax, fuel and driver expenses below — all of these can be changed later from the booking.</p>}
+      <FormInput label={withDriver ? "Rent per day (PKR)" : "Daily rate (PKR)"} type="number" inputMode="numeric" min={0} value={draft.dailyRate||""} placeholder="0 = agree later" onChange={(e)=>setDraft({...draft,dailyRate:Number(e.target.value)||0,rateTouched:true})} hint={`${days} day${days===1?"":"s"}${baseRate&&!withDriver?` · standard ${formatPkr(baseRate)}`:""}`} />
       <FormInput label="Deposit (optional)" type="number" inputMode="numeric" min={0} value={draft.deposit||""} placeholder="None" onChange={(e) => setDraft({ ...draft, deposit: Number(e.target.value) })} />
       <FormInput label="Discount" type="number" inputMode="numeric" min={0} value={draft.discount||""} placeholder="0" onChange={(e) => setDraft({ ...draft, discount: Number(e.target.value) })} />
-      {draft.fulfillmentType==="fleet"&&rateChanged&&<div className="sm:col-span-3"><FormInput label="Why is the rate different? (required)" value={draft.overrideReason} onChange={(e)=>setDraft({...draft,overrideReason:e.target.value})} placeholder="e.g. approved corporate rate"/></div>}
+      {draft.fulfillmentType==="fleet"&&rateChanged&&<div className="sm:col-span-3"><FormInput label="Note on the negotiated rate (optional)" value={draft.overrideReason} onChange={(e)=>setDraft({...draft,overrideReason:e.target.value})} placeholder="e.g. regular customer, 3-day package"/></div>}
+      <section className="rounded-xl border border-[#E4E7EC] p-3 sm:col-span-3" aria-label="Trip charges">
+        <div className="flex flex-wrap items-center justify-between gap-2"><div><h3 className="text-sm font-bold text-[#1D2939]">Trip charges <span className="font-normal text-[#667085]">(optional)</span></h3><p className="text-xs text-[#667085]">Toll tax, fuel, driver expense or parking billed to the customer. Editable after booking too.</p></div><Button type="button" size="sm" variant="secondary" onClick={()=>setCharges([...charges,{kind:withDriver?"toll":"other",description:"",amount:0}])}><Plus size={15}/>Add charge</Button></div>
+        {charges.length>0&&<div className="mt-3 space-y-2">{charges.map((charge,index)=><div key={index} className="grid gap-2 rounded-lg bg-[#F8FAFC] p-2 sm:grid-cols-[150px_1fr_140px_auto] sm:items-end">
+          <FormSelect label="Type" value={charge.kind} onChange={e=>setCharges(charges.map((item,i)=>i===index?{...item,kind:e.target.value as TripChargeKind}:item))} options={tripChargeOptions}/>
+          <FormInput label="Details" value={charge.description} placeholder="e.g. M-2 Lahore–Islamabad" onChange={e=>setCharges(charges.map((item,i)=>i===index?{...item,description:e.target.value}:item))}/>
+          <FormInput label="Amount (PKR)" type="number" inputMode="numeric" min={1} value={charge.amount||""} onChange={e=>setCharges(charges.map((item,i)=>i===index?{...item,amount:Number(e.target.value)||0}:item))} error={charge.amount<=0?"Enter an amount":undefined}/>
+          <button type="button" onClick={()=>setCharges(charges.filter((_,i)=>i!==index))} className="grid h-10 w-10 place-items-center rounded-lg text-[#B42318] hover:bg-white" aria-label="Remove charge"><Trash2 size={16}/></button>
+        </div>)}<p className="text-right text-xs font-semibold text-[#344054]">Trip charges total {formatPkr(tripTotal)}</p></div>}
+      </section>
       <details className="sm:col-span-3" open={Boolean(draft.extras||draft.estimatedKm||draft.notes)}>
         <summary className="cursor-pointer text-sm font-semibold text-[#475467]">Extras, trip distance, notes</summary>
         <div className="mt-3 grid gap-x-4 gap-y-3 sm:grid-cols-3">
@@ -884,7 +1001,7 @@ function PricingStep({ draft, setDraft, days, total, baseRate }: { draft: Draft;
           <FormInput label="Notes" value={draft.notes} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} />
         </div>
       </details>
-      {draft.fulfillmentType==="external"&&<div className="space-y-4 rounded-xl border border-[#B2DDFF] bg-[#F5FAFF] p-4 sm:col-span-2"><div><h3 className="text-sm font-bold text-[#175CD3]">Supplier terms</h3><p className="mt-1 text-xs text-[#475467]">83/17 is the default. Change it for this booking when needed.</p></div><div className="grid gap-4 sm:grid-cols-2"><FormSelect label="Arrangement" value={draft.external.pricingMode} onChange={e=>setDraft({...draft,external:{...draft.external,pricingMode:e.target.value as "percentage"|"fixed"}})} options={[{label:"Percentage split",value:"percentage"},{label:"Fixed supplier cost",value:"fixed"}]}/>{draft.external.pricingMode==="percentage"?<FormInput label="Supplier share (%)" type="number" min={0} max={100} value={draft.external.supplierSharePercent} onChange={e=>setDraft({...draft,external:{...draft.external,supplierSharePercent:Number(e.target.value)}})}/>:<FormInput label="Supplier cost (PKR)" type="number" min={0} value={draft.external.supplierFixedCost} onChange={e=>setDraft({...draft,external:{...draft.external,supplierFixedCost:Number(e.target.value)}})}/>}</div><div className="grid grid-cols-3 gap-2 text-sm"><div className="rounded-lg bg-white p-3"><p className="text-xs text-[#667085]">Customer total</p><strong>{formatPkr(total)}</strong></div><div className="rounded-lg bg-white p-3"><p className="text-xs text-[#667085]">Supplier gets</p><strong>{formatPkr(supplierPayable)}</strong></div><div className="rounded-lg bg-white p-3"><p className="text-xs text-[#667085]">Your commission</p><strong className={total-supplierPayable<0?"text-[#B42318]":"text-[#067647]"}>{formatPkr(total-supplierPayable)}</strong></div></div></div>}
+      {draft.fulfillmentType==="external"&&<div className="space-y-4 rounded-xl border border-[#B2DDFF] bg-[#F5FAFF] p-4 sm:col-span-2"><div><h3 className="text-sm font-bold text-[#175CD3]">Supplier terms</h3><p className="mt-1 text-xs text-[#475467]">83/17 is the default. The percentage applies to the rent, not to trip charges.</p></div><div className="grid gap-4 sm:grid-cols-2"><FormSelect label="Arrangement" value={draft.external.pricingMode} onChange={e=>setDraft({...draft,external:{...draft.external,pricingMode:e.target.value as "percentage"|"fixed"}})} options={[{label:"Percentage split",value:"percentage"},{label:"Fixed supplier cost",value:"fixed"}]}/>{draft.external.pricingMode==="percentage"?<FormInput label="Supplier share (%)" type="number" min={0} max={100} value={draft.external.supplierSharePercent} onChange={e=>setDraft({...draft,external:{...draft.external,supplierSharePercent:Number(e.target.value)}})}/>:<FormInput label="Supplier cost (PKR)" type="number" min={0} value={draft.external.supplierFixedCost} onChange={e=>setDraft({...draft,external:{...draft.external,supplierFixedCost:Number(e.target.value)}})}/>}</div><div className="grid grid-cols-3 gap-2 text-sm"><div className="rounded-lg bg-white p-3"><p className="text-xs text-[#667085]">Customer total</p><strong>{formatPkr(total)}</strong></div><div className="rounded-lg bg-white p-3"><p className="text-xs text-[#667085]">Supplier gets</p><strong>{formatPkr(supplierPayable)}</strong></div><div className="rounded-lg bg-white p-3"><p className="text-xs text-[#667085]">Your commission</p><strong className={total-tripTotal-supplierPayable<0?"text-[#B42318]":"text-[#067647]"}>{formatPkr(total-tripTotal-supplierPayable)}</strong></div></div></div>}
     </div>
   );
 }

@@ -6,12 +6,17 @@ import { Camera, IdCard, Trash2 } from "lucide-react";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import type { PersonDocumentOwner, PersonDocumentSlot, PersonDocumentsDto } from "@/server/services/person-document-service";
 
-const slots: Array<{ slot: PersonDocumentSlot; label: string }> = [
-  { slot: "cnic_front", label: "CNIC front" },
-  { slot: "cnic_back", label: "CNIC back" },
-  { slot: "license_front", label: "License front" },
-  { slot: "license_back", label: "License back" },
-];
+const labels: Record<PersonDocumentSlot, string> = {
+  cnic_front: "CNIC front", cnic_back: "CNIC back", license_front: "License front", license_back: "License back",
+  registration_front: "Registration card front", registration_back: "Registration card back", owner_cnic_front: "Owner CNIC front", owner_cnic_back: "Owner CNIC back",
+};
+const ownerSlots: Record<PersonDocumentOwner, PersonDocumentSlot[]> = {
+  customer: ["cnic_front", "cnic_back", "license_front", "license_back"],
+  customer_draft: ["cnic_front", "cnic_back", "license_front", "license_back"],
+  guarantor: ["cnic_front", "cnic_back", "license_front", "license_back"],
+  owner: ["cnic_front", "cnic_back"],
+  vehicle: ["registration_front", "registration_back", "owner_cnic_front", "owner_cnic_back"],
+};
 
 type Envelope = { data?: PersonDocumentsDto; error?: { message: string } };
 
@@ -50,7 +55,7 @@ export function PersonDocuments({ owner, ownerId, readOnly = false, compact = fa
     setBusy(slot); setMessage("");
     const form = new FormData();
     form.set("owner", owner); form.set("id", ownerId); form.set("slot", slot); form.set("file", file);
-    try { const response = await fetch("/api/v1/person-documents", { method: "POST", body: form }); apply(await response.json() as Envelope, response, `${slots.find(item => item.slot === slot)!.label} saved.`); }
+    try { const response = await fetch("/api/v1/person-documents", { method: "POST", body: form }); apply(await response.json() as Envelope, response, `${labels[slot]} saved.`); }
     catch { setMessage("Upload failed. Check the connection and try again."); }
     finally { setBusy(undefined); }
   }
@@ -66,8 +71,8 @@ export function PersonDocuments({ owner, ownerId, readOnly = false, compact = fa
   const saved = message.endsWith("saved.") || message === "Image removed.";
   return <div>
     {message && <p role="status" className={`mb-3 rounded-lg p-2.5 text-sm ${saved ? "bg-[#ECFDF3] text-[#067647]" : "bg-[#FEF3F2] text-[#B42318]"}`}>{message}</p>}
-    <div className={`grid gap-3 ${compact ? "grid-cols-2 sm:grid-cols-4" : "grid-cols-2 lg:grid-cols-4"}`}>
-      {slots.filter(item => !only || only.includes(item.slot)).map(({ slot, label }) => {
+    <div className={`grid gap-3 ${ownerSlots[owner].length === 2 ? "grid-cols-2" : compact ? "grid-cols-2 sm:grid-cols-4" : "grid-cols-2 lg:grid-cols-4"}`}>
+      {ownerSlots[owner].filter(slot => !only || only.includes(slot)).map(slot => ({ slot, label: labels[slot] })).map(({ slot, label }) => {
         const document = value?.documents[slot];
         return <figure key={slot} className="min-w-0">
           <figcaption className="mb-1.5 text-xs font-semibold text-[#475467]">{label}</figcaption>

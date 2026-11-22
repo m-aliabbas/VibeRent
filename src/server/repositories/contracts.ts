@@ -48,6 +48,9 @@ export type BookingListItem = {
   totalAmount: number;
   days: number;
   extras: number;
+  /** Toll, fuel, driver and other trip costs billed to the customer (part of totalAmount). */
+  tripCharges?: number;
+  charges?: Array<{ id: string; kind: "toll" | "fuel" | "driver" | "parking" | "other"; description: string; amount: number; createdAt: string }>;
   discount: number;
   tax: number;
   deposit: number;

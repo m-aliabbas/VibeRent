@@ -181,7 +181,7 @@ async function buildReports(context: RequestContext): Promise<ReportsData> {
     queryAll<Booking>(`
     SELECT b.id, b.vehicle_id AS vehicleId, v.owner_id AS ownerId, b.source,
            b.pickup_at AS pickupAt, b.return_at AS returnAt, b.completed_at AS completedAt,
-           b.status, b.total_amount AS totalAmount, a.share_basis AS shareBasis,
+           b.status, (b.total_amount - b.trip_charges) AS totalAmount, a.share_basis AS shareBasis,
            a.owner_share_percent AS ownerSharePercent, a.owner_share_amount AS ownerShareAmount,
            b.fulfillment_type AS fulfillmentType,
            CASE WHEN b.fulfillment_type='external' THEN b.external_vehicle_make||' '||b.external_vehicle_model||coalesce(' '||b.external_vehicle_year,'') END AS externalVehicle,

@@ -29,6 +29,12 @@ export type AgreementDesignConfig = {
   showLogo: boolean;
   showPageBorder: boolean;
   showRegistration: boolean;
+  /** Add pages with the renter/guarantor CNIC and licence images. */
+  attachIdDocuments: boolean;
+  /** Add a page with the vehicle photos, registration card and owner CNIC. */
+  attachVehicleImages: boolean;
+  /** Print the agency signature and business stamp in the representative signature box. */
+  showSignatureStamp: boolean;
   titleEn: string;
   titleUr: string;
   footerEn: string;
@@ -89,6 +95,9 @@ export const defaultAgreementConfig: AgreementDesignConfig = {
   showLogo: true,
   showPageBorder: true,
   showRegistration: true,
+  attachIdDocuments: true,
+  attachVehicleImages: true,
+  showSignatureStamp: true,
   titleEn: "Rental Agreement",
   titleUr: "کرایہ نامہ",
   footerEn: "Thank you for choosing our rental service.",
@@ -131,6 +140,9 @@ export function normalizeAgreementConfig(value: unknown, legacyTerms?: string | 
     showLogo: input.showLogo !== false,
     showPageBorder: input.showPageBorder !== false,
     showRegistration: input.showRegistration !== false,
+    attachIdDocuments: input.attachIdDocuments !== false,
+    attachVehicleImages: input.attachVehicleImages !== false,
+    showSignatureStamp: input.showSignatureStamp !== false,
     titleEn: cleanText(input.titleEn, defaultAgreementConfig.titleEn, 80),
     titleUr: cleanText(input.titleUr, defaultAgreementConfig.titleUr, 100),
     footerEn: cleanText(input.footerEn, defaultAgreementConfig.footerEn, 180),

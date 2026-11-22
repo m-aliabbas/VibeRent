@@ -2,6 +2,7 @@ import "server-only";
 
 import { DEFAULT_TIME_ZONE, formatInZone } from "@/lib/timezone";
 import PDFDocument from "pdfkit";
+import { drawSignatureBlock, type DocumentBranding } from "@/server/services/branding-service";
 
 export type InvoiceLine = { label: string; value: string };
 
@@ -16,6 +17,7 @@ export async function createTransactionInvoice(input: {
   amount?: number;
   note?: string;
   timeZone?: string;
+  branding?: DocumentBranding;
 }): Promise<Buffer> {
   const doc = new PDFDocument({
     size: "A4",
@@ -59,6 +61,10 @@ export async function createTransactionInvoice(input: {
     doc.y = y + 68;
   }
   if (input.note) doc.font("Helvetica").fontSize(9).fillColor("#475467").text(input.note, { lineGap: 2 });
+  if (input.branding) {
+    if (doc.y + 90 > 770) { doc.addPage(); doc.y = 60; }
+    drawSignatureBlock(doc, input.branding, 317, Math.max(doc.y + 14, 680), { width: 230 });
+  }
   doc.font("Helvetica").fontSize(8).fillColor("#98A2B3").text("This document is an operational receipt generated from VibeRent records.", 48, 780, { width: 499, align: "center" });
   doc.end();
   return completed;

@@ -204,6 +204,13 @@
       "when": 1794973733930,
       "tag": "0028_quotations_guarantor_links",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "6",
+      "when": 1795326648015,
+      "tag": "0029_trip_charges_documents",
+      "breakpoints": true
     }
   ]
 }
