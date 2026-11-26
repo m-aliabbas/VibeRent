@@ -193,7 +193,7 @@ async function buildReports(context: RequestContext): Promise<ReportsData> {
     LEFT JOIN vehicles v ON v.id=b.vehicle_id AND v.agency_id=b.agency_id
     LEFT JOIN management_agreements a ON a.id=v.agreement_id AND a.agency_id=v.agency_id
     JOIN branches br ON br.id=b.branch_id AND br.agency_id=b.agency_id
-    WHERE b.agency_id=?
+    WHERE b.agency_id=? AND b.archived_at IS NULL
   `,[context.agencyId]),
     queryAll<Cost>(`
     SELECT e.id, e.vehicle_id AS vehicleId, e.owner_id AS ownerId, e.occurred_on AS date,
@@ -202,7 +202,7 @@ async function buildReports(context: RequestContext): Promise<ReportsData> {
            EXISTS(SELECT 1 FROM private_files pf WHERE pf.agency_id=e.agency_id AND pf.entity_type='expense' AND pf.entity_id=e.id AND pf.status='ready') AS receipt
     FROM expenses e LEFT JOIN customers c ON c.id=e.customer_id AND c.agency_id=e.agency_id WHERE e.agency_id=?
   `,[context.agencyId]),
-    queryAll<Transaction>(`SELECT ft.id,ft.booking_id AS bookingId,ft.posted_at AS date,ft.amount,ft.kind,original.kind AS originalKind,ft.linked_transaction_id AS linkedId,ft.status,ft.method,ft.reference FROM financial_transactions ft LEFT JOIN financial_transactions original ON original.id=ft.linked_transaction_id AND original.agency_id=ft.agency_id WHERE ft.agency_id=?`,[context.agencyId]),
+    queryAll<Transaction>(`SELECT ft.id,ft.booking_id AS bookingId,ft.posted_at AS date,ft.amount,ft.kind,original.kind AS originalKind,ft.linked_transaction_id AS linkedId,ft.status,ft.method,ft.reference FROM financial_transactions ft LEFT JOIN financial_transactions original ON original.id=ft.linked_transaction_id AND original.agency_id=ft.agency_id WHERE ft.agency_id=? AND NOT EXISTS (SELECT 1 FROM bookings deleted WHERE deleted.agency_id=ft.agency_id AND deleted.id=ft.booking_id AND deleted.archived_at IS NOT NULL)`,[context.agencyId]),
     queryAll<Payout>("SELECT id,owner_id AS ownerId,vehicle_id AS vehicleId,paid_at AS paidAt,amount,method,reference FROM owner_payouts WHERE agency_id=? AND status='posted'",[context.agencyId]),
     queryAll<SourcePayout>("SELECT id,booking_id AS bookingId,supplier_name AS supplierName,paid_at AS paidAt,amount,method,reference FROM source_payouts WHERE agency_id=? AND status='posted'",[context.agencyId]),
     queryAll<Block>("SELECT vehicle_id AS vehicleId,start_at AS startAt,end_at AS endAt FROM availability_blocks WHERE agency_id=? AND archived_at IS NULL",[context.agencyId]),

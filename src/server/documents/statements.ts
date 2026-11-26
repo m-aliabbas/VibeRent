@@ -20,7 +20,7 @@ export type BuiltStatement = { bytes: Buffer; fileName: string; name: string; ph
 export const customerLedgerColumns: Column[] = [
   { label: "Date", width: 50 },
   { label: "Car", width: 66 },
-  { label: "Booking / charge / payment", width: 85 },
+  { label: "Booking · days / payment", width: 85 },
   { label: "Rent", width: 60, align: "right" },
   { label: "Discount", width: 55, align: "right" },
   { label: "Net amount", width: 63, align: "right" },
@@ -66,10 +66,10 @@ export async function buildCustomerStatement(context: RequestContext, customerId
           number(row.paid),
           outstanding(row.balance),
         ] : [
-          sheetDate(row.pickupAt),
+          sheetDate(row.date),
           row.plate,
-          row.kind === "expense" ? row.description : `${row.publicNumber ? `#${row.publicNumber}` : row.id}${row.status === "completed" ? "" : ` (${row.status.replaceAll("_", " ")})`}`,
-          number(row.rent),
+          row.kind === "expense" ? row.description : `${row.publicNumber ? `#${row.publicNumber}` : row.id} · ${row.days} day${row.days === 1 ? "" : "s"}${row.pending ? " booked (charged on return)" : row.status === "completed" ? "" : ` (${row.status.replaceAll("_", " ")})`}`,
+          row.pending ? "-" : number(row.rent),
           row.discount ? number(row.discount) : "-",
           number(row.amount),
           number(row.paid),

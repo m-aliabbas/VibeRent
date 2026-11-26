@@ -13,7 +13,7 @@ import { zonedDayKey } from "@/lib/timezone";
 import { attachCustomerDocumentDraft } from "@/server/services/person-document-service";
 import { applyExpenseRecovery, listAccountExpenses } from "@/server/services/expense-service";
 import type { AccountExpense } from "@/lib/reports/account-summary";
-import type { CustomerLedgerPayment } from "@/lib/reports/customer-ledger";
+import { chargedNow, type CustomerLedgerPayment } from "@/lib/reports/customer-ledger";
 import { formatPaymentReceiptNumber } from "@/lib/payment-receipt";
 
 export type CustomerDto = { id: string; name: string; fatherName: string | null; phone: string; cnic: string; email: string | null; dateOfBirth: string | null; address: string | null; cnicExpiresAt: string | null; licenseNumber: string | null; licenseExpiresAt: string | null; status: string; version: number; updatedAt: string; bookingCount: number; paidAmount: number; outstanding: number; expenseDue: number };
@@ -24,7 +24,7 @@ export type CustomerDetailDto = CustomerDto & {
   credit: number;
   lastRentalAt: string | null;
   /** totalAmount is net of discount; discount covers booking-time and settlement discounts. */
-  bookings: Array<{ id: string; publicNumber: number | null; vehicle: string; plate: string; status: string; pickupAt: string; returnAt: string; totalAmount: number; discount: number; dailyRate: number; paid: number }>;
+  bookings: Array<{ id: string; publicNumber: number | null; vehicle: string; plate: string; status: string; pickupAt: string; returnAt: string; returnedAt: string | null; totalAmount: number; discount: number; dailyRate: number; paid: number }>;
   /** Approved expenses charged to this customer, with recovered amounts, for the income/expense summary. */
   expenses: AccountExpense[];
   /** Money received from or returned to the customer, dated by when it happened (for the dated ledger). */
@@ -40,7 +40,10 @@ async function listCustomerPayments(agencyId: string, customerId: string, expens
     FROM financial_transactions ft
     JOIN bookings bk ON bk.id=ft.booking_id AND bk.agency_id=ft.agency_id
     LEFT JOIN vehicles v ON v.id=bk.vehicle_id AND v.agency_id=bk.agency_id
-    WHERE ft.agency_id=? AND bk.customer_id=? AND ft.status='posted' AND lower(ft.kind) IN (${moneyKinds})
+    WHERE ft.agency_id=? AND bk.customer_id=? AND bk.archived_at IS NULL AND ft.status='posted' AND lower(ft.kind) IN (${moneyKinds})
+      -- A deleted (reversed) payment and the reversal that cancels it net to zero: neither is shown.
+      AND NOT (lower(ft.kind)='reversal' AND ft.linked_transaction_id IS NOT NULL)
+      AND NOT EXISTS (SELECT 1 FROM financial_transactions rv WHERE rv.agency_id=ft.agency_id AND rv.linked_transaction_id=ft.id AND rv.status='posted' AND lower(rv.kind)='reversal')
     ORDER BY ft.posted_at, ft.created_at, ft.receipt_number`, [agencyId, customerId]);
   const expenseById = new Map(expenses.map(row => [row.id, row]));
   const recoveries = expenses.length ? await queryAll<{ id: string; expenseId: string; date: string; amount: number; method: string; reference: string }>(`
@@ -84,7 +87,8 @@ const customerListSelect = `
       ), 0)))
       FROM bookings bk
       WHERE bk.agency_id=c.agency_id AND bk.customer_id=c.id AND bk.archived_at IS NULL
-        AND bk.status NOT IN ('cancelled','no_show','draft')
+        -- Reserved and on-rent bookings are charged when the car comes back.
+        AND bk.status NOT IN ('cancelled','no_show','draft','confirmed','checked_out')
     ), 0) + coalesce((
       SELECT sum(e.amount - coalesce((SELECT sum(r.amount) FROM expense_recoveries r WHERE r.agency_id=e.agency_id AND r.expense_id=e.id AND r.status='posted'),0))
       FROM expenses e WHERE e.agency_id=c.agency_id AND e.customer_id=c.id AND e.status='approved'
@@ -115,26 +119,27 @@ export async function getCustomerDetail(context: RequestContext, id: string): Pr
   const customer = await getCustomer(context, id);
   const expenses = await listAccountExpenses(context.agencyId, { customerId: id });
   const expenseDue = expenses.reduce((sum, row) => sum + row.amount - row.recovered, 0);
-  const bookings = await queryAll<{ id: string; publicNumber: number | null; vehicle: string; plate: string; status: string; pickupAt: string; returnAt: string; totalAmount: number; discount: number; dailyRate: number; paid: number; archivedAt: string | null }>(`
+  const bookings = await queryAll<{ id: string; publicNumber: number | null; vehicle: string; plate: string; status: string; pickupAt: string; returnAt: string; returnedAt: string | null; totalAmount: number; discount: number; dailyRate: number; paid: number }>(`
     SELECT bk.id, CASE WHEN bk.fulfillment_type='external' THEN bk.external_vehicle_make||' '||bk.external_vehicle_model||coalesce(' '||bk.external_vehicle_year,'') ELSE v.make||' '||v.model||' '||v.year END AS vehicle, coalesce(bk.external_vehicle_plate,v.plate) AS plate,
-      bk.status, bk.pickup_at AS pickupAt, bk.return_at AS returnAt, bk.total_amount AS totalAmount, bk.archived_at AS archivedAt,
+      bk.status, bk.pickup_at AS pickupAt, bk.return_at AS returnAt, bk.total_amount AS totalAmount,
+      (SELECT ri.occurred_at FROM rental_inspections ri WHERE ri.agency_id=bk.agency_id AND ri.booking_id=bk.id AND ri.kind='checkin' LIMIT 1) AS returnedAt,
       bk.public_number AS publicNumber, coalesce(bk.discount,0) AS discount, coalesce(bk.daily_rate,0) AS dailyRate,
       coalesce((SELECT sum(CASE WHEN lower(ft.kind) IN ('refund','reversal','payment_adjustment_decrease') THEN -ft.amount ELSE ft.amount END)
         FROM financial_transactions ft WHERE ft.agency_id=bk.agency_id AND ft.booking_id=bk.id AND ft.status='posted' AND lower(ft.kind) IN ('payment','late_return_charge','deposit_applied','payment_adjustment_increase','payment_adjustment_decrease','reversal','refund')),0) AS paid
     FROM bookings bk
     LEFT JOIN vehicles v ON v.id=bk.vehicle_id AND v.agency_id=bk.agency_id
-    WHERE bk.agency_id=? AND bk.customer_id=?
+    WHERE bk.agency_id=? AND bk.customer_id=? AND bk.archived_at IS NULL
     ORDER BY bk.pickup_at DESC
   `,[context.agencyId, id]);
   return {
     ...customer,
     bookingCount: bookings.length,
     lifetimeValue: bookings.filter(item => item.status === "completed").reduce((sum, item) => sum + item.totalAmount, 0),
-    outstanding: bookings.filter(item => !["cancelled", "no_show"].includes(item.status)).reduce((sum, item) => sum + Math.max(0, item.totalAmount - item.paid), 0) + expenseDue,
+    outstanding: bookings.filter(item => chargedNow(item.status)).reduce((sum, item) => sum + Math.max(0, item.totalAmount - item.paid), 0) + expenseDue,
     expenseDue,
-    credit: bookings.filter(item => !item.archivedAt).reduce((sum, item) => sum + Math.max(0, item.paid - item.totalAmount), 0),
+    credit: bookings.reduce((sum, item) => sum + Math.max(0, item.paid - item.totalAmount), 0),
     lastRentalAt: bookings[0]?.returnAt ?? null,
-    bookings: bookings.map(booking => ({ id: booking.id, publicNumber: booking.publicNumber, vehicle: booking.vehicle, plate: booking.plate, status: booking.status, pickupAt: booking.pickupAt, returnAt: booking.returnAt, totalAmount: booking.totalAmount, discount: booking.discount, dailyRate: booking.dailyRate, paid: booking.paid })),
+    bookings: bookings.map(booking => ({ id: booking.id, publicNumber: booking.publicNumber, vehicle: booking.vehicle, plate: booking.plate, status: booking.status, pickupAt: booking.pickupAt, returnAt: booking.returnAt, returnedAt: booking.returnedAt, totalAmount: booking.totalAmount, discount: booking.discount, dailyRate: booking.dailyRate, paid: booking.paid })),
     expenses,
     payments: await listCustomerPayments(context.agencyId, id, expenses),
   };
@@ -161,7 +166,7 @@ export async function payCustomerBalance(context: RequestContext, customerId: st
     if(replay){if(replay.amount!==input.amount||replay.method!==input.method.trim()||replay.reference!==(input.reference?.trim()??""))throw new DomainError("VERSION_CONFLICT","This payment retry key was already used with different details.",409);return {allocations:replay.allocations,customer:await getCustomerDetail(context,customerId)};}
     const bookings=await queryAll<{id:string;balance:number}>(`SELECT bk.id,
       max(0,bk.total_amount-coalesce((SELECT sum(CASE WHEN lower(ft.kind) IN ('refund','reversal','payment_adjustment_decrease') THEN -ft.amount ELSE ft.amount END) FROM financial_transactions ft WHERE ft.agency_id=bk.agency_id AND ft.booking_id=bk.id AND ft.status='posted' AND lower(ft.kind) IN ('payment','late_return_charge','deposit_applied','payment_adjustment_increase','payment_adjustment_decrease','reversal','refund')),0)) AS balance
-      FROM bookings bk WHERE bk.agency_id=? AND bk.customer_id=? AND bk.archived_at IS NULL AND bk.status NOT IN ('draft','cancelled','no_show') ORDER BY bk.pickup_at ASC,bk.created_at ASC,bk.id ASC`,[context.agencyId,customerId]);
+      FROM bookings bk WHERE bk.agency_id=? AND bk.customer_id=? AND bk.archived_at IS NULL AND bk.status NOT IN ('draft','cancelled','no_show','confirmed','checked_out') ORDER BY bk.pickup_at ASC,bk.created_at ASC,bk.id ASC`,[context.agencyId,customerId]);
     const openExpenses=(await listAccountExpenses(context.agencyId,{customerId})).filter(row=>row.amount>row.recovered);
     const outstanding=bookings.reduce((sum,row)=>sum+row.balance,0)+openExpenses.reduce((sum,row)=>sum+row.amount-row.recovered,0);
     if (input.amount+discount>outstanding) throw new DomainError("VALIDATION_FAILED", "Payment and discount exceed the customer balance.",400,{amount:`Available balance is PKR ${outstanding.toLocaleString("en-PK")}.`});
