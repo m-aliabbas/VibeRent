@@ -141,7 +141,9 @@ async function allocateBookingDraftInTransaction(context: RequestContext): Promi
   const counter = (await queryOne<{ nextNumber: number }>("SELECT next_number AS nextNumber FROM booking_number_counters WHERE agency_id=? LIMIT 1 /*postgres:for-update*/",[context.agencyId]))!;
   // Recycle the lowest number from a draft that expired without becoming a booking, so abandoned
   // forms do not leave permanent holes. The old draft keeps its row (CNIC images stay linked) but
-  // releases the number by storing it negated, which keeps the unique index satisfied.
+  // releases the number by moving it to a fresh negative value below every number the agency has
+  // used. Plain negation (-N) collided when the same number was recycled a second time. The
+  // original number stays in the "booking.number_allocated" audit event.
   const recycled = await queryOne<{ id: string; publicNumber: number }>(
     `SELECT d.id, d.public_number AS publicNumber FROM booking_drafts d
      WHERE d.agency_id=? AND d.status='expired' AND d.consumed_at IS NULL AND d.public_number>0
@@ -151,7 +153,9 @@ async function allocateBookingDraftInTransaction(context: RequestContext): Promi
   );
   let publicNumber: number;
   if (recycled) {
-    await execute("UPDATE booking_drafts SET public_number=?,status='recycled',updated_at=? WHERE agency_id=? AND id=?",[-recycled.publicNumber, nowIso, context.agencyId, recycled.id]);
+    const lowest = await queryOne<{ lowest: number }>("SELECT coalesce(min(public_number),0) AS lowest FROM booking_drafts WHERE agency_id=?",[context.agencyId]);
+    const releasedNumber = Math.min(Number(lowest?.lowest ?? 0), 0) - 1;
+    await execute("UPDATE booking_drafts SET public_number=?,status='recycled',updated_at=? WHERE agency_id=? AND id=?",[releasedNumber, nowIso, context.agencyId, recycled.id]);
     publicNumber = recycled.publicNumber;
   } else {
     await execute("UPDATE booking_number_counters SET next_number=next_number+1,updated_at=? WHERE agency_id=?",[nowIso, context.agencyId]);
